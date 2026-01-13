@@ -1,0 +1,9 @@
+{
+    "appId": "com.marin-dedic.kiyeovo",
+    "files": ["dist-electron/**", "dist-ui/**", "package.json"],
+    "productName": "Kiyeovo",
+    "linux": {
+        "target": "AppImage",
+        "category": "Utility"
+    }
+}
