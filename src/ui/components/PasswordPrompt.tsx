@@ -1,143 +1,71 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import type { PasswordRequest } from '../types';
+import { Input } from './ui/Input';
+import { Eye, EyeOff, Lock, Shield } from 'lucide-react'
+import { Button } from './ui/Button';
 
-export interface PasswordRequest {
-  prompt: string;
-  isNewPassword?: boolean;
+type PasswordPromptProps = {
+  passwordRequest: PasswordRequest;
+  handleSubmit: (e: React.FormEvent) => void;
+  password: string;
+  setPassword: React.Dispatch<React.SetStateAction<string>>;
+  confirmPassword: string;
+  setConfirmPassword: React.Dispatch<React.SetStateAction<string>>;
+  error: string;
+  rememberMe: boolean;
+  setRememberMe: React.Dispatch<React.SetStateAction<boolean>>;
+  initStatus: string;
 }
 
-export function PasswordPrompt() {
-  const [passwordRequest, setPasswordRequest] = useState<PasswordRequest | null>(null);
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    const unsubscribe = window.kiyeovoAPI.onPasswordRequest((request) => {
-      setPasswordRequest(request);
-      setPassword('');
-      setConfirmPassword('');
-      setError('');
-    });
-
-    return unsubscribe;
-  }, []);
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-
-    if (!password) {
-      setError('Password cannot be empty');
-      return;
-    }
-
-    if (passwordRequest?.isNewPassword && password !== confirmPassword) {
-      setError('Passwords do not match');
-      return;
-    }
-
-    window.kiyeovoAPI.submitPassword(password);
-    setPasswordRequest(null);
-    setPassword('');
-    setConfirmPassword('');
-    setError('');
-  };
-
-  if (!passwordRequest) {
-    return null;
-  }
+export function PasswordPrompt({ passwordRequest, handleSubmit, password, setPassword, confirmPassword, setConfirmPassword, error, rememberMe, setRememberMe, initStatus }: PasswordPromptProps) {
+  const [showPassword, setShowPassword] = useState(false);
 
   return (
-    <div style={{
-      position: 'fixed',
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      backgroundColor: 'rgba(0, 0, 0, 0.5)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      zIndex: 9999,
-    }}>
-      <div style={{
-        backgroundColor: 'white',
-        padding: '2rem',
-        borderRadius: '8px',
-        minWidth: '400px',
-        boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
-      }}>
-        <h2 style={{ marginTop: 0, marginBottom: '1rem' }}>
-          {passwordRequest.isNewPassword ? 'Create Password' : 'Enter Password'}
-        </h2>
-
-        <p style={{ marginBottom: '1.5rem', color: '#666' }}>
-          {passwordRequest.prompt}
+    <div className='flex flex-col gap-4 justify-center items-center'>
+      <div className='flex flex-col gap-2 text-center'>
+        <h1 className="text-xl font-mono font-semibold tracking-wide text-foreground">
+          {initStatus.includes("Create") ? "NEW IDENTITY" : "UNLOCK IDENTITY"}
+        </h1>
+        <p className="text-sm text-muted-foreground">
+        {initStatus.includes("Create") ? "Create a strong password that will be used to log into your identity" : "Enter password to decrypt identity information"}
         </p>
-
-        <form onSubmit={handleSubmit}>
-          <div style={{ marginBottom: '1rem' }}>
-            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
-              Password:
-            </label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoFocus
-              style={{
-                width: '100%',
-                padding: '0.5rem',
-                fontSize: '1rem',
-                border: '1px solid #ccc',
-                borderRadius: '4px',
-              }}
-            />
-          </div>
-
-          {passwordRequest.isNewPassword && (
-            <div style={{ marginBottom: '1rem' }}>
-              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
-                Confirm Password:
-              </label>
-              <input
-                type="password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '0.5rem',
-                  fontSize: '1rem',
-                  border: '1px solid #ccc',
-                  borderRadius: '4px',
-                }}
-              />
-            </div>
-          )}
-
-          {error && (
-            <p style={{ color: 'red', marginBottom: '1rem' }}>
-              {error}
-            </p>
-          )}
-
-          <button
-            type="submit"
-            style={{
-              width: '100%',
-              padding: '0.75rem',
-              fontSize: '1rem',
-              fontWeight: 'bold',
-              color: 'white',
-              backgroundColor: '#007bff',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-            }}
-          >
-            Submit
-          </button>
-        </form>
       </div>
+      <form onSubmit={handleSubmit} className="space-y-6 w-96">
+        <div className="relative">
+          <Input
+            type={showPassword ? "text" : "password"}
+            placeholder="Enter decryption key..."
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            icon={<Lock className="w-4 h-4" />}
+            autoFocus
+          />
+          <button
+            type="button"
+            onClick={() => setShowPassword(!showPassword)}
+            className="absolute cursor-pointer right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+          >
+            {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+          </button>
+        </div>
+
+        <label className="flex items-start gap-3 cursor-pointer group">
+          <input
+            type="checkbox"
+            checked={rememberMe}
+            onChange={(e) => setRememberMe(e.target.checked)}
+            className="mt-0.5 h-4 w-4 cursor-pointer rounded border-border bg-input text-primary transition-all"
+          />
+          <span className="text-xs text-muted-foreground group-hover:text-foreground transition-colors leading-relaxed">
+            Remember me (only works if you have OS keychain enabled)
+          </span>
+        </label>
+
+        <Button type="submit" className="w-full" disabled={!password}>
+          <Shield className="w-4 h-4" />
+          Decrypt & Access
+        </Button>
+      </form>
     </div>
   );
 }

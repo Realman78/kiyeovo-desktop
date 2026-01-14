@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import './App.css'
-import { PasswordPrompt } from './components/PasswordPrompt'
+import {Lock} from 'lucide-react'
+import { Login } from './pages/Login';
 
 function App() {
   const [initStatus, setInitStatus] = useState('Initializing...');
@@ -28,12 +29,19 @@ function App() {
     };
   }, []);
 
-  return (
-    <>
-      <PasswordPrompt />
+  return <div className='w-full h-full'>
+    {isInitialized ? <div>HEOK</div> : <Login initStatus={initStatus} />}
+  </div>
 
+  return (
+    <div className='w-full h-full bg-background cyber-grid'>
+
+      <div className="w-16 h-16 rounded-full border border-primary/50 flex items-center justify-center glow-border">
+            <Lock className="w-8 h-8 text-primary" />
+          </div>
       <div style={{ padding: '2rem' }}>
         <h1>Kiyeovo Desktop</h1>
+        <button className="btn">Click me</button>
 
         {error ? (
           <div style={{ color: 'red', padding: '1rem', border: '1px solid red', borderRadius: '4px' }}>
@@ -67,7 +75,7 @@ function App() {
           100% { transform: rotate(360deg); }
         }
       `}</style>
-    </>
+    </div>
   )
 }
 
