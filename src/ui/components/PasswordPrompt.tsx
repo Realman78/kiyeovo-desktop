@@ -1,8 +1,48 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { PasswordRequest } from '../types';
 import { Input } from './ui/Input';
-import { Eye, EyeOff, Lock, Shield } from 'lucide-react'
+import { Eye, EyeOff, Lock, Shield, AlertCircle, CheckCircle, FileKey } from 'lucide-react'
 import { Button } from './ui/Button';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogBody,
+  DialogFooter,
+} from './ui/Dialog';
+
+export interface PasswordValidationResult {
+  valid: boolean;
+  message?: string;
+}
+
+export function validatePasswordStrength(password: string): PasswordValidationResult {
+  if (password.length < 12) {
+    return {
+      valid: false,
+      message: 'Password must be at least 12 characters long'
+    };
+  }
+
+  // Check for character diversity
+  const hasLowercase = /[a-z]/.test(password);
+  const hasUppercase = /[A-Z]/.test(password);
+  const hasDigit = /\d/.test(password);
+  const hasSpecial = /[^a-zA-Z0-9]/.test(password);
+
+  const diversity = [hasLowercase, hasUppercase, hasDigit, hasSpecial].filter(Boolean).length;
+
+  if (diversity < 4) {
+    return {
+      valid: false,
+      message: 'Password must contain at least: lowercase, uppercase, numbers, special character'
+    };
+  }
+
+  return { valid: true };
+}
 
 type PasswordPromptProps = {
   passwordRequest: PasswordRequest;
@@ -19,6 +59,55 @@ type PasswordPromptProps = {
 
 export function PasswordPrompt({ passwordRequest, handleSubmit, password, setPassword, confirmPassword, setConfirmPassword, error, rememberMe, setRememberMe, initStatus }: PasswordPromptProps) {
   const [showPassword, setShowPassword] = useState(false);
+  const [validationError, setValidationError] = useState<string>('');
+  const [showRecoveryDialog, setShowRecoveryDialog] = useState(false);
+  const [pendingEvent, setPendingEvent] = useState<React.FormEvent | null>(null);
+  const isNewPassword = initStatus.includes("Create");
+
+  // Validate password strength for new passwords
+  useEffect(() => {
+    if (isNewPassword && password.length > 0) {
+      const validation = validatePasswordStrength(password);
+      setValidationError(validation.valid ? '' : validation.message || '');
+    } else {
+      setValidationError('');
+    }
+  }, [password, isNewPassword]);
+
+  const handleFormSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+
+    // If there's a recovery phrase, show the dialog first
+    if (passwordRequest.recoveryPhrase) {
+      setPendingEvent(e);
+      setShowRecoveryDialog(true);
+    } else {
+      // No recovery phrase, submit directly
+      handleSubmit(e);
+    }
+  };
+
+  const handleRecoveryConfirm = () => {
+    setShowRecoveryDialog(false);
+    if (pendingEvent) {
+      handleSubmit(pendingEvent);
+      setPendingEvent(null);
+    }
+  };
+
+  const formatRecoveryPhrase = (mnemonic: string) => {
+    const words = mnemonic.split(' ');
+    const rows = [];
+    for (let i = 0; i < 6; i++) {
+      rows.push([
+        { num: i + 1, word: words[i] || '' },
+        { num: i + 7, word: words[i + 6] || '' },
+        { num: i + 13, word: words[i + 12] || '' },
+        { num: i + 19, word: words[i + 18] || '' },
+      ]);
+    }
+    return rows;
+  };
 
   return (
     <div className='flex flex-col gap-4 justify-center items-center'>
@@ -30,24 +119,62 @@ export function PasswordPrompt({ passwordRequest, handleSubmit, password, setPas
         {initStatus.includes("Create") ? "Create a strong password that will be used to log into your identity" : "Enter password to decrypt identity information"}
         </p>
       </div>
-      <form onSubmit={handleSubmit} className="space-y-6 w-96">
-        <div className="relative">
-          <Input
-            type={showPassword ? "text" : "password"}
-            placeholder="Enter decryption key..."
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            icon={<Lock className="w-4 h-4" />}
-            autoFocus
-          />
-          <button
-            type="button"
-            onClick={() => setShowPassword(!showPassword)}
-            className="absolute cursor-pointer right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-          >
-            {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-          </button>
+      <form onSubmit={handleFormSubmit} className="space-y-6 w-96">
+        <div className="space-y-4">
+          <div className="relative">
+            <Input
+              type={showPassword ? "text" : "password"}
+              placeholder={isNewPassword ? "Enter password..." : "Enter decryption key..."}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              icon={<Lock className="w-4 h-4" />}
+              autoFocus
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword(!showPassword)}
+              tabIndex={-1}
+              className="absolute cursor-pointer right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+            >
+              {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </button>
+          </div>
+
+          {isNewPassword && (
+            <div className="relative">
+              <Input
+                type={showPassword ? "text" : "password"}
+                placeholder="Confirm password..."
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                icon={<Lock className="w-4 h-4" />}
+              />
+            </div>
+          )}
         </div>
+
+        {isNewPassword && password.length > 0 && (
+          <div className={`flex items-start mt-[-16px] gap-2 text-xs ${validationError ? 'text-destructive' : 'text-success'}`}>
+            {validationError ? (
+              <>
+                <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                <span className='text-left'>{validationError}</span>
+              </>
+            ) : (
+              <>
+                <CheckCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                <span className='text-left'>Password strength: Strong</span>
+              </>
+            )}
+          </div>
+        )}
+
+        {isNewPassword && confirmPassword.length > 0 && password !== confirmPassword && (
+          <div className="flex items-start mt-[-16px] gap-2 text-xs text-destructive">
+            <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+            <span className='text-left'>Passwords do not match</span>
+          </div>
+        )}
 
         <label className="flex items-start gap-3 cursor-pointer group">
           <input
@@ -61,11 +188,72 @@ export function PasswordPrompt({ passwordRequest, handleSubmit, password, setPas
           </span>
         </label>
 
-        <Button type="submit" className="w-full" disabled={!password}>
+        <Button
+          type="submit"
+          className="w-full"
+          disabled={
+            !password ||
+            (isNewPassword && !!validationError) ||
+            (isNewPassword && password !== confirmPassword)
+          }
+        >
           <Shield className="w-4 h-4" />
-          Decrypt & Access
+          {isNewPassword ? 'Create Identity' : 'Decrypt & Access'}
         </Button>
       </form>
+
+      {/* Recovery Phrase Dialog */}
+      <Dialog open={showRecoveryDialog} onOpenChange={setShowRecoveryDialog}>
+        <DialogContent className="w-3xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileKey className="w-5 h-5" />
+              RECOVERY PHRASE - WRITE THIS DOWN NOW
+            </DialogTitle>
+            <DialogDescription>
+              This phrase can recover your identity if you forget your password. Store it safely!
+            </DialogDescription>
+          </DialogHeader>
+
+          <DialogBody className="space-y-4">
+            {passwordRequest.recoveryPhrase && (
+              <>
+                {/* Recovery phrase grid */}
+                <div className="bg-secondary/50 border border-border rounded-lg p-4 font-mono text-sm">
+                  {formatRecoveryPhrase(passwordRequest.recoveryPhrase).map((row, i) => (
+                    <div key={i} className="flex gap-4 mb-2">
+                      {row.map((item, j) => (
+                        <div key={j} className="flex-1 flex items-center gap-2">
+                          <span className="text-muted-foreground w-6 text-right">{item.num}.</span>
+                          <span className="text-foreground font-medium">{item.word}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Important notes */}
+                <div className="bg-warning/10 border border-warning/30 rounded-lg p-4 space-y-2">
+                  <p className="text-warning font-semibold text-sm">IMPORTANT:</p>
+                  <ul className="text-xs text-foreground space-y-1 list-disc list-inside">
+                    <li>Write these words on paper (DO NOT take a screenshot)</li>
+                    <li>Store in a safe place (safe, password manager, etc.)</li>
+                    <li>This phrase can recover your identity if you forget your password</li>
+                    <li>Keep your database backups safe as well</li>
+                  </ul>
+                </div>
+              </>
+            )}
+          </DialogBody>
+
+          <DialogFooter>
+            <Button onClick={handleRecoveryConfirm} className="w-full">
+              <CheckCircle className="w-4 h-4" />
+              I wrote it down
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -152,7 +152,7 @@ export class EncryptedUserIdentity {
 
     static async loadOrCreateEncrypted(
         database: ChatDatabase,
-        customPasswordPrompt: (prompt: string, isNew: boolean) => Promise<string>
+        customPasswordPrompt: (prompt: string, isNew: boolean, recoveryPhrase?: string) => Promise<string>
     ): Promise<EncryptedUserIdentity> {
         let password: Uint8Array | null = null;
         try {
@@ -164,16 +164,13 @@ export class EncryptedUserIdentity {
                 console.log(`Creating new encrypted identity and saving to database`);
                 const identity = await EncryptedUserIdentity.createEncrypted();
                 const recoveryPhrase = EncryptedUserIdentity.generateRecoveryPhrase();
-                
-                // Display recovery phrase
-                console.log(EncryptedUserIdentity.formatRecoveryPhrase(recoveryPhrase));
-                console.log('Please write down your recovery phrase before continuing.\n');
-                
+
                 password = await EncryptedUserIdentity.getPasswordFromKeychain(
                     identity.id,
-                    'Enter password for new identity: ',
+                    'Create a strong password for your new identity',
                     true,
-                    customPasswordPrompt
+                    customPasswordPrompt,
+                    recoveryPhrase
                 );
                 await identity.saveEncrypted(database, password, recoveryPhrase);
                 return identity;
@@ -189,7 +186,7 @@ export class EncryptedUserIdentity {
 
     static async loadEncrypted(
         encryptedUserIdentity: EncryptedUserIdentityDb,
-        customPasswordPrompt: (prompt: string, isNew: boolean) => Promise<string>
+        customPasswordPrompt: (prompt: string, isNew: boolean, recoveryPhrase?: string) => Promise<string>
     ): Promise<EncryptedUserIdentity> {
         let password: Uint8Array | null = null;
         let key: Uint8Array | null = null;
@@ -366,33 +363,6 @@ export class EncryptedUserIdentity {
         }
     }
 
-    static formatRecoveryPhrase(mnemonic: string): string {
-        const words = mnemonic.split(' ');
-        let formatted = '\n';
-        formatted += '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n';
-        formatted += '          RECOVERY PHRASE - WRITE THIS DOWN NOW\n';
-        formatted += '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n';
-        
-        for (let i = 0; i < 6; i++) {
-            const line = [
-                `${(i + 1).toString().padStart(2)}. ${words[i]?.padEnd(10)}`,
-                `${(i + 7).toString().padStart(2)}. ${words[i + 6]?.padEnd(10)}`,
-                `${(i + 13).toString().padStart(2)}. ${words[i + 12]?.padEnd(10)}`,
-                `${(i + 19).toString().padStart(2)}. ${words[i + 18]?.padEnd(10)}`
-            ].join('  ');
-            formatted += line + '\n';
-        }
-        
-        formatted += '\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n';
-        formatted += '\nIMPORTANT:\n';
-        formatted += '   • Write these words on paper (DO NOT take a screenshot)\n';
-        formatted += '   • Store in a safe place (safe, password manager, etc.)\n';
-        formatted += '   • This phrase can recover your identity if you forget your password\n';
-        formatted += '   • Keep your database backups safe as well\n\n';
-        
-        return formatted;
-    }
-
     sign(message: string): Uint8Array {
         try {
             const messageBytes = new TextEncoder().encode(message);
@@ -432,7 +402,8 @@ export class EncryptedUserIdentity {
         identityId: string,
         prompt: string,
         validateStrength: boolean = false,
-        customPasswordPrompt: (prompt: string, isNew: boolean) => Promise<string>
+        customPasswordPrompt: (prompt: string, isNew: boolean, recoveryPhrase?: string) => Promise<string>,
+        recoveryPhrase?: string
     ): Promise<Uint8Array> {
         const keytarInstance = await loadKeytar();
 
@@ -453,8 +424,7 @@ export class EncryptedUserIdentity {
 
 
         console.log('Using custom password prompt (UI)');
-        const password = await customPasswordPrompt(prompt, validateStrength);
-        
+        const password = await customPasswordPrompt(prompt, validateStrength, recoveryPhrase);
 
         if (keytarInstance && password) {
             try {

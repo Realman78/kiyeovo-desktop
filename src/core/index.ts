@@ -19,7 +19,7 @@ export interface P2PCore {
 export interface P2PCoreConfig {
   dataDir: string;
   port: number;
-  passwordPrompt: (prompt: string, isNew: boolean) => Promise<string>;
+  passwordPrompt: (prompt: string, isNew: boolean, recoveryPhrase?: string) => Promise<string>;
   onStatus?: (message: string, stage: 'database' | 'identity' | 'node' | 'registry' | 'messaging' | 'complete') => void;
 }
 

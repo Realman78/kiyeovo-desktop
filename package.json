@@ -36,6 +36,7 @@
     "@noble/ciphers": "^1.3.0",
     "@noble/curves": "^1.9.2",
     "@noble/hashes": "^1.6.1",
+    "@radix-ui/react-dialog": "^1.1.15",
     "@scure/bip39": "^2.0.1",
     "@tailwindcss/vite": "^4.1.18",
     "@types/mime-types": "^3.0.1",

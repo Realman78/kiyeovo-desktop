@@ -1,7 +1,7 @@
-import { useState, useEffect, type SetStateAction } from "react";
+import { useState, useEffect } from "react";
 import type { PasswordRequest } from "../types";
 import { PasswordPrompt } from "../components/PasswordPrompt";
-import { Lock } from 'lucide-react'
+import { Logo } from "../components/icons/Logo";
 
 type LoginProps = {
     initStatus: string;
@@ -13,7 +13,7 @@ export const Login = ({ initStatus }: LoginProps) => {
     const [confirmPassword, setConfirmPassword] = useState('');
     const [error, setError] = useState('');
     const [isSubmitted, setIsSubmitted] = useState(false)
-    const [rememberMe, setRememberMe] = useState(false)
+    const [rememberMe, setRememberMe] = useState(true)
 
     useEffect(() => {
         const unsubscribe = window.kiyeovoAPI.onPasswordRequest((request) => {
@@ -49,7 +49,7 @@ export const Login = ({ initStatus }: LoginProps) => {
 
     return <div className="w-full h-full flex justify-center items-center flex-col bg-background cyber-grid">
         <div className="w-16 h-16 mb-6 rounded-full border border-primary/50 flex items-center justify-center glow-border">
-            <Lock className="w-8 h-8 text-primary" />
+            <Logo version="2" />
         </div>
         {!!passwordRequest ? <PasswordPrompt
             passwordRequest={passwordRequest}

@@ -7,7 +7,8 @@ import { PasswordResponse, IPC_CHANNELS, PasswordRequest } from '../core/types.j
 export function requestPasswordFromUI(
   window: BrowserWindow,
   prompt: string,
-  isNewPassword: boolean = false
+  isNewPassword: boolean = false,
+  recoveryPhrase?: string
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     // const timeout = setTimeout(() => {
@@ -32,6 +33,7 @@ export function requestPasswordFromUI(
     const request: PasswordRequest = {
       prompt,
       isNewPassword,
+      ...(recoveryPhrase && { recoveryPhrase }),
     };
     window.webContents.send(IPC_CHANNELS.PASSWORD_REQUEST, request);
   });
