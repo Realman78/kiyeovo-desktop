@@ -233,7 +233,7 @@ export function PasswordPrompt({ passwordRequest, handleSubmit, password, setPas
           </div>
         )}
 
-        {passwordRequest.prefilledPassword ? (
+        {passwordRequest.prefilledPassword && !passwordRequest.errorMessage ? (
           <div className="flex items-start gap-3">
             <CheckCircle className="w-4 h-4 mt-0.5 text-success shrink-0" />
             <span className="text-xs text-success leading-relaxed">

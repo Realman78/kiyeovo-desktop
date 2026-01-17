@@ -201,6 +201,8 @@ export class EncryptedUserIdentity {
         let decryptedBytes: Uint8Array | null = null;
         let errorMessage: string | undefined = undefined;
         let showRecoveryOption = false;
+        const keytarInstance = await loadKeytar();
+
 
         for (let i = 0; i < 100; i++) { // 100 attempts -> avoiding infinite loops
             try {
@@ -214,7 +216,8 @@ export class EncryptedUserIdentity {
                     undefined, // no recovery phrase when loading
                     errorMessage,
                     cooldown.isLocked ? cooldown.remainingSeconds : undefined,
-                    showRecoveryOption
+                    showRecoveryOption,
+                    keytarInstance
                 );
 
                 // Check if user submitted recovery phrase
@@ -229,7 +232,7 @@ export class EncryptedUserIdentity {
                             database
                         );
 
-                        // Success! Clear login attempts
+                        // Success - clear login attempts
                         database.clearLoginAttempts(encryptedUserIdentity.peer_id);
                         return identity;
                     } catch (error: unknown) {
@@ -261,6 +264,16 @@ export class EncryptedUserIdentity {
 
                 const identityData: DecryptedUserIdentityData = parsedData;
                 const identity = EncryptedUserIdentity.reconstructFromData(identityData);
+
+                if (keytarInstance && response.rememberMe && response.password && !response.useRecoveryPhrase) {
+                    try {
+                        await keytarInstance.setPassword('kiyeovo', identity.id, response.password);
+                        console.log('Stored password in OS keychain');
+                    } catch (error) {
+                        const message = error instanceof Error ? error.message : String(error);
+                        console.log('Failed to store password in OS keychain:', message);
+                    }
+                }
 
                 // Clear sensitive data and login attempts
                 if (passwordBytes) passwordBytes.fill(0);
@@ -478,9 +491,12 @@ export class EncryptedUserIdentity {
         recoveryPhrase?: string,
         errorMessage?: string,
         cooldownSeconds?: number,
-        showRecoveryOption?: boolean
+        showRecoveryOption?: boolean,
+        keytarInstance: any = null
     ): Promise<PasswordResponse> {
-        const keytarInstance = await loadKeytar();
+        if (!keytarInstance) {
+            keytarInstance = await loadKeytar();
+        }
         const keychainAvailable = keytarInstance !== null;
         let prefilledPassword: string | undefined = undefined;
 
@@ -500,7 +516,8 @@ export class EncryptedUserIdentity {
         console.log('Using custom password prompt (UI)');
         const response = await customPasswordPrompt(prompt, validateStrength, recoveryPhrase, prefilledPassword, errorMessage, cooldownSeconds, showRecoveryOption, keychainAvailable);
 
-        if (keytarInstance && response.rememberMe && response.password && !response.useRecoveryPhrase) {
+        // Added validateStrength to prevent saving to keychain during login
+        if (keytarInstance && response.rememberMe && response.password && !response.useRecoveryPhrase && validateStrength) {
             try {
                 await keytarInstance.setPassword('kiyeovo', identityId, response.password);
                 console.log('Stored password in OS keychain');

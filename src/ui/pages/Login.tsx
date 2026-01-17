@@ -12,7 +12,7 @@ export const Login = ({ initStatus }: LoginProps) => {
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false)
-    const [rememberMe, setRememberMe] = useState(true)
+    const [rememberMe, setRememberMe] = useState(false)
 
     useEffect(() => {
         const unsubscribe = window.kiyeovoAPI.onPasswordRequest((request) => {
