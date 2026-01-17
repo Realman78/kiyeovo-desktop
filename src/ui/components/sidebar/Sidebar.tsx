@@ -1,11 +1,12 @@
-import React from 'react'
+import React, { type FC } from 'react'
 import { SidebarHeader } from './SidebarHeader'
+import { ChatList } from './ChatList'
 
-function Sidebar() {
+export const Sidebar: FC = () => {
   return (
     <div className='w-96 h-full bg-sidebar border-r border-sidebar-border flex flex-col'>
       <SidebarHeader />
-      <div>placeholder for sidebar content</div>
+      <ChatList />
     </div>
   )
 }
