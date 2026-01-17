@@ -1,10 +1,10 @@
 import { useState, type FC } from "react";
-import { Input } from "../ui/Input";
+import { Input } from "../../ui/Input";
 import { Search } from "lucide-react";
 import { ChatPreview } from "./ChatPreview";
 import { useDispatch, useSelector } from "react-redux";
-import type { RootState } from "../../state/store";
-import { setActiveChat } from "../../state/slices/chatSlice";
+import type { RootState } from "../../../state/store";
+import { setActiveChat } from "../../../state/slices/chatSlice";
 
 export const ChatList: FC = () => {
     const [searchQuery, setSearchQuery] = useState("");
@@ -16,7 +16,7 @@ export const ChatList: FC = () => {
         dispatch(setActiveChat(chatId));
     }
     return (
-        <div>
+        <div className="flex flex-col flex-1 overflow-y-auto">
             <div className="p-4 pt-0 border-b border-sidebar-border">
                 <Input
                     placeholder="Search conversations..."

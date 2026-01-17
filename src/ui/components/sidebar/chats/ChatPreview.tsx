@@ -1,5 +1,5 @@
 import type { FC } from "react";
-import type { Chat } from "../../state/slices/chatSlice";
+import type { Chat } from "../../../state/slices/chatSlice";
 
 type ChatPreviewProps = {
     chat: Chat;

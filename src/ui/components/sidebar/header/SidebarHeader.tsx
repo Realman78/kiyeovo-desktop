@@ -1,7 +1,7 @@
 import { useState, type FC } from "react";
-import { Logo } from "../icons/Logo";
+import { Logo } from "../../icons/Logo";
 import { Plus } from "lucide-react";
-import { Button } from "../ui/Button";
+import { Button } from "../../ui/Button";
 import { KiyeovoDialog } from "./KiyeovoDialog";
 type SidebarHeaderProps = {};
 
