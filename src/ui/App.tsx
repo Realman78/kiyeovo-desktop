@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import './App.css'
 import {Lock} from 'lucide-react'
 import { Login } from './pages/Login';
+import { Main } from './pages/Main';
 
 function App() {
   const [initStatus, setInitStatus] = useState('Initializing...');
@@ -30,7 +31,7 @@ function App() {
   }, []);
 
   return <div className='w-full h-full'>
-    {isInitialized ? <div>HEOK</div> : <Login initStatus={initStatus} />}
+    {isInitialized ? <Main /> : <Login initStatus={initStatus} />}
   </div>
 
   return (

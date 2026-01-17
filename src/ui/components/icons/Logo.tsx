@@ -6,8 +6,8 @@ type LogoProps = {
 export const Logo = ({ version }: LogoProps) => {
     return <svg
         xmlns="http://www.w3.org/2000/svg"
-        width={276}
-        height={276}
+        width={"fit-content"}
+        height={"fit-content"}
         viewBox="0 0 276 276"
     >
         <defs>

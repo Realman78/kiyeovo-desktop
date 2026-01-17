@@ -190,6 +190,11 @@
   /* Glow animations */
   .glow-border {
     box-shadow: var(--glow-primary);
+    transition: box-shadow 0.3s ease-in-out;
+  }
+  .glow-border:hover {
+    transition: box-shadow 0.3s ease-in-out;
+    box-shadow: var(--glow-primary-intense);
   }
 
   .glow-border-intense {

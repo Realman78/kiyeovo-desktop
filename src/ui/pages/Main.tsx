@@ -1,9 +1,13 @@
 import React from 'react'
+import Sidebar from '../components/sidebar/Sidebar'
 
-function Main() {
+export const Main = () => {
   return (
-    <div className='h-screen w-screen flex overflow-hidden'>Main</div>
+    <div className='h-screen w-screen flex overflow-hidden'>
+      <Sidebar />
+      <div className='flex-1'>
+        <div>placeholder for main content</div>
+      </div>
+    </div>
   )
 }
-
-export default Main
