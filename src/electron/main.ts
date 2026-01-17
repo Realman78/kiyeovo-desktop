@@ -63,10 +63,10 @@ async function initializeP2PAfterWindow() {
     p2pCore = await initializeP2PCore({
       dataDir,
       port: 9000, // TODO: Make this configurable
-      passwordPrompt: async (prompt: string, isNew: boolean, recoveryPhrase?: string) => {
+      passwordPrompt: async (prompt: string, isNew: boolean, recoveryPhrase?: string, prefilledPassword?: string, errorMessage?: string, cooldownSeconds?: number, showRecoveryOption?: boolean, keychainAvailable?: boolean) => {
         console.log('[Electron] Requesting password from UI...');
-        sendInitStatus(isNew ? 'Create a password to encrypt your identity' : 'Enter your password', 'identity');
-        return requestPasswordFromUI(mainWindow!, prompt, isNew, recoveryPhrase);
+        const response = await requestPasswordFromUI(mainWindow!, prompt, isNew, recoveryPhrase, prefilledPassword, errorMessage, cooldownSeconds, showRecoveryOption, keychainAvailable);
+        return response;
       },
       onStatus: (message: string, stage: InitStatus['stage']) => {
         console.log(`[P2P Core] ${message}`);

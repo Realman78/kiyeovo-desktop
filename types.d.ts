@@ -3,7 +3,7 @@ interface Window {
     kiyeovoAPI: {
         // Password authentication
         onPasswordRequest: (callback: (request: PasswordRequest) => void) => () => void;
-        submitPassword: (password: string) => void;
+        submitPassword: (password: string, rememberMe: boolean) => void;
 
         // Initialization status
         onInitStatus: (callback: (status: InitStatus) => void) => () => void;

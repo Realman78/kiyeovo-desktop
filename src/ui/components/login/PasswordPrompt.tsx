@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react';
-import type { PasswordRequest } from '../types';
-import { Input } from './ui/Input';
-import { Eye, EyeOff, Lock, Shield, AlertCircle, CheckCircle, FileKey } from 'lucide-react'
-import { Button } from './ui/Button';
+import { useState, useEffect, useRef } from 'react';
+import type { PasswordRequest } from '../../types';
+import { Input } from '../ui/Input';
+import { Eye, EyeOff, Lock, Shield, AlertCircle, CheckCircle, FileKey, Loader2 } from 'lucide-react'
+import { Button } from '../ui/Button';
 import {
   Dialog,
   DialogContent,
@@ -11,7 +11,8 @@ import {
   DialogDescription,
   DialogBody,
   DialogFooter,
-} from './ui/Dialog';
+} from '../ui/Dialog';
+import { formatRecoveryPhrase } from '../../utils/general';
 
 export interface PasswordValidationResult {
   valid: boolean;
@@ -26,7 +27,6 @@ export function validatePasswordStrength(password: string): PasswordValidationRe
     };
   }
 
-  // Check for character diversity
   const hasLowercase = /[a-z]/.test(password);
   const hasUppercase = /[A-Z]/.test(password);
   const hasDigit = /\d/.test(password);
@@ -51,20 +51,50 @@ type PasswordPromptProps = {
   setPassword: React.Dispatch<React.SetStateAction<string>>;
   confirmPassword: string;
   setConfirmPassword: React.Dispatch<React.SetStateAction<string>>;
-  error: string;
   rememberMe: boolean;
   setRememberMe: React.Dispatch<React.SetStateAction<boolean>>;
-  initStatus: string;
+  isSubmitting: boolean;
 }
 
-export function PasswordPrompt({ passwordRequest, handleSubmit, password, setPassword, confirmPassword, setConfirmPassword, error, rememberMe, setRememberMe, initStatus }: PasswordPromptProps) {
+export function PasswordPrompt({ passwordRequest, handleSubmit, password, setPassword, confirmPassword, setConfirmPassword, rememberMe, setRememberMe, isSubmitting }: PasswordPromptProps) {
   const [showPassword, setShowPassword] = useState(false);
   const [validationError, setValidationError] = useState<string>('');
   const [showRecoveryDialog, setShowRecoveryDialog] = useState(false);
   const [pendingEvent, setPendingEvent] = useState<React.FormEvent | null>(null);
-  const isNewPassword = initStatus.includes("Create");
+  const [cooldownRemaining, setCooldownRemaining] = useState<number>(0);
 
-  // Validate password strength for new passwords
+  const passwordInputRef = useRef<HTMLInputElement>(null);
+
+  const isNewPassword = passwordRequest.isNewPassword ?? false;
+
+  useEffect(() => {
+    if (passwordRequest.prefilledPassword && !password) {
+      setPassword(passwordRequest.prefilledPassword);
+    }
+  }, [passwordRequest.prefilledPassword]);
+
+  useEffect(() => {
+    if (passwordRequest.cooldownSeconds !== undefined) {
+      setCooldownRemaining(passwordRequest.cooldownSeconds);
+    }
+  }, [passwordRequest.cooldownSeconds]);
+
+  useEffect(() => {
+    if (cooldownRemaining <= 0) return;
+
+    const timer = setInterval(() => {
+      setCooldownRemaining(prev => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [cooldownRemaining]);
+
   useEffect(() => {
     if (isNewPassword && password.length > 0) {
       const validation = validatePasswordStrength(password);
@@ -74,15 +104,19 @@ export function PasswordPrompt({ passwordRequest, handleSubmit, password, setPas
     }
   }, [password, isNewPassword]);
 
+  useEffect(() => {
+    if (passwordInputRef.current && !isSubmitting && cooldownRemaining <= 0) {
+      passwordInputRef.current.focus();
+    }
+  }, [isSubmitting, cooldownRemaining]);
+
   const handleFormSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
-    // If there's a recovery phrase, show the dialog first
     if (passwordRequest.recoveryPhrase) {
       setPendingEvent(e);
       setShowRecoveryDialog(true);
     } else {
-      // No recovery phrase, submit directly
       handleSubmit(e);
     }
   };
@@ -95,46 +129,68 @@ export function PasswordPrompt({ passwordRequest, handleSubmit, password, setPas
     }
   };
 
-  const formatRecoveryPhrase = (mnemonic: string) => {
-    const words = mnemonic.split(' ');
-    const rows = [];
-    for (let i = 0; i < 6; i++) {
-      rows.push([
-        { num: i + 1, word: words[i] || '' },
-        { num: i + 7, word: words[i + 6] || '' },
-        { num: i + 13, word: words[i + 12] || '' },
-        { num: i + 19, word: words[i + 18] || '' },
-      ]);
-    }
-    return rows;
+  const formatCooldownTime = (seconds: number): string => {
+    const minutes = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${minutes}:${secs.toString().padStart(2, '0')}`;
   };
+
+  const isLocked = cooldownRemaining > 0;
 
   return (
     <div className='flex flex-col gap-4 justify-center items-center'>
       <div className='flex flex-col gap-2 text-center'>
         <h1 className="text-xl font-mono font-semibold tracking-wide text-foreground">
-          {initStatus.includes("Create") ? "NEW IDENTITY" : "UNLOCK IDENTITY"}
+          {isNewPassword ? "NEW IDENTITY" : "UNLOCK IDENTITY"}
         </h1>
         <p className="text-sm text-muted-foreground">
-        {initStatus.includes("Create") ? "Create a strong password that will be used to log into your identity" : "Enter password to decrypt identity information"}
+          {isNewPassword ? "Create a strong password that will be used to log into your identity" : "Enter password to decrypt identity information"}
         </p>
       </div>
       <form onSubmit={handleFormSubmit} className="space-y-6 w-96">
+        {/* Cooldown warning */}
+        {isLocked && (
+          <div className="flex items-start gap-2 p-3 bg-warning/10 border border-warning/30 rounded-lg">
+            <AlertCircle className="w-4 h-4 mt-0.5 text-warning shrink-0" />
+            <div className="text-sm text-warning text-left">
+              <p className="font-semibold">Too many failed attempts</p>
+              <p>Please wait {formatCooldownTime(cooldownRemaining)} before trying again</p>
+            </div>
+          </div>
+        )}
+
+        {/* Display error message from backend */}
+        {passwordRequest.errorMessage && !isLocked && (
+          <div className="flex items-start gap-2 p-3 bg-destructive/10 border border-destructive/30 rounded-lg">
+            <AlertCircle className="w-4 h-4 mt-0.5 text-destructive shrink-0" />
+            <span className="text-sm text-destructive text-left">{passwordRequest.errorMessage}</span>
+          </div>
+        )}
+
         <div className="space-y-4">
           <div className="relative">
             <Input
+              ref={passwordInputRef}
               type={showPassword ? "text" : "password"}
-              placeholder={isNewPassword ? "Enter password..." : "Enter decryption key..."}
+              placeholder={
+                passwordRequest.prefilledPassword
+                  ? "Password loaded from keychain"
+                  : isNewPassword
+                    ? "Enter password..."
+                    : "Enter decryption key..."
+              }
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               icon={<Lock className="w-4 h-4" />}
               autoFocus
+              disabled={isSubmitting || isLocked}
             />
             <button
               type="button"
               onClick={() => setShowPassword(!showPassword)}
               tabIndex={-1}
-              className="absolute cursor-pointer right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+              disabled={isSubmitting || isLocked}
+              className="absolute cursor-pointer right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
             </button>
@@ -148,6 +204,7 @@ export function PasswordPrompt({ passwordRequest, handleSubmit, password, setPas
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 icon={<Lock className="w-4 h-4" />}
+                disabled={isSubmitting || isLocked}
               />
             </div>
           )}
@@ -176,29 +233,55 @@ export function PasswordPrompt({ passwordRequest, handleSubmit, password, setPas
           </div>
         )}
 
-        <label className="flex items-start gap-3 cursor-pointer group">
-          <input
-            type="checkbox"
-            checked={rememberMe}
-            onChange={(e) => setRememberMe(e.target.checked)}
-            className="mt-0.5 h-4 w-4 cursor-pointer rounded border-border bg-input text-primary transition-all"
-          />
-          <span className="text-xs text-muted-foreground group-hover:text-foreground transition-colors leading-relaxed">
-            Remember me (only works if you have OS keychain enabled)
-          </span>
-        </label>
+        {passwordRequest.prefilledPassword ? (
+          <div className="flex items-start gap-3">
+            <CheckCircle className="w-4 h-4 mt-0.5 text-success shrink-0" />
+            <span className="text-xs text-success leading-relaxed">
+              Password loaded from OS keychain
+            </span>
+          </div>
+        ) : passwordRequest.keychainAvailable ? (
+          <label className="flex items-start gap-3 cursor-pointer group">
+            <input
+              type="checkbox"
+              checked={rememberMe}
+              onChange={(e) => setRememberMe(e.target.checked)}
+              disabled={isSubmitting || isLocked}
+              className="mt-0.5 h-4 w-4 cursor-pointer rounded border-border bg-input text-primary transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            />
+            <span className="text-xs text-muted-foreground group-hover:text-foreground transition-colors leading-relaxed">
+              Remember me
+            </span>
+          </label>
+        ) : null}
 
         <Button
           type="submit"
           className="w-full"
           disabled={
+            isSubmitting ||
+            isLocked ||
             !password ||
             (isNewPassword && !!validationError) ||
             (isNewPassword && password !== confirmPassword)
           }
         >
-          <Shield className="w-4 h-4" />
-          {isNewPassword ? 'Create Identity' : 'Decrypt & Access'}
+          {isSubmitting ? (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Processing...
+            </>
+          ) : isLocked ? (
+            <>
+              <Lock className="w-4 h-4" />
+              Locked ({formatCooldownTime(cooldownRemaining)})
+            </>
+          ) : (
+            <>
+              <Shield className="w-4 h-4" />
+              {isNewPassword ? 'Create Identity' : 'Decrypt & Access'}
+            </>
+          )}
         </Button>
       </form>
 

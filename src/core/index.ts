@@ -5,7 +5,7 @@ import { MessageHandler } from './lib/message-handler.js';
 import { EncryptedUserIdentity } from './lib/encrypted-user-identity.js';
 import { ChatDatabase } from './lib/db/database.js';
 import { DATABASE_CLEANUP_INTERVAL } from './constants.js';
-import type { ChatNode } from './types.js';
+import type { ChatNode, PasswordResponse } from './types.js';
 
 export interface P2PCore {
   node: ChatNode;
@@ -19,7 +19,7 @@ export interface P2PCore {
 export interface P2PCoreConfig {
   dataDir: string;
   port: number;
-  passwordPrompt: (prompt: string, isNew: boolean, recoveryPhrase?: string) => Promise<string>;
+  passwordPrompt: (prompt: string, isNew: boolean, recoveryPhrase?: string, prefilledPassword?: string, errorMessage?: string, cooldownSeconds?: number, showRecoveryOption?: boolean, keychainAvailable?: boolean) => Promise<PasswordResponse>;
   onStatus?: (message: string, stage: 'database' | 'identity' | 'node' | 'registry' | 'messaging' | 'complete') => void;
 }
 
@@ -45,7 +45,8 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
   sendStatus('Loading user identity...', 'identity');
   const userIdentity = await EncryptedUserIdentity.loadOrCreateEncrypted(
     database,
-    config.passwordPrompt
+    config.passwordPrompt,
+    sendStatus
   );
   sendStatus('User identity loaded', 'identity');
 

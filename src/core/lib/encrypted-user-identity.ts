@@ -11,6 +11,7 @@ import { generalErrorHandler } from '../utils/general-error.js';
 import { generateMnemonic, mnemonicToSeedSync, validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 import type { ChatDatabase, EncryptedUserIdentityDb } from './db/database.js';
+import type { PasswordResponse } from '../types.js';
 
 // Try to import keytar for OS keychain support
 let keytar: any = null;
@@ -152,27 +153,32 @@ export class EncryptedUserIdentity {
 
     static async loadOrCreateEncrypted(
         database: ChatDatabase,
-        customPasswordPrompt: (prompt: string, isNew: boolean, recoveryPhrase?: string) => Promise<string>
+        customPasswordPrompt: (prompt: string, isNew: boolean, recoveryPhrase?: string, prefilledPassword?: string, errorMessage?: string, cooldownSeconds?: number, showRecoveryOption?: boolean, keychainAvailable?: boolean) => Promise<PasswordResponse>,
+        sendStatus: (message: string, stage: any) => void
     ): Promise<EncryptedUserIdentity> {
-        let password: Uint8Array | null = null;
+        let passwordBytes: Uint8Array | null = null;
         try {
             const encryptedUserIdentity = database.getEncryptedUserIdentity();
             if (encryptedUserIdentity) {
                 console.log(`Loading existing encrypted identity from ${encryptedUserIdentity.id}`);
-                return await EncryptedUserIdentity.loadEncrypted(encryptedUserIdentity, customPasswordPrompt);
+                return await EncryptedUserIdentity.loadEncrypted(encryptedUserIdentity, customPasswordPrompt, sendStatus, database);
             } else {
                 console.log(`Creating new encrypted identity and saving to database`);
                 const identity = await EncryptedUserIdentity.createEncrypted();
                 const recoveryPhrase = EncryptedUserIdentity.generateRecoveryPhrase();
 
-                password = await EncryptedUserIdentity.getPasswordFromKeychain(
+                const response = await EncryptedUserIdentity.getPasswordFromKeychain(
                     identity.id,
                     'Create a strong password for your new identity',
                     true,
                     customPasswordPrompt,
-                    recoveryPhrase
+                    recoveryPhrase,
+                    undefined, // no error message for new identity creation
+                    undefined, // no cooldown for new identity
+                    false // no recovery option for new identity
                 );
-                await identity.saveEncrypted(database, password, recoveryPhrase);
+                passwordBytes = new TextEncoder().encode(response.password);
+                await identity.saveEncrypted(database, passwordBytes, sendStatus, recoveryPhrase);
                 return identity;
             }
         } catch (error) {
@@ -180,61 +186,126 @@ export class EncryptedUserIdentity {
             generalErrorHandler(error);
             throw error;
         } finally {
-            if (password) password.fill(0);
+            if (passwordBytes) passwordBytes.fill(0);
         }
     }
 
     static async loadEncrypted(
         encryptedUserIdentity: EncryptedUserIdentityDb,
-        customPasswordPrompt: (prompt: string, isNew: boolean, recoveryPhrase?: string) => Promise<string>
+        customPasswordPrompt: (prompt: string, isNew: boolean, recoveryPhrase?: string, prefilledPassword?: string, errorMessage?: string, cooldownSeconds?: number, showRecoveryOption?: boolean, keychainAvailable?: boolean) => Promise<PasswordResponse>,
+        sendStatus: (message: string, stage: any) => void,
+        database: ChatDatabase
     ): Promise<EncryptedUserIdentity> {
-        let password: Uint8Array | null = null;
+        let passwordBytes: Uint8Array | null = null;
         let key: Uint8Array | null = null;
         let decryptedBytes: Uint8Array | null = null;
+        let errorMessage: string | undefined = undefined;
+        let showRecoveryOption = false;
 
-        try {
-            password = await EncryptedUserIdentity.getPasswordFromKeychain(
-                encryptedUserIdentity.peer_id,
-                'Enter password for identity: ',
-                false,
-                customPasswordPrompt
-            );
+        for (let i = 0; i < 100; i++) { // 100 attempts -> avoiding infinite loops
+            try {
+                const cooldown = database.checkLoginCooldown(encryptedUserIdentity.peer_id);
 
-            // Salt, nonce, and encrypted_data are already Buffers from BLOB columns
-            console.log('Decrypting identity (this may take a moment)...');
-            key = scrypt(password, encryptedUserIdentity.salt, EncryptedUserIdentity.SCRYPT_PARAMS);
+                const response = await EncryptedUserIdentity.getPasswordFromKeychain(
+                    encryptedUserIdentity.peer_id,
+                    'Enter password for identity',
+                    false,
+                    customPasswordPrompt,
+                    undefined, // no recovery phrase when loading
+                    errorMessage,
+                    cooldown.isLocked ? cooldown.remainingSeconds : undefined,
+                    showRecoveryOption
+                );
 
-            const aes = gcm(key, encryptedUserIdentity.nonce);
-            decryptedBytes = aes.decrypt(encryptedUserIdentity.encrypted_data);
-            const decryptedJson = new TextDecoder().decode(decryptedBytes);
-            const parsedData = JSON.parse(decryptedJson);
+                // Check if user submitted recovery phrase
+                if (response.useRecoveryPhrase) {
+                    console.log('Attempting recovery phrase login...');
+                    sendStatus('Verifying recovery phrase...', 'loadEncrypted');
 
-            // Validate structure before using
-            if (!EncryptedUserIdentity.isValidIdentityData(parsedData)) {
-                throw new Error('Invalid identity data structure - corrupted or tampered data');
+                    try {
+                        const identity = await EncryptedUserIdentity.loadWithRecoveryPhrase(
+                            encryptedUserIdentity.peer_id,
+                            response.password, // This is the recovery phrase
+                            database
+                        );
+
+                        // Success! Clear login attempts
+                        database.clearLoginAttempts(encryptedUserIdentity.peer_id);
+                        return identity;
+                    } catch (error: unknown) {
+                        if (error instanceof Error) {
+                            errorMessage = `Recovery phrase failed: ${error.message}`;
+                            database.recordFailedLoginAttempt(encryptedUserIdentity.peer_id);
+                            showRecoveryOption = true;
+                            continue;
+                        }
+                        throw error;
+                    }
+                }
+
+                // Normal password attempt
+                passwordBytes = new TextEncoder().encode(response.password);
+                console.log('Decrypting identity (this may take a moment)...');
+                sendStatus('Decrypting identity (this may take a moment)...', 'loadEncrypted');
+                key = scrypt(passwordBytes, encryptedUserIdentity.salt, EncryptedUserIdentity.SCRYPT_PARAMS);
+
+                const aes = gcm(key, encryptedUserIdentity.nonce);
+                decryptedBytes = aes.decrypt(encryptedUserIdentity.encrypted_data);
+                const decryptedJson = new TextDecoder().decode(decryptedBytes);
+                const parsedData = JSON.parse(decryptedJson);
+
+                // Validate structure before using
+                if (!EncryptedUserIdentity.isValidIdentityData(parsedData)) {
+                    throw new Error('Invalid identity data structure - corrupted or tampered data');
+                }
+
+                const identityData: DecryptedUserIdentityData = parsedData;
+                const identity = EncryptedUserIdentity.reconstructFromData(identityData);
+
+                // Clear sensitive data and login attempts
+                if (passwordBytes) passwordBytes.fill(0);
+                if (key) key.fill(0);
+                if (decryptedBytes) decryptedBytes.fill(0);
+                database.clearLoginAttempts(encryptedUserIdentity.peer_id);
+
+                return identity;
+            } catch (error: unknown) {
+                // Clean up sensitive data
+                if (passwordBytes) passwordBytes.fill(0);
+                if (key) key.fill(0);
+                if (decryptedBytes) decryptedBytes.fill(0);
+
+                if (!(error instanceof Error)) {
+                    throw new Error('Failed to decrypt identity');
+                }
+
+                // Check if it's a wrong password error
+                if (error.message.includes('authentication') || error.message.includes('ghash tag')) {
+                    database.recordFailedLoginAttempt(encryptedUserIdentity.peer_id);
+
+                    const cooldown = database.checkLoginCooldown(encryptedUserIdentity.peer_id);
+                    const attempt = database.getLoginAttempt(encryptedUserIdentity.peer_id);
+
+                    if (cooldown.isLocked) {
+                        errorMessage = `Incorrect password. Too many attempts. Wait ${Math.ceil(cooldown.remainingSeconds / 60)} minutes.`;
+                    } else {
+                        errorMessage = `Incorrect password. Attempt ${attempt?.attempt_count || 1}.`;
+                    }
+                    showRecoveryOption = true;
+                    console.log(`[IDENTITY] Wrong password, attempt ${attempt?.attempt_count}`);
+
+                    // Ask for password again
+                    continue;
+                }
+
+                // For other errors (corruption, etc.), don't retry
+                throw new Error(`Failed to decrypt identity: ${error.message}`);
             }
-
-            const identityData: DecryptedUserIdentityData = parsedData;
-
-            const identity = EncryptedUserIdentity.reconstructFromData(identityData);
-
-            return identity;
-        } catch (error: unknown) {
-            if (!(error instanceof Error)) {
-                throw new Error('Failed to decrypt identity');
-            }
-            if (error.message.includes('authentication')) {
-                throw new Error('Invalid password - authentication failed');
-            }
-            throw new Error(`Failed to decrypt identity: ${error.message}`);
-        } finally {
-            if (password) password.fill(0);
-            if (key) key.fill(0);
-            if (decryptedBytes) decryptedBytes.fill(0);
         }
+        throw new Error('Failed to load encrypted identity after 100 attempts');
     }
 
-    async saveEncrypted(database: ChatDatabase, password: Uint8Array, recoveryPhrase?: string): Promise<void> {
+    async saveEncrypted(database: ChatDatabase, password: Uint8Array, sendStatus: (message: string, stage: any) => void, recoveryPhrase?: string): Promise<void> {
         let key: Uint8Array | null = null;
         let plaintext: Uint8Array | null = null;
         let recoveryPassword: Uint8Array | null = null;
@@ -244,6 +315,7 @@ export class EncryptedUserIdentity {
             const nonce = randomBytes(12);
 
             console.log('Encrypting identity (this may take a moment)...');
+            sendStatus("Encrypting identity (this may take a moment)...", "Save encrypted")
             key = scrypt(password, salt, EncryptedUserIdentity.SCRYPT_PARAMS);
 
             password.fill(0);
@@ -402,19 +474,22 @@ export class EncryptedUserIdentity {
         identityId: string,
         prompt: string,
         validateStrength: boolean = false,
-        customPasswordPrompt: (prompt: string, isNew: boolean, recoveryPhrase?: string) => Promise<string>,
-        recoveryPhrase?: string
-    ): Promise<Uint8Array> {
+        customPasswordPrompt: (prompt: string, isNew: boolean, recoveryPhrase?: string, prefilledPassword?: string, errorMessage?: string, cooldownSeconds?: number, showRecoveryOption?: boolean, keychainAvailable?: boolean) => Promise<PasswordResponse>,
+        recoveryPhrase?: string,
+        errorMessage?: string,
+        cooldownSeconds?: number,
+        showRecoveryOption?: boolean
+    ): Promise<PasswordResponse> {
         const keytarInstance = await loadKeytar();
+        const keychainAvailable = keytarInstance !== null;
+        let prefilledPassword: string | undefined = undefined;
 
         if (keytarInstance) {
             try {
                 const storedPassword = await keytarInstance.getPassword('kiyeovo', identityId);
                 if (storedPassword) {
-                    console.log('Retrieved password from OS keychain');
-                    // SECURITY LIMITATION: storedPassword is a JavaScript string (immutable)
-                    // and cannot be securely cleared from memory. See SECURITY_LIMITATIONS.md
-                    return new TextEncoder().encode(storedPassword);
+                    console.log('Retrieved password from OS keychain - will pre-fill in UI');
+                    prefilledPassword = storedPassword;
                 }
             } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
@@ -422,15 +497,12 @@ export class EncryptedUserIdentity {
             }
         }
 
-
         console.log('Using custom password prompt (UI)');
-        const password = await customPasswordPrompt(prompt, validateStrength, recoveryPhrase);
+        const response = await customPasswordPrompt(prompt, validateStrength, recoveryPhrase, prefilledPassword, errorMessage, cooldownSeconds, showRecoveryOption, keychainAvailable);
 
-        if (keytarInstance && password) {
+        if (keytarInstance && response.rememberMe && response.password && !response.useRecoveryPhrase) {
             try {
-                // SECURITY LIMITATION: keytar API requires string, creating an immutable copy
-                // that cannot be securely cleared from memory. See SECURITY_LIMITATIONS.md
-                await keytarInstance.setPassword('kiyeovo', identityId, password);
+                await keytarInstance.setPassword('kiyeovo', identityId, response.password);
                 console.log('Stored password in OS keychain');
             } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
@@ -438,7 +510,7 @@ export class EncryptedUserIdentity {
             }
         }
 
-        return new TextEncoder().encode(password);
+        return response;
     }
 
     private getLibp2pPrivateKeyBase64(): string {

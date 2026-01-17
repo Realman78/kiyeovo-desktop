@@ -1,1 +1,26 @@
-marin
+1. 
+The real problem (and what I’d fix)
+What is problematic is that app initialization is blocked waiting for a user response even during the lockout window, and the UI forces the user to wait and prevents pre-typing.
+You’ve got two good options (pick based on desired UX):
+Option A (recommended): backend waits out the cooldown before prompting
+If cooldown is active, don’t call customPasswordPrompt yet.
+Instead: show a status (“Too many attempts, waiting 4:37…”) and await sleep(remainingSeconds); then prompt normally.
+Pros
+No “disabled password dialog” while locked.
+Backend isn’t stuck awaiting a renderer response during lockout.
+Clearer separation: cooldown is a state, password prompt is an action.
+Cons
+Slightly more backend logic.
+Option B: keep prompt visible but allow typing during cooldown (submit still disabled)
+Change UI so the password input is enabled during cooldown, but the submit button remains disabled until timer hits 0.
+Pros
+Minimal backend changes.
+Better UX: user can paste/type while waiting; at 0 they just hit submit.
+Still secure: brute force is still blocked by submit lockout.
+Cons
+Still “startup blocked” (by design) until the user submits; but at least it feels responsive.
+
+
+2. recovery phrase
+
+3. Animations!

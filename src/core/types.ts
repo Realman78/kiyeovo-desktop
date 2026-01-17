@@ -442,10 +442,17 @@ export interface PasswordRequest {
   prompt: string;
   isNewPassword?: boolean;
   recoveryPhrase?: string;
+  prefilledPassword?: string;
+  errorMessage?: string;
+  cooldownSeconds?: number;
+  showRecoveryOption?: boolean;
+  keychainAvailable?: boolean;
 }
 
 export interface PasswordResponse {
   password: string;
+  rememberMe: boolean;
+  useRecoveryPhrase?: boolean;
 }
 
 export interface InitStatus {

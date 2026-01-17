@@ -8,21 +8,20 @@ export function requestPasswordFromUI(
   window: BrowserWindow,
   prompt: string,
   isNewPassword: boolean = false,
-  recoveryPhrase?: string
-): Promise<string> {
+  recoveryPhrase?: string,
+  prefilledPassword?: string,
+  errorMessage?: string,
+  cooldownSeconds?: number,
+  showRecoveryOption?: boolean,
+  keychainAvailable?: boolean
+): Promise<PasswordResponse> {
   return new Promise((resolve, reject) => {
-    // const timeout = setTimeout(() => {
-    //   cleanup();
-    //   reject(new Error('Password request timed out'));
-    // }, 300000); // 5 minute timeout
-
     const handlePasswordResponse = (_event: any, response: PasswordResponse) => {
       cleanup();
-      resolve(response.password);
+      resolve(response);
     };
 
     const cleanup = () => {
-      // clearTimeout(timeout);
       ipcMain.removeListener(IPC_CHANNELS.PASSWORD_RESPONSE, handlePasswordResponse);
     };
 
@@ -34,6 +33,11 @@ export function requestPasswordFromUI(
       prompt,
       isNewPassword,
       ...(recoveryPhrase && { recoveryPhrase }),
+      ...(prefilledPassword && { prefilledPassword }),
+      ...(errorMessage && { errorMessage }),
+      ...(cooldownSeconds !== undefined && { cooldownSeconds }),
+      ...(showRecoveryOption !== undefined && { showRecoveryOption }),
+      ...(keychainAvailable !== undefined && { keychainAvailable }),
     };
     window.webContents.send(IPC_CHANNELS.PASSWORD_REQUEST, request);
   });

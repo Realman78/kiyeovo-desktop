@@ -101,6 +101,15 @@ export interface OfflineSentMessages {
     updated_at: Date
 }
 
+export interface LoginAttempt {
+    id: number
+    peer_id: string
+    attempt_count: number
+    last_attempt_at: Date
+    cooldown_until: Date | null
+    created_at: Date
+}
+
 export class ChatDatabase {
     private db: Database.Database;
     private dbPath: string;
@@ -290,6 +299,18 @@ export class ChatDatabase {
             messages TEXT NOT NULL,
             version INTEGER NOT NULL DEFAULT 0,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+
+        // Login attempts table (for progressive cooldown on failed password attempts)
+        this.db.exec(`
+        CREATE TABLE IF NOT EXISTS login_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            peer_id TEXT UNIQUE NOT NULL,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            last_attempt_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            cooldown_until DATETIME,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     `);
     }
@@ -1201,6 +1222,85 @@ export class ChatDatabase {
             console.error('Failed to reconnect to database:', error);
             throw error;
         }
+    }
+
+    // Login attempts methods
+    getLoginAttempt(peerId: string): LoginAttempt | undefined {
+        const stmt = this.db.prepare('SELECT * FROM login_attempts WHERE peer_id = ?');
+        const row = stmt.get(peerId) as any;
+        if (!row) return undefined;
+
+        return {
+            ...row,
+            last_attempt_at: new Date(row.last_attempt_at),
+            cooldown_until: row.cooldown_until ? new Date(row.cooldown_until) : null,
+            created_at: new Date(row.created_at)
+        };
+    }
+
+    recordFailedLoginAttempt(peerId: string): void {
+        const existing = this.getLoginAttempt(peerId);
+        const now = new Date();
+
+        if (existing) {
+            const newCount = existing.attempt_count + 1;
+            const cooldownMinutes = this.calculateCooldown(newCount);
+
+            // Only apply cooldown if we've reached 5 or more attempts
+            const cooldownUntil = cooldownMinutes > 0
+                ? new Date(now.getTime() + cooldownMinutes * 60000)
+                : null;
+
+            const stmt = this.db.prepare(`
+                UPDATE login_attempts
+                SET attempt_count = ?,
+                    last_attempt_at = ?,
+                    cooldown_until = ?
+                WHERE peer_id = ?
+            `);
+            stmt.run(newCount, now.toISOString(), cooldownUntil?.toISOString() || null, peerId);
+        } else {
+            // First attempt - no cooldown
+            const stmt = this.db.prepare(`
+                INSERT INTO login_attempts (peer_id, attempt_count, last_attempt_at, cooldown_until)
+                VALUES (?, ?, ?, ?)
+            `);
+            stmt.run(peerId, 1, now.toISOString(), null);
+        }
+    }
+
+    clearLoginAttempts(peerId: string): void {
+        const stmt = this.db.prepare('DELETE FROM login_attempts WHERE peer_id = ?');
+        stmt.run(peerId);
+    }
+
+    private calculateCooldown(attemptCount: number): number {
+        if (attemptCount <= 4) return 0; // No cooldown for first 4 attempts
+        if (attemptCount === 5) return 5;
+        if (attemptCount === 6) return 10;
+        if (attemptCount === 7) return 20;
+        if (attemptCount === 8) return 30;
+        return 60; // 9+ attempts = 60 minutes
+    }
+
+    checkLoginCooldown(peerId: string): { isLocked: boolean; remainingSeconds: number } {
+        const attempt = this.getLoginAttempt(peerId);
+        if (!attempt || !attempt.cooldown_until) {
+            return { isLocked: false, remainingSeconds: 0 };
+        }
+
+        const now = new Date();
+        const remainingMs = attempt.cooldown_until.getTime() - now.getTime();
+
+        if (remainingMs <= 0) {
+            // Cooldown expired
+            return { isLocked: false, remainingSeconds: 0 };
+        }
+
+        return {
+            isLocked: true,
+            remainingSeconds: Math.ceil(remainingMs / 1000)
+        };
     }
 
     // Close database connection

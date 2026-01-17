@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import type { PasswordRequest } from "../types";
-import { PasswordPrompt } from "../components/PasswordPrompt";
+import { PasswordPrompt } from "../components/login/PasswordPrompt";
 import { Logo } from "../components/icons/Logo";
 
 type LoginProps = {
@@ -11,8 +11,7 @@ export const Login = ({ initStatus }: LoginProps) => {
     const [passwordRequest, setPasswordRequest] = useState<PasswordRequest | null>(null);
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
-    const [error, setError] = useState('');
-    const [isSubmitted, setIsSubmitted] = useState(false)
+    const [isSubmitting, setIsSubmitting] = useState(false)
     const [rememberMe, setRememberMe] = useState(true)
 
     useEffect(() => {
@@ -20,7 +19,7 @@ export const Login = ({ initStatus }: LoginProps) => {
             setPasswordRequest(request);
             setPassword('');
             setConfirmPassword('');
-            setError('');
+            setIsSubmitting(false);
         });
 
         return unsubscribe;
@@ -29,22 +28,8 @@ export const Login = ({ initStatus }: LoginProps) => {
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
 
-        if (!password) {
-            setError('Password cannot be empty');
-            return;
-        }
-
-        if (passwordRequest?.isNewPassword && password !== confirmPassword) {
-            setError('Passwords do not match');
-            return;
-        }
-
-        window.kiyeovoAPI.submitPassword(password);
-        setIsSubmitted(true)
-        setPasswordRequest(null);
-        setPassword('');
-        setConfirmPassword('');
-        setError('');
+        setIsSubmitting(true);
+        window.kiyeovoAPI.submitPassword(password, rememberMe);
     };
 
     return <div className="w-full h-full flex justify-center items-center flex-col bg-background cyber-grid">
@@ -58,8 +43,9 @@ export const Login = ({ initStatus }: LoginProps) => {
             setPassword={setPassword}
             confirmPassword={confirmPassword}
             setConfirmPassword={setConfirmPassword}
-            error={error} rememberMe={rememberMe}
-            setRememberMe={setRememberMe} initStatus={initStatus} />
+            rememberMe={rememberMe}
+            setRememberMe={setRememberMe}
+            isSubmitting={isSubmitting} />
             : <div>{initStatus}</div>}
     </div>
 }
