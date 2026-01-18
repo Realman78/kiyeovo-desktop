@@ -439,6 +439,9 @@ export const IPC_CHANNELS = {
 
   // DHT connection status
   DHT_CONNECTION_STATUS: 'dht:connectionStatus',
+
+  // Register
+  REGISTER_REQUEST: 'register:request',
 } as const;
 
 export interface PasswordRequest {

@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { UserPlus, AtSign, Shield, AlertCircle } from "lucide-react";
+import { useState, useEffect } from "react";
+import { UserPlus, AtSign, Shield, AlertCircle, Copy, Check } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -11,17 +11,24 @@ import {
 } from "../../ui/Dialog";
 import { Input } from "../../ui/Input";
 import { Button } from "../../ui/Button";
+import { useSelector } from "react-redux";
+import type { RootState } from "../../../state/store";
 
 
 interface RegisterDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onRegister: (username: string) => void;
+  onRegister: (username: string) => Promise<void>;
+  backendError?: string;
+  isRegistering?: boolean;
 }
 
-const RegisterDialog = ({ open, onOpenChange, onRegister }: RegisterDialogProps) => {
+const RegisterDialog = ({ open, onOpenChange, onRegister, backendError, isRegistering }: RegisterDialogProps) => {
   const [username, setUsername] = useState("");
-  const [error, setError] = useState("");
+  const [validationError, setValidationError] = useState("");
+  const [isCopied, setIsCopied] = useState(false);
+
+  const peerId = useSelector((state: RootState) => state.user.peerId);
 
   const validateUsername = (value: string) => {
     if (value.length < 3) {
@@ -36,22 +43,32 @@ const RegisterDialog = ({ open, onOpenChange, onRegister }: RegisterDialogProps)
     return "";
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const validationError = validateUsername(username);
-    if (validationError) {
-      setError(validationError);
+    const error = validateUsername(username);
+    if (error) {
+      setValidationError(error);
       return;
     }
-    onRegister(username);
-    setUsername("");
-    setError("");
+    await onRegister(username);
+    // Don't clear username here - let parent handle success/error
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setUsername(e.target.value);
-    if (error) setError("");
+    if (validationError) setValidationError("");
   };
+
+  // Clear form when dialog closes
+  useEffect(() => {
+    if (!open) {
+      setUsername("");
+      setValidationError("");
+    }
+  }, [open]);
+
+  // Display backend error or validation error, with backend error taking priority
+  const displayError = backendError || validationError;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -73,6 +90,27 @@ const RegisterDialog = ({ open, onOpenChange, onRegister }: RegisterDialogProps)
         <form onSubmit={handleSubmit}>
           <DialogBody className="space-y-4">
             <div>
+              <label className="block text-sm font-bold text-foreground mb-2">
+                Peer ID
+              </label>
+              <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-medium text-foreground">{peerId}</p>
+              <button
+                type="button"
+                className="text-sm cursor-pointer text-muted-foreground hover:text-foreground"
+                onClick={() => {
+                  setIsCopied(true);
+                  navigator.clipboard.writeText(peerId);
+                  setTimeout(() => {
+                    setIsCopied(false);
+                  }, 2000);
+                }}
+                >
+                {isCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+              </button>
+                </div>
+            </div>
+            <div>
               <label className="block text-sm font-medium text-foreground mb-2">
                 Username
               </label>
@@ -82,11 +120,12 @@ const RegisterDialog = ({ open, onOpenChange, onRegister }: RegisterDialogProps)
                 onChange={handleChange}
                 icon={<AtSign className="w-4 h-4" />}
                 autoFocus
+                spellCheck={false}
               />
-              {error && (
+              {displayError && (
                 <div className="flex items-center gap-2 mt-2 text-destructive text-sm">
                   <AlertCircle className="w-4 h-4" />
-                  <span>{error}</span>
+                  <span>{displayError}</span>
                 </div>
               )}
             </div>
@@ -114,8 +153,8 @@ const RegisterDialog = ({ open, onOpenChange, onRegister }: RegisterDialogProps)
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={!username}>
-              Register
+            <Button type="submit" disabled={!username || isRegistering}>
+              {isRegistering ? 'Registering...' : 'Register'}
             </Button>
           </DialogFooter>
         </form>

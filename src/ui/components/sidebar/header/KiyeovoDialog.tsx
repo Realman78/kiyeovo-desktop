@@ -25,6 +25,7 @@ export const KiyeovoDialog: FC<KiyeovoDialogProps> = ({ open, onOpenChange }) =>
 
                 <DialogBody className="cursor-default">
                     PLACEHOLDER FOR CONTENT
+                    PUT THE PEER ID HERE AND THE ABILITY TO COPY IT
                 </DialogBody>
             </DialogContent>
         </Dialog>

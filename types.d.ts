@@ -12,5 +12,8 @@ interface Window {
 
         // DHT connection status
         onDHTConnectionStatus: (callback: (status: { connected: boolean }) => void) => () => void;
+
+        // Register
+        register: (username: string) => Promise<{ success: boolean; error?: string }>;
     };
 }

@@ -1,3 +1,5 @@
+0. Registration with only peer ID
+
 1. 
 The real problem (and what I’d fix)
 What is problematic is that app initialization is blocked waiting for a user response even during the lockout window, and the UI forces the user to wait and prevents pre-typing.

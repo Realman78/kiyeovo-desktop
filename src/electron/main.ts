@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { isDev } from './util.js';
@@ -122,6 +122,29 @@ async function initializeApp() {
     app.quit();
   }
 }
+
+// IPC Handlers
+ipcMain.handle(IPC_CHANNELS.REGISTER_REQUEST, async (_event, username: string) => {
+  try {
+    if (!p2pCore) {
+      return { success: false, error: 'P2P core not initialized' };
+    }
+
+    console.log(`[Electron] Registering username: ${username}`);
+    const success = await p2pCore.usernameRegistry.register(username);
+
+    if (success) {
+      console.log(`[Electron] Successfully registered username: ${username}`);
+      return { success: true };
+    } else {
+      return { success: false, error: 'Failed to register username. Network may be unreachable.' };
+    }
+  } catch (error) {
+    console.error('[Electron] Registration failed:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return { success: false, error: errorMessage };
+  }
+});
 
 app.whenReady().then(async () => {
   await initializeApp();

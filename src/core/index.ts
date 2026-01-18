@@ -60,6 +60,7 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
   sendStatus('Creating libp2p node...', 'node');
   const node = await createChatNode(config.port, userIdentity, database);
   sendStatus(`Peer started. Peer ID: ${node.peerId.toString()}`, 'node');
+  sendStatus(node.peerId.toString(), 'peerId');
 
   node.getMultiaddrs().forEach(addr => {
     console.log(`[P2P Core] Listening on: ${addr.toString()}`);

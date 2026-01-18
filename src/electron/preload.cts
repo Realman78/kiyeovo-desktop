@@ -35,4 +35,9 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
         ipcRenderer.on(IPC_CHANNELS.DHT_CONNECTION_STATUS, listener);
         return () => ipcRenderer.removeListener(IPC_CHANNELS.DHT_CONNECTION_STATUS, listener);
     },
+
+    // Register
+    register: async (username: string): Promise<{ success: boolean; error?: string }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.REGISTER_REQUEST, username);
+    },
 });

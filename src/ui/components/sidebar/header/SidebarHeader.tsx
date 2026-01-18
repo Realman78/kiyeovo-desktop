@@ -4,17 +4,22 @@ import { Plus } from "lucide-react";
 import { Button } from "../../ui/Button";
 import ConnectionStatusDialog from "./ConnectionStatusDialog";
 import { KiyeovoDialog } from "./KiyeovoDialog";
+import { useDispatch } from "react-redux";
+import { setConnected } from "../../../state/slices/userSlice";
+
 type SidebarHeaderProps = {};
 
 export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
     const [dhtDialogOpen, setDhtDialogOpen] = useState(false);
     const [kiyeovoDialogOpen, setKiyeovoDialogOpen] = useState(false);
     const [isDHTConnected, setIsDHTConnected] = useState<boolean | null>(null);
+    const dispatch = useDispatch();
 
     useEffect(() => {
         const unsubStatus = window.kiyeovoAPI.onDHTConnectionStatus((status: { connected: boolean }) => {
             console.log('DHT connection status:', status.connected);
           setIsDHTConnected(status.connected);
+          dispatch(setConnected(status.connected));
         });
     
         return () => {

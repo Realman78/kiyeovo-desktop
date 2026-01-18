@@ -3,17 +3,41 @@ import type { FC } from "react";
 import { useState } from "react";
 import RegisterDialog from "./RegisterDialog";
 import { Button } from "../../ui/Button";
+import { useDispatch } from "react-redux";
+import { setRegistered, setUsername } from "../../../state/slices/userSlice";
 
 export const RegisterButton: FC = () => {
     const [showDialog, setShowDialog] = useState(false);
+    const [error, setError] = useState<string | undefined>(undefined);
+    const [isRegistering, setIsRegistering] = useState(false);
+    const dispatch = useDispatch();
 
     const handleShowDialog = () => {
         setShowDialog(true);
+        setError(undefined); // Clear previous errors when opening dialog
     }
 
-    const handleRegister = (username: string) => {
-        console.log(username);
-        setShowDialog(false);
+    const handleRegister = async (username: string) => {
+        setIsRegistering(true);
+        setError(undefined);
+
+        try {
+            const result = await window.kiyeovoAPI.register(username);
+            if (result.success) {
+                console.log(`Successfully registered username: ${username}`);
+                setShowDialog(false);
+                setError(undefined);
+                dispatch(setUsername(username));
+                dispatch(setRegistered(true));
+            } else {
+                setError(result.error || 'Failed to register username');
+            }
+        } catch (err) {
+            console.error('Registration error:', err);
+            setError(err instanceof Error ? err.message : 'Unexpected error occurred');
+        } finally {
+            setIsRegistering(false);
+        }
     }
 
     const handleSettings = () => {
@@ -21,7 +45,6 @@ export const RegisterButton: FC = () => {
     }
 
     return <>
-        <div className="flex items-center gap-3">
             <button
                 onClick={handleShowDialog}
                 className="w-full cursor-pointer flex items-center gap-3 p-2 rounded-md bg-primary/10 border border-primary/30 hover:bg-primary/20 transition-colors group"
@@ -38,15 +61,12 @@ export const RegisterButton: FC = () => {
                     </p>
                 </div>
             </button>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={handleSettings}
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <Settings className="w-4 h-4" />
-            </Button>
-        </div>
-        <RegisterDialog open={showDialog} onOpenChange={setShowDialog} onRegister={handleRegister} />
+        <RegisterDialog
+            open={showDialog}
+            onOpenChange={setShowDialog}
+            onRegister={handleRegister}
+            backendError={error}
+            isRegistering={isRegistering}
+        />
     </>
 }
