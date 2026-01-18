@@ -1,5 +1,4 @@
-import { FileKey } from "lucide-react";
-import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../ui/Dialog";
+import { Dialog, DialogBody, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../ui/Dialog";
 import type { FC } from "react";
 import { Logo } from "../../icons/Logo";
 

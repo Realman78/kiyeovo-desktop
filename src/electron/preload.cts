@@ -28,4 +28,11 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
         ipcRenderer.on(IPC_CHANNELS.INIT_ERROR, listener);
         return () => ipcRenderer.removeListener(IPC_CHANNELS.INIT_ERROR, listener);
     },
+
+    // DHT connection status
+    onDHTConnectionStatus: (callback: (status: { connected: boolean }) => void) => {
+        const listener = (_event: any, status: { connected: boolean }) => callback(status);
+        ipcRenderer.on(IPC_CHANNELS.DHT_CONNECTION_STATUS, listener);
+        return () => ipcRenderer.removeListener(IPC_CHANNELS.DHT_CONNECTION_STATUS, listener);
+    },
 });

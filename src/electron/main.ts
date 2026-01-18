@@ -45,6 +45,13 @@ function sendInitStatus(message: string, stage: InitStatus['stage']) {
   }
 }
 
+function sendDHTConnectionStatus(status: { connected: boolean }) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    console.log(`[Electron] Sending DHT connection status: ${status.connected}`);
+    mainWindow.webContents.send(IPC_CHANNELS.DHT_CONNECTION_STATUS, status);
+  }
+}
+
 async function initializeP2PAfterWindow() {
   try {
     if (!mainWindow) {
@@ -62,7 +69,7 @@ async function initializeP2PAfterWindow() {
     // Initialize P2P core with custom password prompt
     p2pCore = await initializeP2PCore({
       dataDir,
-      port: 9000, // TODO: Make this configurable
+      port: 9001, // TODO: Make this configurable
       passwordPrompt: async (prompt: string, isNew: boolean, recoveryPhrase?: string, prefilledPassword?: string, errorMessage?: string, cooldownSeconds?: number, showRecoveryOption?: boolean, keychainAvailable?: boolean) => {
         console.log('[Electron] Requesting password from UI...');
         const response = await requestPasswordFromUI(mainWindow!, prompt, isNew, recoveryPhrase, prefilledPassword, errorMessage, cooldownSeconds, showRecoveryOption, keychainAvailable);
@@ -71,6 +78,10 @@ async function initializeP2PAfterWindow() {
       onStatus: (message: string, stage: InitStatus['stage']) => {
         console.log(`[P2P Core] ${message}`);
         sendInitStatus(message, stage);
+      },
+      onDHTConnectionStatus: (status: { connected: boolean }) => {
+        console.log(`[Electron] DHT connection status: ${status.connected}`);
+        sendDHTConnectionStatus(status);
       }
     });
 

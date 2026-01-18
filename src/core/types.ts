@@ -436,6 +436,9 @@ export const IPC_CHANNELS = {
   INIT_STATUS: 'init:status',
   INIT_COMPLETE: 'init:complete',
   INIT_ERROR: 'init:error',
+
+  // DHT connection status
+  DHT_CONNECTION_STATUS: 'dht:connectionStatus',
 } as const;
 
 export interface PasswordRequest {

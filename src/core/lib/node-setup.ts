@@ -17,7 +17,6 @@ import {
   DHT_PROTOCOL,
   K_BUCKET_SIZE,
   PREFIX_LENGTH,
-  NETWORK_CHECK_DELAY,
   getTorConfig,
 } from '../constants.js';
 import { filterOnionAddressesMapper } from '../utils/miscellaneous.js';
@@ -171,11 +170,10 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
   }
 }
 
-export async function connectToBootstrap(node: ChatNode, bootstrapAddr?: string): Promise<void> {
-  const KNOWN_BOOTSTRAP_NODES = process.env.KNOWN_BOOTSTRAP_NODES ? process.env.KNOWN_BOOTSTRAP_NODES.split(',').map(addr => addr.trim()).filter(Boolean) : [];
-  let addressesToTry = bootstrapAddr
-    ? [bootstrapAddr, ...KNOWN_BOOTSTRAP_NODES]
-    : KNOWN_BOOTSTRAP_NODES;
+export async function connectToBootstrap(node: ChatNode, database: ChatDatabase): Promise<void> {
+  let addressesToTry = database.getBootstrapNodes()
+    .map(bootstrapNode => bootstrapNode.address)
+    .filter(addr => addr !== node.peerId.toString());
 
   // In Tor mode, only use onion bootstrap addresses to avoid Tor exit failures
   const torCfg = getTorConfig();
@@ -187,6 +185,7 @@ export async function connectToBootstrap(node: ChatNode, bootstrapAddr?: string)
 
   if (addressesToTry.length === 0) {
     console.log('No bootstrap addresses configured. YOU ARE ALONE IN THE DARK!');
+    // Status will be sent by periodic peer count checker
     return;
   }
 
@@ -199,23 +198,7 @@ export async function connectToBootstrap(node: ChatNode, bootstrapAddr?: string)
       // eslint-disable-next-line no-await-in-loop
       await node.dial(ma);
       console.log(`Connected to bootstrap peer: ${addr}`);
-
-      // Verify DHT is working
-      setTimeout(() => {
-        void (async () => {
-          try {
-            const peers = await node.peerStore.all();
-            if (peers.length > 1) {
-              console.log(`Network ready: discovered ${peers.length} peers`);
-            } else {
-              console.log('Only bootstrap peer found, network may be small');
-            }
-          } catch {
-            console.log('Network status check failed');
-          }
-        })();
-      }, NETWORK_CHECK_DELAY);
-
+      // Status will be sent by periodic peer count checker
       return;
 
     } catch (err: unknown) {
@@ -224,4 +207,5 @@ export async function connectToBootstrap(node: ChatNode, bootstrapAddr?: string)
   }
 
   console.log('No hardcoded bootstrap nodes available.');
+  // Status will be sent by periodic peer count checker
 } 

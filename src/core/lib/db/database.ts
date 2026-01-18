@@ -1,10 +1,11 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */ 
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 import Database from 'better-sqlite3';
 import * as fs from 'fs';
 import * as path from 'path';
 import { generalErrorHandler } from '../../utils/general-error.js';
 import type { ContactMode, OfflineMessage } from '../../types.js';
+import { DEFAULT_BOOTSTRAP_NODES } from '../../default-bootstrap-nodes.js';
 
 export interface User {
     peer_id: string
@@ -110,6 +111,14 @@ export interface LoginAttempt {
     created_at: Date
 }
 
+export interface BootstrapNode {
+    id: number
+    address: string
+    connected: boolean
+    created_at: Date
+    updated_at: Date
+}
+
 export class ChatDatabase {
     private db: Database.Database;
     private dbPath: string;
@@ -160,130 +169,130 @@ export class ChatDatabase {
 
         // Users table
         this.db.exec(`
-      CREATE TABLE IF NOT EXISTS users (
-        peer_id TEXT PRIMARY KEY NOT NULL,
-        signing_public_key TEXT NOT NULL,
-        offline_public_key TEXT NOT NULL DEFAULT '',
-        signature TEXT NOT NULL,
-        username TEXT NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
+            CREATE TABLE IF NOT EXISTS users (
+                peer_id TEXT PRIMARY KEY NOT NULL,
+                signing_public_key TEXT NOT NULL,
+                offline_public_key TEXT NOT NULL DEFAULT '',
+                signature TEXT NOT NULL,
+                username TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
 
         // Chats table
         this.db.exec(`
-      CREATE TABLE IF NOT EXISTS chats (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        type TEXT NOT NULL CHECK(type IN ('direct','group')),
-        created_by TEXT NOT NULL,
-        offline_bucket_secret TEXT NOT NULL,
-        notifications_bucket_key TEXT NOT NULL,
-        group_id TEXT,
-        group_key TEXT,
-        permanent_key TEXT,
-        status TEXT NOT NULL CHECK(status IN ('active', 'pending')),
-        offline_last_read_timestamp INTEGER DEFAULT 0,
-        offline_last_ack_sent INTEGER DEFAULT 0,
-        trusted_out_of_band INTEGER DEFAULT 0,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (created_by) REFERENCES users (peer_id)
-      )
-    `);
+            CREATE TABLE IF NOT EXISTS chats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL CHECK(type IN ('direct','group')),
+                created_by TEXT NOT NULL,
+                offline_bucket_secret TEXT NOT NULL,
+                notifications_bucket_key TEXT NOT NULL,
+                group_id TEXT,
+                group_key TEXT,
+                permanent_key TEXT,
+                status TEXT NOT NULL CHECK(status IN ('active', 'pending')),
+                offline_last_read_timestamp INTEGER DEFAULT 0,
+                offline_last_ack_sent INTEGER DEFAULT 0,
+                trusted_out_of_band INTEGER DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (created_by) REFERENCES users (peer_id)
+            )
+        `);
 
 
         // Messages table
         this.db.exec(`
-      CREATE TABLE IF NOT EXISTS messages (
-        id TEXT PRIMARY KEY NOT NULL,
-        chat_id INTEGER NOT NULL,
-        sender_peer_id TEXT NOT NULL,
-        content TEXT NOT NULL, -- Decrypted content stored in plaintext (relies on OS disk encryption for at-rest protection)
-        message_type TEXT NOT NULL CHECK(message_type IN ('text', 'file', 'image', 'system')),
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (chat_id) REFERENCES chats (id) ON DELETE CASCADE,
-        FOREIGN KEY (sender_peer_id) REFERENCES users (peer_id)
-      )
-    `);
+            CREATE TABLE IF NOT EXISTS messages (
+                id TEXT PRIMARY KEY NOT NULL,
+                chat_id INTEGER NOT NULL,
+                sender_peer_id TEXT NOT NULL,
+                content TEXT NOT NULL, -- Decrypted content stored in plaintext (relies on OS disk encryption for at-rest protection)
+                message_type TEXT NOT NULL CHECK(message_type IN ('text', 'file', 'image', 'system')),
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (chat_id) REFERENCES chats (id) ON DELETE CASCADE,
+                FOREIGN KEY (sender_peer_id) REFERENCES users (peer_id)
+            )
+        `);
         this.db.exec(`
-        CREATE TABLE IF NOT EXISTS encrypted_user_identities (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            peer_id TEXT UNIQUE NOT NULL,
-            encrypted_data BLOB NOT NULL,
-            salt BLOB NOT NULL,
-            nonce BLOB NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    `);
+            CREATE TABLE IF NOT EXISTS encrypted_user_identities (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                peer_id TEXT UNIQUE NOT NULL,
+                encrypted_data BLOB NOT NULL,
+                salt BLOB NOT NULL,
+                nonce BLOB NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
         this.db.exec(`
-        CREATE TABLE IF NOT EXISTS chat_participants (
-            chat_id INTEGER NOT NULL,
-            peer_id TEXT NOT NULL,
-            role TEXT DEFAULT 'member',
-            joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (chat_id, peer_id),
-            FOREIGN KEY (chat_id) REFERENCES chats (id) ON DELETE CASCADE,
-            FOREIGN KEY (peer_id) REFERENCES users (peer_id)
-        )
-    `);
+            CREATE TABLE IF NOT EXISTS chat_participants (
+                chat_id INTEGER NOT NULL,
+                peer_id TEXT NOT NULL,
+                role TEXT DEFAULT 'member',
+                joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (chat_id, peer_id),
+                FOREIGN KEY (chat_id) REFERENCES chats (id) ON DELETE CASCADE,
+                FOREIGN KEY (peer_id) REFERENCES users (peer_id)
+            )
+        `);
         this.db.exec(`
-        CREATE TABLE IF NOT EXISTS notifications (
-            id TEXT PRIMARY KEY NOT NULL,
-            notification_type TEXT NOT NULL CHECK(notification_type IN ('group_invitation')),
-            notification_data TEXT NOT NULL, -- JSON string
-            bucket_key TEXT NOT NULL,
-            status TEXT CHECK(status IN ('pending', 'accepted', 'rejected', 'expired')), -- Only for group invitations
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            read BOOLEAN DEFAULT FALSE
-        )
-    `);
+            CREATE TABLE IF NOT EXISTS notifications (
+                id TEXT PRIMARY KEY NOT NULL,
+                notification_type TEXT NOT NULL CHECK(notification_type IN ('group_invitation')),
+                notification_data TEXT NOT NULL, -- JSON string
+                bucket_key TEXT NOT NULL,
+                status TEXT CHECK(status IN ('pending', 'accepted', 'rejected', 'expired')), -- Only for group invitations
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                read BOOLEAN DEFAULT FALSE
+            )
+        `);
 
         // Contact attempts log table (for silent mode)
         this.db.exec(`
-        CREATE TABLE IF NOT EXISTS contact_attempts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            sender_peer_id TEXT NOT NULL,
-            sender_username TEXT NOT NULL,
-            message TEXT NOT NULL,
-            timestamp INTEGER NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    `);
+            CREATE TABLE IF NOT EXISTS contact_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sender_peer_id TEXT NOT NULL,
+                sender_username TEXT NOT NULL,
+                message TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
 
         // Blocked peers table
         this.db.exec(`
-        CREATE TABLE IF NOT EXISTS blocked_peers (
-            peer_id TEXT PRIMARY KEY NOT NULL,
-            username TEXT,
-            blocked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            reason TEXT
-        )
-    `);
+            CREATE TABLE IF NOT EXISTS blocked_peers (
+                peer_id TEXT PRIMARY KEY NOT NULL,
+                username TEXT,
+                blocked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                reason TEXT
+            )
+        `);
 
         // Failed key exchanges table (for sender-side rate limiting)
         this.db.exec(`
-        CREATE TABLE IF NOT EXISTS failed_key_exchanges (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            target_peer_id TEXT NOT NULL,
-            target_username TEXT NOT NULL,
-            timestamp INTEGER NOT NULL,
-            reason TEXT NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    `);
+            CREATE TABLE IF NOT EXISTS failed_key_exchanges (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                target_peer_id TEXT NOT NULL,
+                target_username TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                reason TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
 
         // Settings table (for local preferences like contact_mode)
         this.db.exec(`
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY NOT NULL,
-            value TEXT NOT NULL,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    `);
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY NOT NULL,
+                value TEXT NOT NULL,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
 
         // Initialize default contact_mode setting if not exists
         const contactModeSetting = this.db.prepare('SELECT value FROM settings WHERE key = ?').get('contact_mode');
@@ -294,25 +303,45 @@ export class ChatDatabase {
         // Offline sent messages table (local cache of messages we've sent to DHT)
         // This eliminates the need to query DHT before writing
         this.db.exec(`
-        CREATE TABLE IF NOT EXISTS offline_sent_messages (
-            bucket_key TEXT PRIMARY KEY NOT NULL,
-            messages TEXT NOT NULL,
-            version INTEGER NOT NULL DEFAULT 0,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    `);
+            CREATE TABLE IF NOT EXISTS offline_sent_messages (
+                bucket_key TEXT PRIMARY KEY NOT NULL,
+                messages TEXT NOT NULL,
+                version INTEGER NOT NULL DEFAULT 0,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
 
         // Login attempts table (for progressive cooldown on failed password attempts)
         this.db.exec(`
-        CREATE TABLE IF NOT EXISTS login_attempts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            peer_id TEXT UNIQUE NOT NULL,
-            attempt_count INTEGER NOT NULL DEFAULT 0,
-            last_attempt_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            cooldown_until DATETIME,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    `);
+            CREATE TABLE IF NOT EXISTS login_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                peer_id TEXT UNIQUE NOT NULL,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                last_attempt_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                cooldown_until DATETIME,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+        // Bootstrap nodes table
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS bootstrap_nodes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                address TEXT NOT NULL,
+                connected INTEGER NOT NULL DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+        // Initialize default bootstrap nodes (only once, even if user deletes them later)
+        const bootstrapInitialized = this.db.prepare('SELECT value FROM settings WHERE key = ?').get('bootstrap_nodes_initialized');
+        if (!bootstrapInitialized) {
+            for (const node of DEFAULT_BOOTSTRAP_NODES) {
+                this.db.prepare('INSERT INTO bootstrap_nodes (address, connected) VALUES (?, ?)').run(node, 0);
+            }
+            this.db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('bootstrap_nodes_initialized', 'true');
+        }
     }
 
     private createIndexes(): void {
@@ -659,7 +688,7 @@ export class ChatDatabase {
             created_at: new Date(row.created_at)
         };
     }
-    
+
     cleanupOldFailedKeyExchanges(olderThanMinutes: number = 60): void {
         const cutoffTime = Date.now() - (olderThanMinutes * 60 * 1000);
         const stmt = this.db.prepare('DELETE FROM failed_key_exchanges WHERE timestamp < ?');
@@ -759,7 +788,7 @@ export class ChatDatabase {
         const stmt = this.db.prepare('DELETE FROM chats WHERE id = ?');
         stmt.run(chatId);
     }
-    
+
     deleteChatByGroupId(groupId: string): void {
         const stmt = this.db.prepare('DELETE FROM chats WHERE group_id = ?');
         stmt.run(groupId);
@@ -1165,6 +1194,13 @@ export class ChatDatabase {
             ...row,
             created_at: new Date(row.created_at)
         }));
+    }
+
+    // Bootstrap nodes operations
+    getBootstrapNodes(): { address: string }[] {
+        const stmt = this.db.prepare('SELECT address FROM bootstrap_nodes');
+        const rows = stmt.all() as { address: string }[];
+        return rows;
     }
 
     // Check if database is healthy

@@ -20,7 +20,8 @@ export interface P2PCoreConfig {
   dataDir: string;
   port: number;
   passwordPrompt: (prompt: string, isNew: boolean, recoveryPhrase?: string, prefilledPassword?: string, errorMessage?: string, cooldownSeconds?: number, showRecoveryOption?: boolean, keychainAvailable?: boolean) => Promise<PasswordResponse>;
-  onStatus?: (message: string, stage: 'database' | 'identity' | 'node' | 'registry' | 'messaging' | 'complete') => void;
+  onStatus: (message: string, stage: 'database' | 'identity' | 'node' | 'registry' | 'messaging' | 'complete') => void;
+  onDHTConnectionStatus: (status: { connected: boolean }) => void;
 }
 
 /**
@@ -28,10 +29,15 @@ export interface P2PCoreConfig {
  * This is the main entry point for the Kiyeovo P2P functionality
  */
 export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore> {
-  const { onStatus } = config;
+  const { onStatus, onDHTConnectionStatus } = config;
   const sendStatus = (message: string, stage: any) => {
     console.log(`[P2P Core] ${message}`);
-    onStatus?.(message, stage);
+    onStatus(message, stage);
+  };
+
+  const sendDHTConnectionStatus = (status: { connected: boolean }) => {
+    console.log(`[P2P Core] DHT connection status: ${status.connected}`);
+    onDHTConnectionStatus(status);
   };
 
   sendStatus(`Starting Kiyeovo P2P node on port ${config.port}...`, 'database');
@@ -70,7 +76,35 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
 
   // Connect to bootstrap nodes
   sendStatus('Connecting to bootstrap nodes...', 'node');
-  await connectToBootstrap(node);
+  await connectToBootstrap(node, database);
+
+  // Start periodic DHT connection status checker (every 30 seconds)
+  const checkDHTStatus = async () => {
+    try {
+      const peers = node.getConnections();
+      console.log(`[P2P Core] Peers: ${peers.map(p => p.remotePeer.toString())}`);
+      const isConnected = peers.length > 0;
+      sendDHTConnectionStatus({ connected: isConnected });
+      if (isConnected) {
+        console.log(`[P2P Core] Network status: ${peers.length} peer(s) connected`);
+      }
+    } catch (error) {
+      console.error('[P2P Core] Failed to check peer count:', error);
+      sendDHTConnectionStatus({ connected: false });
+    }
+  };
+
+  // Send initial status immediately
+  await checkDHTStatus();
+
+  setTimeout(() => {
+    void checkDHTStatus();
+  }, 5000);
+
+  // Then check periodically
+  const dhtStatusInterval = setInterval(() => {
+    void checkDHTStatus();
+  }, 30000); // 30 seconds
 
   // Initialize username registry
   sendStatus('Initializing username registry...', 'registry');
@@ -107,6 +141,7 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
       try {
         messageHandler.cleanup();
         clearInterval(cleanupInterval);
+        clearInterval(dhtStatusInterval);
         database.close();
         await node.stop();
         console.log('[P2P Core] Shutdown complete');

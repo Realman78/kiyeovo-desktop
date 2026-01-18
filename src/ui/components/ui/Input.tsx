@@ -3,12 +3,13 @@ import * as React from "react";
 export interface InputProps
   extends React.InputHTMLAttributes<HTMLInputElement> {
   icon?: React.ReactNode;
+  parentClassName?: string;
 }
 
 const Input = React.forwardRef<HTMLInputElement, InputProps>(
-  ({ className, type, icon, ...props }, ref) => {
+  ({ className, type, icon, parentClassName, ...props }, ref) => {
     return (
-      <div className="relative">
+      <div className={`relative ${parentClassName}`}>
         {icon && (
           <div className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
             {icon}

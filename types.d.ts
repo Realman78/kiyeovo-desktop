@@ -9,5 +9,8 @@ interface Window {
         onInitStatus: (callback: (status: InitStatus) => void) => () => void;
         onInitComplete: (callback: () => void) => () => void;
         onInitError: (callback: (error: string) => void) => () => void;
+
+        // DHT connection status
+        onDHTConnectionStatus: (callback: (status: { connected: boolean }) => void) => () => void;
     };
 }
