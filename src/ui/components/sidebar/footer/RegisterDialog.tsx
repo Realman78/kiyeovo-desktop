@@ -29,6 +29,7 @@ const RegisterDialog = ({ open, onOpenChange, onRegister, backendError, isRegist
   const [isCopied, setIsCopied] = useState(false);
 
   const peerId = useSelector((state: RootState) => state.user.peerId);
+  const isConnected = useSelector((state: RootState) => state.user.connected);
 
   const validateUsername = (value: string) => {
     if (value.length < 3) {
@@ -51,7 +52,6 @@ const RegisterDialog = ({ open, onOpenChange, onRegister, backendError, isRegist
       return;
     }
     await onRegister(username);
-    // Don't clear username here - let parent handle success/error
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -59,7 +59,6 @@ const RegisterDialog = ({ open, onOpenChange, onRegister, backendError, isRegist
     if (validationError) setValidationError("");
   };
 
-  // Clear form when dialog closes
   useEffect(() => {
     if (!open) {
       setUsername("");
@@ -67,7 +66,6 @@ const RegisterDialog = ({ open, onOpenChange, onRegister, backendError, isRegist
     }
   }, [open]);
 
-  // Display backend error or validation error, with backend error taking priority
   const displayError = backendError || validationError;
 
   return (
@@ -93,22 +91,22 @@ const RegisterDialog = ({ open, onOpenChange, onRegister, backendError, isRegist
               <label className="block text-sm font-bold text-foreground mb-2">
                 Peer ID
               </label>
-              <div className="flex items-center justify-between gap-2">
-              <p className="text-sm font-medium text-foreground">{peerId}</p>
-              <button
-                type="button"
-                className="text-sm cursor-pointer text-muted-foreground hover:text-foreground"
-                onClick={() => {
-                  setIsCopied(true);
-                  navigator.clipboard.writeText(peerId);
-                  setTimeout(() => {
-                    setIsCopied(false);
-                  }, 2000);
-                }}
+              <div className="flex items-center gap-3">
+                <p className="text-sm font-medium text-foreground">{peerId}</p>
+                <button
+                  type="button"
+                  className="text-sm cursor-pointer text-muted-foreground hover:text-foreground"
+                  onClick={() => {
+                    setIsCopied(true);
+                    navigator.clipboard.writeText(peerId);
+                    setTimeout(() => {
+                      setIsCopied(false);
+                    }, 2000);
+                  }}
                 >
-                {isCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-              </button>
-                </div>
+                  {isCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                </button>
+              </div>
             </div>
             <div>
               <label className="block text-sm font-medium text-foreground mb-2">
@@ -120,12 +118,19 @@ const RegisterDialog = ({ open, onOpenChange, onRegister, backendError, isRegist
                 onChange={handleChange}
                 icon={<AtSign className="w-4 h-4" />}
                 autoFocus
+                disabled={!isConnected}
                 spellCheck={false}
               />
               {displayError && (
                 <div className="flex items-center gap-2 mt-2 text-destructive text-sm">
                   <AlertCircle className="w-4 h-4" />
                   <span>{displayError}</span>
+                </div>
+              )}
+              {!isConnected && (
+                <div className="flex items-center gap-2 mt-2 text-destructive text-sm">
+                  <AlertCircle className="w-4 h-4" />
+                  <span>Connect to the network to register</span>
                 </div>
               )}
             </div>
@@ -136,7 +141,7 @@ const RegisterDialog = ({ open, onOpenChange, onRegister, backendError, isRegist
                 <div className="text-s text-muted-foreground">
                   <p className="font-medium text-foreground mb-1">IMPORTANT NOTICE</p>
                   <p className="text-sm">
-                    The username is stored on the DHT network and is used for 
+                    The username is stored on the DHT network and is used for
                     other users to find you. The recommendation is to not use usernames
                     as they can be overwritten by anyone. Use Peer IDs or Trusted Contacts instead.
                   </p>
@@ -153,8 +158,8 @@ const RegisterDialog = ({ open, onOpenChange, onRegister, backendError, isRegist
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={!username || isRegistering}>
-              {isRegistering ? 'Registering...' : 'Register'}
+            <Button type="submit" disabled={isRegistering || !isConnected}>
+              {isRegistering ? 'Registering...' : username ? 'Register' : 'Register without username'}
             </Button>
           </DialogFooter>
         </form>

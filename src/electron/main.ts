@@ -2,9 +2,10 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { isDev } from './util.js';
-import { initializeP2PCore, InitStatus, IPC_CHANNELS, type P2PCore } from '../core/index.js';
+import { initializeP2PCore, InitStatus, IPC_CHANNELS, KeyExchangeEvent, type P2PCore } from '../core/index.js';
 import { ensureAppDataDir } from '../core/utils/miscellaneous.js';
 import { requestPasswordFromUI } from './password-prompt.js';
+import { validateMessageLength, validateUsername } from '../core/utils/validators.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -52,6 +53,13 @@ function sendDHTConnectionStatus(status: { connected: boolean }) {
   }
 }
 
+function sendKeyExchangeSent(data: KeyExchangeEvent) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    console.log(`[Electron] Key exchange sent to ${data.username}`);
+    mainWindow.webContents.send(IPC_CHANNELS.KEY_EXCHANGE_SENT, data);
+  }
+}
+
 async function initializeP2PAfterWindow() {
   try {
     if (!mainWindow) {
@@ -82,6 +90,9 @@ async function initializeP2PAfterWindow() {
       onDHTConnectionStatus: (status: { connected: boolean }) => {
         console.log(`[Electron] DHT connection status: ${status.connected}`);
         sendDHTConnectionStatus(status);
+      },
+      onKeyExchangeSent: (data: KeyExchangeEvent) => {
+        sendKeyExchangeSent(data);
       }
     });
 
@@ -143,6 +154,34 @@ ipcMain.handle(IPC_CHANNELS.REGISTER_REQUEST, async (_event, username: string) =
     console.error('[Electron] Registration failed:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return { success: false, error: errorMessage };
+  }
+});
+
+ipcMain.handle(IPC_CHANNELS.SEND_MESSAGE_REQUEST, async (_event, identifier: string, message: string) => {
+  try {
+    if (!p2pCore) {
+      return { success: false, messageSentStatus: null, error: 'P2P core not initialized' };
+    }
+
+    if (!validateUsername(identifier)) {
+      return { success: false, messageSentStatus: null, error: 'Invalid username' };
+    }
+
+    if (!validateMessageLength(message)) {
+      return { success: false, messageSentStatus: null, error: 'Message too long' };
+    }
+
+    console.log(`[Electron] Sending message to ${identifier}: ${message}`);
+
+    const response = await p2pCore.messageHandler.sendMessage(identifier, message);
+
+    if (response.success) {
+      return { success: true, messageSentStatus: response.messageSentStatus, error: null };
+    }
+    return { success: false, messageSentStatus: null, error: response.error ?? 'Failed to send message' };
+  } catch (error) {
+    console.error('[Electron] Failed to send message:', error);
+    return { success: false, messageSentStatus: null, error: error instanceof Error ? error.message : "Failed to send message" };
   }
 });
 

@@ -6,6 +6,7 @@ import ConnectionStatusDialog from "./ConnectionStatusDialog";
 import { KiyeovoDialog } from "./KiyeovoDialog";
 import { useDispatch } from "react-redux";
 import { setConnected } from "../../../state/slices/userSlice";
+import NewConversationDialog from "./NewConversationDialog";
 
 type SidebarHeaderProps = {};
 
@@ -13,7 +14,31 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
     const [dhtDialogOpen, setDhtDialogOpen] = useState(false);
     const [kiyeovoDialogOpen, setKiyeovoDialogOpen] = useState(false);
     const [isDHTConnected, setIsDHTConnected] = useState<boolean | null>(null);
+    const [newConversationDialogOpen, setNewConversationDialogOpen] = useState(false);
+    const [error, setError] = useState<string | undefined>(undefined);
+
     const dispatch = useDispatch();
+
+    const handleNewConversation = async (peerIdOrUsername: string, message: string) => {
+        setError(undefined);
+
+        try {
+            const result = await window.kiyeovoAPI.sendMessage(peerIdOrUsername, message);
+
+            if (result.success) {
+                setNewConversationDialogOpen(false);
+
+                console.log(`[UI] Message sent to ${peerIdOrUsername} (online)`);
+                console.log(result);
+            } else {
+                setError(result.error || 'Failed to send message');
+            }
+        } catch (err) {
+            console.error('Failed to send message:', err);
+            setError(err instanceof Error ? err.message : 'Unexpected error occurred');
+        }
+    }
+
 
     useEffect(() => {
         const unsubStatus = window.kiyeovoAPI.onDHTConnectionStatus((status: { connected: boolean }) => {
@@ -21,11 +46,18 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
           setIsDHTConnected(status.connected);
           dispatch(setConnected(status.connected));
         });
-    
+
+        // Listen for key exchange sent event (to close dialog immediately)
+        const unsubSent = window.kiyeovoAPI.onKeyExchangeSent((data) => {
+            console.log(`[UI] Key exchange sent to ${data.username}, closing dialog...`);
+            setNewConversationDialogOpen(false);
+        });
+
         return () => {
           unsubStatus();
+          unsubSent();
         };
-      }, []);
+      }, [dispatch]);
     
 
     const handleShowDhtDialog = () => {
@@ -34,6 +66,10 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
 
     const handleShowKiyeovoDialog = () => {
         setKiyeovoDialogOpen(true);
+    }
+
+    const handleShowNewConversationDialog = () => {
+        setNewConversationDialogOpen(true);
     }
 
     return <>
@@ -54,7 +90,7 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
                 <Button
                     variant="ghost"
                     size="icon"
-                    // onClick={onNewChat}
+                    onClick={handleShowNewConversationDialog}
                     className="text-sidebar-foreground hover:text-primary bg-secondary/50 border"
                 >
                     <Plus className="w-5 h-5" />
@@ -63,5 +99,11 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
         </div>
         <ConnectionStatusDialog open={dhtDialogOpen} onOpenChange={setDhtDialogOpen} isConnected={isDHTConnected} onConnectionChange={setIsDHTConnected} />
         <KiyeovoDialog open={kiyeovoDialogOpen} onOpenChange={setKiyeovoDialogOpen} />
+        <NewConversationDialog
+            open={newConversationDialogOpen}
+            onOpenChange={setNewConversationDialogOpen}
+            onNewConversation={handleNewConversation}
+            backendError={error}
+        />
     </>
 };

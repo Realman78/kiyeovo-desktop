@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { InitStatus, IPC_CHANNELS, PasswordRequest } from '../core';
+import { InitStatus, IPC_CHANNELS, KeyExchangeEvent, MessageSentStatus, PasswordRequest } from '../core';
 
 contextBridge.exposeInMainWorld('kiyeovoAPI', {
     // Password authentication
@@ -39,5 +39,17 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     // Register
     register: async (username: string): Promise<{ success: boolean; error?: string }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.REGISTER_REQUEST, username);
+    },
+
+    // Send message
+    sendMessage: async (identifier: string, message: string): Promise<{ success: boolean; messageSentStatus: MessageSentStatus; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.SEND_MESSAGE_REQUEST, identifier, message);
+    },
+
+    // Key exchange event
+    onKeyExchangeSent: (callback: (data: KeyExchangeEvent) => void) => {
+        const listener = (_event: any, data: KeyExchangeEvent) => callback(data);
+        ipcRenderer.on(IPC_CHANNELS.KEY_EXCHANGE_SENT, listener);
+        return () => ipcRenderer.removeListener(IPC_CHANNELS.KEY_EXCHANGE_SENT, listener);
     },
 });

@@ -442,6 +442,12 @@ export const IPC_CHANNELS = {
 
   // Register
   REGISTER_REQUEST: 'register:request',
+
+  // Send message
+  SEND_MESSAGE_REQUEST: 'sendMessage:request',
+
+  // Key exchange events
+  KEY_EXCHANGE_SENT: 'keyExchange:sent',
 } as const;
 
 export interface PasswordRequest {
@@ -463,5 +469,12 @@ export interface PasswordResponse {
 
 export interface InitStatus {
   message: string;
-  stage: 'database' | 'identity' | 'node' | 'registry' | 'messaging' | 'complete';
+  stage: 'database' | 'identity' | 'node' | 'registry' | 'messaging' | 'complete' | 'peerId';
 }
+
+export interface KeyExchangeEvent {
+  username: string;
+  peerId: string;
+}
+
+export type MessageSentStatus = 'online' | 'offline' | null;

@@ -15,5 +15,11 @@ interface Window {
 
         // Register
         register: (username: string) => Promise<{ success: boolean; error?: string }>;
+
+        // Send message
+        sendMessage: (identifier: string, message: string) => Promise<{ success: boolean; messageSentStatus: 'online' | 'offline' | null; error: string | null }>;
+
+        // Key exchange event
+        onKeyExchangeSent: (callback: (data: { username: string; peerId: string }) => void) => () => void;
     };
 }

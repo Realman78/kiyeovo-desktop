@@ -46,28 +46,28 @@ export class UsernameRegistry {
           generalErrorHandler(error);
         }
       } else {
-        const answer = await this.#promptRegistration(lastUsername);
+        // const answer = await this.#promptRegistration(lastUsername);
 
-        if (answer === 'never') {
-          this.database.setSetting('auto_register', 'never');
-          console.log('Disabled auto-registration. Use "register <username>" to register a username.');
-          return;
-        }
-        if (answer === "no") {
-          console.log(`Skipped registration. Use 'register ${lastUsername}' to register later.`);
-          return;
-        }
+        // if (answer === 'never') {
+        //   this.database.setSetting('auto_register', 'never');
+        //   console.log('Disabled auto-registration. Use "register <username>" to register a username.');
+        //   return;
+        // }
+        // if (answer === "no") {
+        //   console.log(`Skipped registration. Use 'register ${lastUsername}' to register later.`);
+        //   return;
+        // }
 
-        if (answer === "always") {
-          this.database.setSetting("auto_register", "true");
-          console.log(`Registering as '${lastUsername}' (will auto-register in future)...`);
-        } else console.log(`Registering as '${lastUsername}'...`);
+        // if (answer === "always") {
+        //   this.database.setSetting("auto_register", "true");
+        //   console.log(`Registering as '${lastUsername}' (will auto-register in future)...`);
+        // } else console.log(`Registering as '${lastUsername}'...`);
 
-        try {
-          await this.tryRestoreLastUsername(userDb);
-        } catch (error: unknown) {
-          generalErrorHandler(error);
-        }
+        // try {
+        //   await this.tryRestoreLastUsername(userDb);
+        // } catch (error: unknown) {
+        //   generalErrorHandler(error);
+        // }
       }
     }
   }
@@ -103,14 +103,15 @@ export class UsernameRegistry {
           // If data is empty or invalid, skip it (username is available)
           if (!rawData || rawData === '{}') continue;
 
+          let existingRegistration: UserRegistration | null = null;
           try {
-            const existingRegistration = JSON.parse(rawData) as UserRegistration;
-            if (existingRegistration.peerID && existingRegistration.peerID !== myPeerId) {
-              throw new Error(ERRORS.USERNAME_TAKEN);
-            }
+            existingRegistration = JSON.parse(rawData) as UserRegistration;
           } catch (e) {
             // Invalid JSON means we can't verify ownership, treat as garbage/available
             continue;
+          }
+          if (existingRegistration && existingRegistration.peerID && existingRegistration.peerID !== myPeerId) {
+            throw new Error(ERRORS.USERNAME_TAKEN);
           }
           break;
         }

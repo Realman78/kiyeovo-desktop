@@ -521,6 +521,26 @@ export class ChatDatabase {
         };
     }
 
+    getUserByPeerIdThenUsername(peerIdOrUsername: string): User | null {
+        const stmt = this.db.prepare('SELECT * FROM users WHERE peer_id = ?');
+        let row = stmt.get(peerIdOrUsername) as any;
+        if (!row) {
+            row = this.getUserByUsername(peerIdOrUsername) as any;
+        }
+
+        if (!row) return null;
+
+        return {
+            peer_id: row.peer_id,
+            signing_public_key: row.signing_public_key,
+            offline_public_key: row.offline_public_key || '',
+            signature: row.signature,
+            username: row.username,
+            created_at: new Date(row.created_at),
+            updated_at: new Date(row.updated_at)
+        };
+    }
+
     getLastUsername(peerId: string): string | null {
         const stmt = this.db.prepare('SELECT username FROM users WHERE peer_id = ? AND username IS NOT NULL');
         const row = stmt.get(peerId) as { username: string } | undefined;

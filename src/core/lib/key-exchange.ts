@@ -4,7 +4,7 @@ import type { Stream } from '@libp2p/interface';
 import { x25519 } from '@noble/curves/ed25519';
 import { hkdf } from '@noble/hashes/hkdf';
 import { sha256 } from '@noble/hashes/sha2';
-import type { ChatNode, ConversationSession, AuthenticatedEncryptedMessage, MessageToVerify, PendingAcceptance, UserRegistration } from '../types.js';
+import type { ChatNode, ConversationSession, AuthenticatedEncryptedMessage, MessageToVerify, PendingAcceptance, UserRegistration, KeyExchangeEvent } from '../types.js';
 import { EncryptedUserIdentity } from './encrypted-user-identity.js';
 import { SessionManager } from './session-manager.js';
 import { CHAT_PROTOCOL, KEY_EXCHANGE_RATE_LIMIT_DEFAULT, KEY_ROTATION_TIMEOUT, MAX_KEY_EXCHANGE_AGE, PENDING_KEY_EXCHANGE_EXPIRATION, RECENT_KEY_EXCHANGE_ATTEMPTS_WINDOW, ROTATION_COOLDOWN } from '../constants.js';
@@ -27,17 +27,20 @@ export class KeyExchange {
   private rotationTimeouts = new Map<string, NodeJS.Timeout>();
   private database: ChatDatabase;
   private pendingAcceptances = new Map<string, PendingAcceptance>();
+  private onKeyExchangeSent: (data: KeyExchangeEvent) => void;
 
   constructor(
     node: ChatNode,
     usernameRegistry: UsernameRegistry,
     sessionManager: SessionManager,
     database: ChatDatabase,
+    onKeyExchangeSent: (data: KeyExchangeEvent) => void
   ) {
     this.node = node;
     this.usernameRegistry = usernameRegistry;
     this.sessionManager = sessionManager;
     this.database = database;
+    this.onKeyExchangeSent = onKeyExchangeSent;
   }
 
   acceptPendingContact(senderPeerId: string): void {
@@ -279,6 +282,12 @@ export class KeyExchange {
     const timeoutPromise = new Promise<never>((_, reject) =>
       setTimeout(() => { reject(new Error('Key exchange timeout')); }, PENDING_KEY_EXCHANGE_EXPIRATION)
     );
+
+    // Key exchange request successfully sent - notify frontend (dialog can close now)
+    this.onKeyExchangeSent({
+      username: targetUsername,
+      peerId: targetPeerId.toString()
+    });
 
     try {
       const user = await Promise.race([

@@ -1,5 +1,5 @@
 import { peerIdFromString } from '@libp2p/peer-id';
-import type { ChatNode, StreamHandlerContext, AuthenticatedEncryptedMessage, OfflineMessage, OfflineSenderInfo, ConversationSession, EncryptedMessage, ContactMode } from '../types.js';
+import type { ChatNode, StreamHandlerContext, AuthenticatedEncryptedMessage, OfflineMessage, OfflineSenderInfo, ConversationSession, EncryptedMessage, ContactMode, KeyExchangeEvent } from '../types.js';
 import { CHAT_PROTOCOL, MESSAGE_TIMEOUT, SESSION_MANAGER_CLEANUP_INTERVAL } from '../constants.js';
 import { SessionManager } from './session-manager.js';
 import { MessageEncryption } from './message-encryption.js';
@@ -23,12 +23,17 @@ export class MessageHandler {
   private database: ChatDatabase;
   private cleanupPeerEvents: (() => void) | null = null;
 
-  constructor(node: ChatNode, usernameRegistry: UsernameRegistry, database: ChatDatabase) {
+  constructor(
+    node: ChatNode,
+    usernameRegistry: UsernameRegistry,
+    database: ChatDatabase,
+    onKeyExchangeSent: (data: KeyExchangeEvent) => void
+  ) {
     this.node = node;
     this.usernameRegistry = usernameRegistry;
     this.database = database;
     this.sessionManager = new SessionManager();
-    this.keyExchange = new KeyExchange(node, usernameRegistry, this.sessionManager, database);
+    this.keyExchange = new KeyExchange(node, usernameRegistry, this.sessionManager, database, onKeyExchangeSent);
     this.setupProtocolHandler();
     this.cleanupPeerEvents = PeerConnectionHandler.setupPeerEvents(node, this.sessionManager);
     this.startSessionCleanup();
@@ -118,7 +123,7 @@ export class MessageHandler {
     session: ConversationSession
     peerId: PeerId
   }> {
-    let user = this.database.getUserByPeerIdOrUsername(targetUsernameOrPeerId);
+    let user = this.database.getUserByPeerIdThenUsername(targetUsernameOrPeerId);
     let targetPeerId: PeerId;
 
     if (!user) {
@@ -204,10 +209,10 @@ export class MessageHandler {
     return { user, session, peerId: targetPeerId };
   }
 
-  async sendMessage(targetUsername: string, message: string): Promise<void> {
+  async sendMessage(targetUsernameOrPeerId: string, message: string): Promise<{ success: boolean, messageSentStatus: 'online' | 'offline' | null, error: string | null }> {
     let user: User | null = null;
     try {
-      const { user: resolvedUser, session, peerId: targetPeerId } = await this.ensureUserSession(targetUsername);
+      const { user: resolvedUser, session, peerId: targetPeerId } = await this.ensureUserSession(targetUsernameOrPeerId);
       user = resolvedUser;
 
       // Check if we need to send an ACK for offline messages we've read
@@ -251,16 +256,19 @@ export class MessageHandler {
         if (shouldSendAck) {
           this.database.updateOfflineLastAckSentByPeerId(targetPeerId.toString(), lastReadTimestamp);
         }
-        console.log(`Encrypted message sent to ${targetUsername}`);
+        console.log(`Encrypted message sent to ${targetUsernameOrPeerId}`);
+        return { success: true, messageSentStatus: 'online', error: null };
       }
+      return { success: false, messageSentStatus: null, error: 'Failed to send message - timed out' };
     } catch (err: unknown) {
-      console.error(`Failed to send message to ${targetUsername}. trying offline message instead`, err instanceof Error ? err.message : String(err));
+      console.error(`Failed to send message to ${targetUsernameOrPeerId}: ${err instanceof Error ? err.message : String(err)}`);
       try {
         const errorText = String(err instanceof Error ? err.message : err).toLowerCase();
         const shouldFallbackOffline = /econnrefused|user is offline|all multiaddr dials failed|message timeout|socks|tor transport|enetunreach|no valid addresses|ehostunreach|etimedout/.test(errorText);
         if (shouldFallbackOffline) {
+          console.log(`Trying to send offline message to ${targetUsernameOrPeerId}`);
           // Use user from key exchange if available, otherwise query database
-          user ??= this.database.getUserByUsername(targetUsername);
+          user ??= this.database.getUserByPeerIdThenUsername(targetUsernameOrPeerId);
           if (!user) throw new Error('User not found in database');
 
           // Get the shared secret part of the bucket key
@@ -272,16 +280,17 @@ export class MessageHandler {
           const writeBucketKey = this.keyExchange.constructWriteBucketKey(bucketSecret);
 
           await this.storeOfflineMessageDB(user, writeBucketKey, message);
-          console.log(`Peer likely offline; stored message for ${targetUsername} as offline.`);
-          return;
+          console.log(`Peer likely offline; stored message for ${targetUsernameOrPeerId} as offline.`);
+          return { success: true, messageSentStatus: 'offline', error: null };
         }
 
         console.log(`Offline message fallback failed`);
         throw err;
       } catch (offlineErr: unknown) {
         generalErrorHandler(offlineErr, `Failed to store offline message`);
+        return { success: false, messageSentStatus: null, error: 'Failed to store offline message: ' + (
+          offlineErr instanceof Error ? offlineErr.message : String(offlineErr)) };
       }
-      throw err;
     }
   }
 

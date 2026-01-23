@@ -5,7 +5,7 @@ import { MessageHandler } from './lib/message-handler.js';
 import { EncryptedUserIdentity } from './lib/encrypted-user-identity.js';
 import { ChatDatabase } from './lib/db/database.js';
 import { DATABASE_CLEANUP_INTERVAL } from './constants.js';
-import type { ChatNode, PasswordResponse } from './types.js';
+import type { ChatNode, KeyExchangeEvent, PasswordResponse } from './types.js';
 
 export interface P2PCore {
   node: ChatNode;
@@ -20,8 +20,9 @@ export interface P2PCoreConfig {
   dataDir: string;
   port: number;
   passwordPrompt: (prompt: string, isNew: boolean, recoveryPhrase?: string, prefilledPassword?: string, errorMessage?: string, cooldownSeconds?: number, showRecoveryOption?: boolean, keychainAvailable?: boolean) => Promise<PasswordResponse>;
-  onStatus: (message: string, stage: 'database' | 'identity' | 'node' | 'registry' | 'messaging' | 'complete') => void;
+  onStatus: (message: string, stage: 'database' | 'identity' | 'node' | 'registry' | 'messaging' | 'complete' | 'peerId') => void;
   onDHTConnectionStatus: (status: { connected: boolean }) => void;
+  onKeyExchangeSent: (data: KeyExchangeEvent) => void;
 }
 
 /**
@@ -29,7 +30,7 @@ export interface P2PCoreConfig {
  * This is the main entry point for the Kiyeovo P2P functionality
  */
 export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore> {
-  const { onStatus, onDHTConnectionStatus } = config;
+  const { onStatus, onDHTConnectionStatus, onKeyExchangeSent } = config;
   const sendStatus = (message: string, stage: any) => {
     console.log(`[P2P Core] ${message}`);
     onStatus(message, stage);
@@ -38,6 +39,11 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
   const sendDHTConnectionStatus = (status: { connected: boolean }) => {
     console.log(`[P2P Core] DHT connection status: ${status.connected}`);
     onDHTConnectionStatus(status);
+  };
+
+  const sendKeyExchangeSent = (data: KeyExchangeEvent) => {
+    console.log(`[P2P Core] Key exchange sent: ${data.username}`);
+    onKeyExchangeSent(data);
   };
 
   sendStatus(`Starting Kiyeovo P2P node on port ${config.port}...`, 'database');
@@ -114,7 +120,7 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
 
   // Initialize message handler
   sendStatus('Initializing message handler...', 'messaging');
-  const messageHandler = new MessageHandler(node, usernameRegistry, database);
+  const messageHandler = new MessageHandler(node, usernameRegistry, database, sendKeyExchangeSent);
 
   // Check offline messages once at startup
   sendStatus('Checking for offline messages...', 'messaging');
