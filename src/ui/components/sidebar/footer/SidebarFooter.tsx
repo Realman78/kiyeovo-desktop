@@ -49,8 +49,8 @@ export const SidebarFooter: FC = () => {
     }
   }
 
-  return <div className="p-3 border-t border-sidebar-border bg-sidebar-accent/50">
-    <div className="flex items-center gap-3">
+  return <div className="flex h-20 p-3 border-t border-sidebar-border bg-sidebar-accent/50">
+    <div className="flex items-center w-full gap-3">
       {user.registered ? (
         <>
           <div className="relative">

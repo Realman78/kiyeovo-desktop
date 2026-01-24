@@ -1,7 +1,7 @@
 import { useSelector } from "react-redux";
 import type { RootState } from "../../../state/store";
 import { Button } from "../../ui/Button";
-import { MoreVertical, Shield } from "lucide-react";
+import { MoreVertical, Shield, UserPlus } from "lucide-react";
 
 type ChatHeaderProps = {
     username: string;
@@ -9,8 +9,13 @@ type ChatHeaderProps = {
 }
 export const ChatHeader = ({ username, peerId }: ChatHeaderProps) => {
     const activeChat = useSelector((state: RootState) => state.chat.activeChat);
-    return <div className={`h-16 px-6 flex items-center justify-between border-b border-border ${activeChat?.status === 'pending' ? "bg-warning/5" : "bg-card/50"}`}>
+    return <div className={`h-16 px-6 flex items-center justify-between border-b border-border ${activeChat?.status === 'pending' ? "" : "bg-card/50"}`}>
     <div className="flex items-center gap-3">
+      {activeChat?.status === 'pending' ? (
+        <div className="w-10 h-10 rounded-full bg-warning/20 flex items-center justify-center">
+        <UserPlus className="w-5 h-5 text-warning" />
+      </div>
+      ) : null}
       <div>
         <h3 className="font-medium text-foreground text-left">{username}</h3>
         <div className="flex items-center gap-1.5">

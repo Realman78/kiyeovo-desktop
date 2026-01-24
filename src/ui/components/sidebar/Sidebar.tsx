@@ -3,17 +3,18 @@ import { SidebarHeader } from './header/SidebarHeader'
 import { ChatList } from './chats/ChatList'
 import { SidebarFooter } from './footer/SidebarFooter'
 import { ContactAttemptItem, type ContactAttempt } from './ContactAttemptItem'
-import { useDispatch } from 'react-redux';
-import { addChat } from '../../state/slices/chatSlice'
+import { useDispatch, useSelector } from 'react-redux';
+import { addContactAttempt, removeContactAttempt, setContactAttempts } from '../../state/slices/chatSlice'
+import type { RootState } from '../../state/store'
 
 export const Sidebar: FC = () => {
-  const [contactAttempts, setContactAttempts] = useState<ContactAttempt[]>([]);
   const [isLoadingContactAttempts, setIsLoadingContactAttempts] = useState(true);
   const [contactAttemptsError, setContactAttemptsError] = useState<string | null>(null);
+  const contactAttempts = useSelector((state: RootState) => state.chat.contactAttempts)
   const dispatch = useDispatch();
 
   const handleContactAttemptExpired = useCallback((peerId: string) => {
-    setContactAttempts(prev => prev.filter(attempt => attempt.peerId !== peerId));
+    dispatch(removeContactAttempt(peerId))
   }, []);
 
   useEffect(() => {
@@ -25,7 +26,7 @@ export const Sidebar: FC = () => {
         const result = await window.kiyeovoAPI.getContactAttempts();
         console.log('[UI] Contact attempts:', result);
         if (result.success) {
-          setContactAttempts(result.contactAttempts as ContactAttempt[]);
+          dispatch(setContactAttempts(result.contactAttempts as ContactAttempt[]));
         } else {
           setContactAttemptsError(result.error || 'Failed to fetch contact attempts');
         }
@@ -41,34 +42,29 @@ export const Sidebar: FC = () => {
   useEffect(() => {
     const unsubscribe = window.kiyeovoAPI.onContactRequestReceived((data) => {
       console.log('[UI] Contact request received:', data);
+      dispatch(addContactAttempt(data))
 
-      const newAttempt: ContactAttempt = {
-        peerId: data.senderPeerId,
-        username: data.senderUsername,
-        message: data.message,
-        messageBody: data.messageBody,
-        receivedAt: Date.now(),
-        expiresAt: data.expiresAt
-      };
-
-      setContactAttempts(prev => {
-        const exists = prev.some(a => a.peerId === newAttempt.peerId);
-        if (exists) {
-          return prev;
-        }
-        return [...prev, newAttempt];
-      });
-      // id will be a random number
-      dispatch(addChat({
-        id: Math.random() * 1000000,
-        type: 'direct',
-        name: newAttempt.username,
-        peerId: newAttempt.peerId,
-        lastMessage: newAttempt.messageBody ?? newAttempt.message,
-        lastMessageTimestamp: newAttempt.receivedAt,
-        unreadCount: 0,
-        status: 'pending',
-      }));
+      // const id = Math.random() * 1000000
+      // // id will be a random number
+      // dispatch(addChat({
+      //   id,
+      //   type: 'direct',
+      //   name: data.username,
+      //   peerId: data.peerId,
+      //   lastMessage: data.messageBody ?? data.message,
+      //   lastMessageTimestamp: data.receivedAt,
+      //   unreadCount: 0,
+      //   status: 'pending',
+      // }));
+      // dispatch(addMessage({
+      //   id: crypto.randomUUID(),
+      //   chatId: id,
+      //   content: data.messageBody ?? data.message,
+      //   messageType: 'text',
+      //   senderPeerId: data.peerId,
+      //   senderUsername: data.username,
+      //   timestamp: data.receivedAt
+      // }))
     });
 
     return () => unsubscribe();

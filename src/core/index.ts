@@ -33,7 +33,7 @@ export interface P2PCoreConfig {
  * This is the main entry point for the Kiyeovo P2P functionality
  */
 export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore> {
-  const { onStatus, onDHTConnectionStatus, onKeyExchangeSent, onContactRequestReceived, onBootstrapNodes } = config;
+  const { onStatus, onDHTConnectionStatus, onKeyExchangeSent, onContactRequestReceived } = config;
   const sendStatus = (message: string, stage: any) => {
     console.log(`[P2P Core] ${message}`);
     onStatus(message, stage);
@@ -47,11 +47,6 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
   const sendKeyExchangeSent = (data: KeyExchangeEvent) => {
     console.log(`[P2P Core] Key exchange sent: ${data.username}`);
     onKeyExchangeSent(data);
-  };
-
-  const sendBootstrapNodes = (nodes: string[]) => {
-    console.log(`[P2P Core] Bootstrap nodes: ${nodes}`);
-    onBootstrapNodes(nodes);
   };
 
   sendStatus(`Starting Kiyeovo P2P node on port ${config.port}...`, 'database');
@@ -130,7 +125,7 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
   sendStatus('Initializing message handler...', 'messaging');
 
   const sendContactRequestReceived = (data: ContactRequestEvent) => {
-    console.log(`[P2P Core] Contact request received from ${data.senderUsername}`);
+    console.log(`[P2P Core] Contact request received from ${data.username}`);
     onContactRequestReceived(data);
   };
 

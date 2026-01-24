@@ -1,4 +1,5 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
+import type { ContactAttempt } from '../../components/sidebar/ContactAttemptItem';
 
 export interface ChatMessage {
   id: string;
@@ -23,7 +24,9 @@ export interface Chat {
 
 interface ChatState {
   chats: Chat[];
+  contactAttempts: ContactAttempt[];
   activeChat: Chat | null;
+  activeContactAttempt: ContactAttempt | null;
   messages: ChatMessage[];
   loading: boolean;
 }
@@ -61,7 +64,9 @@ const initialState: ChatState = {
       peerId: 'team-chat-peer-id',
     },
   ],
+  contactAttempts: [],
   activeChat: null,
+  activeContactAttempt: null,
   messages: [
       {
         id: 'msg-1',
@@ -107,18 +112,28 @@ const chatSlice = createSlice({
   name: 'chat',
   initialState,
   reducers: {
-    setActiveChat: (state, action: PayloadAction<number>) => {
+    setActiveChat: (state, action: PayloadAction<number | null>) => {
+      if (action.payload === null) {
+        state.activeChat = null
+        return
+      }
       const chat = state.chats.find((c) => c.id === action.payload);
       if (chat) {
         chat.unreadCount = 0;
+        state.activeContactAttempt = null;
         state.activeChat = chat;
       }
     },
     // set active chat by using peer id from contact attempt
-    setActiveContactAttempt: (state, action: PayloadAction<string>) => {
-      const chat = state.chats.find((c) => c.peerId === action.payload);
-      if (chat) {
-        state.activeChat = chat;
+    setActiveContactAttempt: (state, action: PayloadAction<string | null>) => {
+      if (action.payload === null) {
+        state.activeContactAttempt = null
+        return
+      }
+      const contactAttempt = state.contactAttempts.find((ca) => ca.peerId === action.payload);
+      if (contactAttempt) {
+        state.activeChat = null;
+        state.activeContactAttempt = contactAttempt;
       }
     },
     addMessage: (state, action: PayloadAction<ChatMessage>) => {
@@ -151,6 +166,18 @@ const chatSlice = createSlice({
     setLoading: (state, action: PayloadAction<boolean>) => {
       state.loading = action.payload;
     },
+    setContactAttempts: (state, action: PayloadAction<ContactAttempt[]>) => {
+      state.contactAttempts = action.payload
+    },
+    addContactAttempt: (state, action: PayloadAction<ContactAttempt>) => {
+      state.contactAttempts.push(action.payload)
+    },
+    removeContactAttempt: (state, action: PayloadAction<string>) => {
+      state.contactAttempts = state.contactAttempts.filter((ca) => ca.peerId !== action.payload);
+      if (state.activeContactAttempt?.peerId === action.payload) {
+        state.activeContactAttempt = null;
+      }
+    },
   },
 });
 
@@ -162,6 +189,9 @@ export const {
   removeChat,
   clearMessages,
   setLoading,
+  setContactAttempts,
+  addContactAttempt,
+  removeContactAttempt
 } = chatSlice.actions;
 
 export default chatSlice.reducer;

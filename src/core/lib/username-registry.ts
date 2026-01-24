@@ -72,7 +72,7 @@ export class UsernameRegistry {
     }
   }
 
-  async register(username: string): Promise<boolean> {
+  async register(username: string, isRenewal: boolean = false): Promise<boolean> {
     if (!this.userIdentity) {
       throw new Error('User identity not initialized');
     }
@@ -81,7 +81,7 @@ export class UsernameRegistry {
       throw new Error('Username can only contain alphanumerics and underscores');
     }
 
-    if (this.currentUsername === username) {
+    if (this.currentUsername === username && !isRenewal) {
       console.log(`Username ${username} is already registered`);
       return true;
     }
@@ -381,7 +381,7 @@ export class UsernameRegistry {
           return;
         }
     
-        await this.register(this.currentUsername);
+        await this.register(this.currentUsername, true);
       } catch (err: unknown) {
         generalErrorHandler(err, 'Failed to re-register username');
       }

@@ -455,15 +455,27 @@ export class KeyExchange {
       throw new Error('Key exchange missing signature or ephemeral public key - this should never happen');
     }
 
-    const expiresAt = Date.now() + PENDING_KEY_EXCHANGE_EXPIRATION;
+    const now = Date.now()
+
+    const expiresAt = now + PENDING_KEY_EXCHANGE_EXPIRATION;
 
     this.onContactRequestReceived({
-      senderPeerId: remoteId,
-      message: message.content || 'wants to contact you',
-      senderUsername,
-      messageBody: message.messageBody || '',
+      peerId: remoteId,
+      username: senderUsername,
+      message: message.content || senderUsername + ' wants to contact you',
+      messageBody: message.messageBody || senderUsername + ' wants to contact you',
+      receivedAt: now,
       expiresAt
     });
+
+    // export interface ContactAttempt {
+    //   peerId: string;
+    //   username: string;
+    //   message: string;
+    //   messageBody?: string;
+    //   receivedAt: number;
+    //   expiresAt: number;
+    // }
 
     // Show prompt to user
     console.log(`\n Contact Request from ${senderUsername}`);

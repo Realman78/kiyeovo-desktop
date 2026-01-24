@@ -4,6 +4,9 @@ import { useSelector } from "react-redux";
 import type { RootState } from "../../state/store";
 import { MessagesContainer } from "./messages/MessagesContainer";
 import { createPendingMessage } from "../../utils/general";
+import { ChatInput } from "./input/ChatInput";
+import { InvitationManager } from "./input/InvitationManager";
+import { EmptyState } from "./messages/EmptyState";
 
 interface Message {
   id: string;
@@ -25,6 +28,7 @@ const ChatWrapper = ({
 }: ChatWrapperProps) => {
   const [inputValue, setInputValue] = useState("");
   const activeChat = useSelector((state: RootState) => state.chat.activeChat);
+  const activeContactAttempt = useSelector((state: RootState) => state.chat.activeContactAttempt);
   const messages = useSelector((state: RootState) => state.chat.messages);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -47,13 +51,21 @@ const ChatWrapper = ({
 
   return (
     <div className="flex-1 flex flex-col h-full bg-background">
-      <ChatHeader username={activeChat?.name ?? ""} peerId={activeChat?.peerId ?? ""} />
-      {!!activeChat && (
+      {!activeChat && !activeContactAttempt ? (
+        <EmptyState />
+      ) : (
         <>
+          <ChatHeader username={activeChat?.name ?? activeContactAttempt?.username ?? ''} peerId={activeChat?.peerId ?? activeContactAttempt?.peerId ?? ''} />
           <MessagesContainer
-            messages={activeChat.status === 'pending' ?
-              [createPendingMessage(activeChat.lastMessage, activeChat.id)] : messages.filter((m) => m.chatId === activeChat.id) ?? []}
+            messages={!!activeContactAttempt ?
+              [createPendingMessage(activeContactAttempt.messageBody ?? activeContactAttempt.message, -78, activeContactAttempt.peerId, activeContactAttempt.username)]
+              : messages.filter((m) => m.chatId === activeChat?.id) ?? []}
+            isPending={!!activeContactAttempt}
           />
+          {!!activeContactAttempt ? (
+            <InvitationManager />
+          ) : <ChatInput />
+          }
         </>
       )}
     </div>

@@ -62,7 +62,7 @@ function sendKeyExchangeSent(data: KeyExchangeEvent) {
 
 function sendContactRequestReceived(data: ContactRequestEvent) {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    console.log(`[Electron] Contact request received from ${data.senderUsername}`);
+    console.log(`[Electron] Contact request received from ${data.username}`);
     mainWindow.webContents.send(IPC_CHANNELS.CONTACT_REQUEST_RECEIVED, data);
   }
 }

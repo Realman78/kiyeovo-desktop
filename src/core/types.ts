@@ -497,10 +497,11 @@ export interface KeyExchangeEvent {
 }
 
 export interface ContactRequestEvent {
-  senderPeerId: string;
-  senderUsername: string;
+  peerId: string;
+  username: string;
   message: string;
   messageBody?: string;
+  receivedAt: number;
   expiresAt: number;
 }
 

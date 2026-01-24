@@ -15,12 +15,12 @@ export const formatRecoveryPhrase = (mnemonic: string): { num: number; word: str
   };
 
 
-  export const createPendingMessage = (message: string, chatId: number): ChatMessage => {
+  export const createPendingMessage = (message: string, chatId: number, peerId: string, username: string): ChatMessage => {
     return {
       id: crypto.randomUUID(),
       chatId: chatId,
-      senderPeerId: '',
-      senderUsername: '',
+      senderPeerId: peerId,
+      senderUsername: username,
       content: message,
       timestamp: Date.now(),
       messageType: 'text',

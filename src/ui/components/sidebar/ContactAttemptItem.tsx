@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { UserPlus } from "lucide-react";
 import { useDispatch, useSelector } from "react-redux";
 import { setActiveContactAttempt } from "../../state/slices/chatSlice";
 import type { RootState } from "../../state/store";
+import { useExpirationTimer } from "../../hooks/useExpirationTimer";
 
 export interface ContactAttempt {
   peerId: string;
@@ -15,43 +16,30 @@ export interface ContactAttempt {
 
 interface ContactAttemptItemProps {
   attempt: ContactAttempt;
-  // onClick: () => void;
   onExpired: (peerId: string) => void;
 }
 
 export const ContactAttemptItem = ({ attempt, onExpired }: ContactAttemptItemProps) => {
-  const [timeLeft, setTimeLeft] = useState(0);
-  const {activeChat, chats} = useSelector((state: RootState) => state.chat);
+  const activeContactAttempt = useSelector((state: RootState) => state.chat.activeContactAttempt);
   const dispatch = useDispatch();
+  const { minutes, seconds, timeLeft } = useExpirationTimer(attempt.expiresAt);
 
   const handleSelectContactAttempt = () => {
     dispatch(setActiveContactAttempt(attempt.peerId));
   };
 
   useEffect(() => {
-    const updateTimer = () => {
-      const remaining = Math.max(0, attempt.expiresAt - Date.now());
-      setTimeLeft(remaining);
+    if (timeLeft === 0 && attempt.expiresAt && attempt.expiresAt < Date.now()) {
+      onExpired(attempt.peerId);
+    }
+  }, [timeLeft, attempt.peerId, attempt.expiresAt, onExpired]);
 
-      if (remaining === 0) {
-        onExpired(attempt.peerId);
-      }
-    };
-
-    updateTimer();
-    const interval = setInterval(updateTimer, 1000);
-
-    return () => clearInterval(interval);
-  }, [attempt.expiresAt, attempt.peerId, onExpired]);
-
-  const minutes = Math.floor(timeLeft / 60000);
-  const seconds = Math.floor((timeLeft % 60000) / 1000);
-  const isSelected = activeChat?.peerId === attempt.peerId;
+  const isSelected = activeContactAttempt?.peerId === attempt.peerId;
 
   return (
     <div
       onClick={handleSelectContactAttempt}
-      className={`flex items-center gap-3 p-3 
+      className={`flex items-center gap-3 p-3
         cursor-pointer bg-warning/5 hover:bg-warning/10 transition-colors
         ${isSelected ? 'border-l-2 border-warning bg-warning/10' : ''}
         `}
@@ -64,7 +52,7 @@ export const ContactAttemptItem = ({ attempt, onExpired }: ContactAttemptItemPro
       <div className="flex-1 min-w-0">
         <div className="font-medium text-sm text-foreground truncate text-left">{attempt.username}</div>
         <div className="text-xs text-muted-foreground truncate text-left">
-          {attempt.messageBody ? attempt.messageBody : attempt.message}
+          {attempt.messageBody ?? attempt.message}
         </div>
       </div>
       <div className="shrink-0">
