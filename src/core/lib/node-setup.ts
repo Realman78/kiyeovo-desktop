@@ -171,6 +171,8 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
 }
 
 export async function connectToBootstrap(node: ChatNode, database: ChatDatabase): Promise<void> {
+  database.clearAllBootstrapNodeStatus();
+
   let addressesToTry = database.getBootstrapNodes()
     .map(bootstrapNode => bootstrapNode.address)
     .filter(addr => addr !== node.peerId.toString());
@@ -198,11 +200,13 @@ export async function connectToBootstrap(node: ChatNode, database: ChatDatabase)
       // eslint-disable-next-line no-await-in-loop
       await node.dial(ma);
       console.log(`Connected to bootstrap peer: ${addr}`);
-      // Status will be sent by periodic peer count checker
+      database.updateBootstrapNodeStatus(addr, true);
+
       return;
 
     } catch (err: unknown) {
       generalErrorHandler(err);
+      database.updateBootstrapNodeStatus(addr, false);
     }
   }
 

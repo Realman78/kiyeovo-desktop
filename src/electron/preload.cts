@@ -52,4 +52,18 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
         ipcRenderer.on(IPC_CHANNELS.KEY_EXCHANGE_SENT, listener);
         return () => ipcRenderer.removeListener(IPC_CHANNELS.KEY_EXCHANGE_SENT, listener);
     },
+
+    // Bootstrap nodes
+    getBootstrapNodes: async (): Promise<{ success: boolean; nodes: Array<{ address: string; connected: boolean }>; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.GET_BOOTSTRAP_NODES);
+    },
+    retryBootstrap: async (): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.RETRY_BOOTSTRAP);
+    },
+    addBootstrapNode: async (address: string): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.ADD_BOOTSTRAP_NODE, address);
+    },
+    removeBootstrapNode: async (address: string): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.REMOVE_BOOTSTRAP_NODE, address);
+    },
 });

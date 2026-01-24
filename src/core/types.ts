@@ -448,6 +448,13 @@ export const IPC_CHANNELS = {
 
   // Key exchange events
   KEY_EXCHANGE_SENT: 'keyExchange:sent',
+
+  // Bootstrap nodes
+  BOOTSTRAP_NODES: 'bootstrap:nodes',
+  GET_BOOTSTRAP_NODES: 'bootstrap:getNodes',
+  RETRY_BOOTSTRAP: 'bootstrap:retry',
+  ADD_BOOTSTRAP_NODE: 'bootstrap:addNode',
+  REMOVE_BOOTSTRAP_NODE: 'bootstrap:removeNode',
 } as const;
 
 export interface PasswordRequest {

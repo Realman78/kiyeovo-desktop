@@ -1217,10 +1217,30 @@ export class ChatDatabase {
     }
 
     // Bootstrap nodes operations
-    getBootstrapNodes(): { address: string }[] {
-        const stmt = this.db.prepare('SELECT address FROM bootstrap_nodes');
-        const rows = stmt.all() as { address: string }[];
-        return rows;
+    getBootstrapNodes(): { address: string; connected: boolean }[] {
+        const stmt = this.db.prepare('SELECT address, connected FROM bootstrap_nodes');
+        const rows = stmt.all() as { address: string; connected: number }[];
+        return rows.map(row => ({ address: row.address, connected: Boolean(row.connected) }));
+    }
+
+    updateBootstrapNodeStatus(address: string, connected: boolean): void {
+        const stmt = this.db.prepare('UPDATE bootstrap_nodes SET connected = ?, updated_at = CURRENT_TIMESTAMP WHERE address = ?');
+        stmt.run(connected ? 1 : 0, address);
+    }
+
+    clearAllBootstrapNodeStatus(): void {
+        const stmt = this.db.prepare('UPDATE bootstrap_nodes SET connected = 0, updated_at = CURRENT_TIMESTAMP');
+        stmt.run();
+    }
+
+    removeBootstrapNode(address: string): void {
+        const stmt = this.db.prepare('DELETE FROM bootstrap_nodes WHERE address = ?');
+        stmt.run(address);
+    }
+
+    addBootstrapNode(address: string): void {
+        const stmt = this.db.prepare('INSERT INTO bootstrap_nodes (address, connected) VALUES (?, 0)');
+        stmt.run(address);
     }
 
     // Check if database is healthy

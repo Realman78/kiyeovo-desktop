@@ -97,7 +97,7 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
                 </Button>
             </div>
         </div>
-        <ConnectionStatusDialog open={dhtDialogOpen} onOpenChange={setDhtDialogOpen} isConnected={isDHTConnected} onConnectionChange={setIsDHTConnected} />
+        <ConnectionStatusDialog open={dhtDialogOpen} onOpenChange={setDhtDialogOpen} isConnected={isDHTConnected} />
         <KiyeovoDialog open={kiyeovoDialogOpen} onOpenChange={setKiyeovoDialogOpen} />
         <NewConversationDialog
             open={newConversationDialogOpen}

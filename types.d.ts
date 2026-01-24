@@ -21,5 +21,11 @@ interface Window {
 
         // Key exchange event
         onKeyExchangeSent: (callback: (data: { username: string; peerId: string }) => void) => () => void;
+
+        // Bootstrap nodes
+        getBootstrapNodes: () => Promise<{ success: boolean; nodes: Array<{ address: string; connected: boolean }>; error: string | null }>;
+        retryBootstrap: () => Promise<{ success: boolean; error: string | null }>;
+        addBootstrapNode: (address: string) => Promise<{ success: boolean; error: string | null }>;
+        removeBootstrapNode: (address: string) => Promise<{ success: boolean; error: string | null }>;
     };
 }

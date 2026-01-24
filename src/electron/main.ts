@@ -5,7 +5,7 @@ import { isDev } from './util.js';
 import { initializeP2PCore, InitStatus, IPC_CHANNELS, KeyExchangeEvent, type P2PCore } from '../core/index.js';
 import { ensureAppDataDir } from '../core/utils/miscellaneous.js';
 import { requestPasswordFromUI } from './password-prompt.js';
-import { validateMessageLength, validateUsername } from '../core/utils/validators.js';
+import { setupIPCHandlers } from './ipc-handlers.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -60,6 +60,13 @@ function sendKeyExchangeSent(data: KeyExchangeEvent) {
   }
 }
 
+function sendBootstrapNodes(nodes: string[]) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    console.log(`[Electron] Sending bootstrap nodes: ${nodes}`);
+    mainWindow.webContents.send(IPC_CHANNELS.BOOTSTRAP_NODES, nodes);
+  }
+}
+
 async function initializeP2PAfterWindow() {
   try {
     if (!mainWindow) {
@@ -93,6 +100,9 @@ async function initializeP2PAfterWindow() {
       },
       onKeyExchangeSent: (data: KeyExchangeEvent) => {
         sendKeyExchangeSent(data);
+      },
+      onBootstrapNodes: (nodes: string[]) => {
+        sendBootstrapNodes(nodes);
       }
     });
 
@@ -117,6 +127,10 @@ async function initializeApp() {
   try {
     console.log('[Electron] Starting Kiyeovo Desktop...');
 
+    // Setup IPC handlers
+    setupIPCHandlers(ipcMain, () => p2pCore);
+    console.log('[Electron] IPC handlers registered');
+
     // Create window first
     mainWindow = createMainWindow();
     console.log('[Electron] Main window created');
@@ -133,57 +147,6 @@ async function initializeApp() {
     app.quit();
   }
 }
-
-// IPC Handlers
-ipcMain.handle(IPC_CHANNELS.REGISTER_REQUEST, async (_event, username: string) => {
-  try {
-    if (!p2pCore) {
-      return { success: false, error: 'P2P core not initialized' };
-    }
-
-    console.log(`[Electron] Registering username: ${username}`);
-    const success = await p2pCore.usernameRegistry.register(username);
-
-    if (success) {
-      console.log(`[Electron] Successfully registered username: ${username}`);
-      return { success: true };
-    } else {
-      return { success: false, error: 'Failed to register username. Network may be unreachable.' };
-    }
-  } catch (error) {
-    console.error('[Electron] Registration failed:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    return { success: false, error: errorMessage };
-  }
-});
-
-ipcMain.handle(IPC_CHANNELS.SEND_MESSAGE_REQUEST, async (_event, identifier: string, message: string) => {
-  try {
-    if (!p2pCore) {
-      return { success: false, messageSentStatus: null, error: 'P2P core not initialized' };
-    }
-
-    if (!validateUsername(identifier)) {
-      return { success: false, messageSentStatus: null, error: 'Invalid username' };
-    }
-
-    if (!validateMessageLength(message)) {
-      return { success: false, messageSentStatus: null, error: 'Message too long' };
-    }
-
-    console.log(`[Electron] Sending message to ${identifier}: ${message}`);
-
-    const response = await p2pCore.messageHandler.sendMessage(identifier, message);
-
-    if (response.success) {
-      return { success: true, messageSentStatus: response.messageSentStatus, error: null };
-    }
-    return { success: false, messageSentStatus: null, error: response.error ?? 'Failed to send message' };
-  } catch (error) {
-    console.error('[Electron] Failed to send message:', error);
-    return { success: false, messageSentStatus: null, error: error instanceof Error ? error.message : "Failed to send message" };
-  }
-});
 
 app.whenReady().then(async () => {
   await initializeApp();

@@ -13,6 +13,7 @@ export interface P2PCore {
   userIdentity: EncryptedUserIdentity;
   usernameRegistry: UsernameRegistry;
   messageHandler: MessageHandler;
+  retryBootstrap: () => Promise<void>;
   cleanup: () => Promise<void>;
 }
 
@@ -23,6 +24,7 @@ export interface P2PCoreConfig {
   onStatus: (message: string, stage: 'database' | 'identity' | 'node' | 'registry' | 'messaging' | 'complete' | 'peerId') => void;
   onDHTConnectionStatus: (status: { connected: boolean }) => void;
   onKeyExchangeSent: (data: KeyExchangeEvent) => void;
+  onBootstrapNodes: (nodes: string[]) => void;
 }
 
 /**
@@ -30,7 +32,7 @@ export interface P2PCoreConfig {
  * This is the main entry point for the Kiyeovo P2P functionality
  */
 export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore> {
-  const { onStatus, onDHTConnectionStatus, onKeyExchangeSent } = config;
+  const { onStatus, onDHTConnectionStatus, onKeyExchangeSent, onBootstrapNodes } = config;
   const sendStatus = (message: string, stage: any) => {
     console.log(`[P2P Core] ${message}`);
     onStatus(message, stage);
@@ -44,6 +46,11 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
   const sendKeyExchangeSent = (data: KeyExchangeEvent) => {
     console.log(`[P2P Core] Key exchange sent: ${data.username}`);
     onKeyExchangeSent(data);
+  };
+
+  const sendBootstrapNodes = (nodes: string[]) => {
+    console.log(`[P2P Core] Bootstrap nodes: ${nodes}`);
+    onBootstrapNodes(nodes);
   };
 
   sendStatus(`Starting Kiyeovo P2P node on port ${config.port}...`, 'database');
@@ -143,6 +150,12 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
     userIdentity,
     usernameRegistry,
     messageHandler,
+    retryBootstrap: async () => {
+      console.log('[P2P Core] Retrying bootstrap connection...');
+      await connectToBootstrap(node, database);
+      // Trigger immediate DHT status check after reconnection attempt
+      await checkDHTStatus();
+    },
     cleanup: async () => {
       console.log('[P2P Core] Shutting down...');
       try {
