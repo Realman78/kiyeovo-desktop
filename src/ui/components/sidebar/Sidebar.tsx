@@ -3,11 +3,14 @@ import { SidebarHeader } from './header/SidebarHeader'
 import { ChatList } from './chats/ChatList'
 import { SidebarFooter } from './footer/SidebarFooter'
 import { ContactAttemptItem, type ContactAttempt } from './ContactAttemptItem'
+import { useDispatch } from 'react-redux';
+import { addChat } from '../../state/slices/chatSlice'
 
 export const Sidebar: FC = () => {
   const [contactAttempts, setContactAttempts] = useState<ContactAttempt[]>([]);
   const [isLoadingContactAttempts, setIsLoadingContactAttempts] = useState(true);
   const [contactAttemptsError, setContactAttemptsError] = useState<string | null>(null);
+  const dispatch = useDispatch();
 
   const handleContactAttemptExpired = useCallback((peerId: string) => {
     setContactAttempts(prev => prev.filter(attempt => attempt.peerId !== peerId));
@@ -55,16 +58,21 @@ export const Sidebar: FC = () => {
         }
         return [...prev, newAttempt];
       });
+      // id will be a random number
+      dispatch(addChat({
+        id: Math.random() * 1000000,
+        type: 'direct',
+        name: newAttempt.username,
+        peerId: newAttempt.peerId,
+        lastMessage: newAttempt.messageBody ?? newAttempt.message,
+        lastMessageTimestamp: newAttempt.receivedAt,
+        unreadCount: 0,
+        status: 'pending',
+      }));
     });
 
     return () => unsubscribe();
   }, []);
-
-  const handleContactAttemptClick = (attempt: ContactAttempt) => {
-    // TODO: When clicked, this should open the contact request in the main chat area
-    // For now, just log it
-    console.log('[UI] Contact attempt clicked:', attempt);
-  };
 
   return (
     <div className='w-96 h-full bg-sidebar border-r border-sidebar-border flex flex-col'>
@@ -85,7 +93,6 @@ export const Sidebar: FC = () => {
               <ContactAttemptItem
                 key={attempt.peerId}
                 attempt={attempt}
-                onClick={() => handleContactAttemptClick(attempt)}
                 onExpired={handleContactAttemptExpired}
               />
             ))

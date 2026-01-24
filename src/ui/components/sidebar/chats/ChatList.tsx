@@ -27,8 +27,8 @@ export const ChatList: FC = () => {
                 />
             </div>
             <div className="flex flex-col flex-1 overflow-y-auto">
-                {chats.map((chat) => (
-                    <ChatPreview key={chat.id} chat={chat} onSelectChat={onSelectChat} selectedChatId={selectedChatId} />
+                {chats.filter((chat) => chat.status !== 'pending').map((chat) => (
+                    <ChatPreview key={chat.id} chat={chat} onSelectChat={onSelectChat} selectedChatId={selectedChatId?.id ?? null} />
                 ))}
             </div>
         </div>

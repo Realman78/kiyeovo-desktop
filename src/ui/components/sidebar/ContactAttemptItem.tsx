@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
 import { UserPlus } from "lucide-react";
+import { useDispatch, useSelector } from "react-redux";
+import { setActiveContactAttempt } from "../../state/slices/chatSlice";
+import type { RootState } from "../../state/store";
 
 export interface ContactAttempt {
   peerId: string;
@@ -12,12 +15,18 @@ export interface ContactAttempt {
 
 interface ContactAttemptItemProps {
   attempt: ContactAttempt;
-  onClick: () => void;
+  // onClick: () => void;
   onExpired: (peerId: string) => void;
 }
 
-export const ContactAttemptItem = ({ attempt, onClick, onExpired }: ContactAttemptItemProps) => {
+export const ContactAttemptItem = ({ attempt, onExpired }: ContactAttemptItemProps) => {
   const [timeLeft, setTimeLeft] = useState(0);
+  const {activeChat, chats} = useSelector((state: RootState) => state.chat);
+  const dispatch = useDispatch();
+
+  const handleSelectContactAttempt = () => {
+    dispatch(setActiveContactAttempt(attempt.peerId));
+  };
 
   useEffect(() => {
     const updateTimer = () => {
@@ -37,11 +46,15 @@ export const ContactAttemptItem = ({ attempt, onClick, onExpired }: ContactAttem
 
   const minutes = Math.floor(timeLeft / 60000);
   const seconds = Math.floor((timeLeft % 60000) / 1000);
+  const isSelected = activeChat?.peerId === attempt.peerId;
 
   return (
     <div
-      onClick={onClick}
-      className="flex items-center gap-3 p-3 cursor-pointer bg-warning/5 hover:bg-warning/10 transition-colors"
+      onClick={handleSelectContactAttempt}
+      className={`flex items-center gap-3 p-3 
+        cursor-pointer bg-warning/5 hover:bg-warning/10 transition-colors
+        ${isSelected ? 'border-l-2 border-warning bg-warning/10' : ''}
+        `}
     >
       <div className="shrink-0">
         <div className="w-10 h-10 rounded-full bg-warning/20 flex items-center justify-center">

@@ -1,3 +1,5 @@
+import type { ChatMessage } from "../state/slices/chatSlice";
+
 export const formatRecoveryPhrase = (mnemonic: string): { num: number; word: string }[][] => {
     const words = mnemonic.split(' ');
     const rows = [];
@@ -10,4 +12,17 @@ export const formatRecoveryPhrase = (mnemonic: string): { num: number; word: str
       ]);
     }
     return rows;
+  };
+
+
+  export const createPendingMessage = (message: string, chatId: number): ChatMessage => {
+    return {
+      id: crypto.randomUUID(),
+      chatId: chatId,
+      senderPeerId: '',
+      senderUsername: '',
+      content: message,
+      timestamp: Date.now(),
+      messageType: 'text',
+    };
   };
