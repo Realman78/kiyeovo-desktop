@@ -167,6 +167,7 @@ export interface PendingAcceptance {
   timestamp: number
   username: string
   peerId?: string
+  messageBody: string
 }
 
 export interface EncryptedMessage {

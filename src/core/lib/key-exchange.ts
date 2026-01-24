@@ -474,7 +474,7 @@ export class KeyExchange {
 
     // Wait for user decision with timeout
     const acceptancePromise = new Promise<boolean>((resolve, reject) => {
-      this.pendingAcceptances.set(remoteId, { resolve, reject, timestamp: Date.now(), username: senderUsername });
+      this.pendingAcceptances.set(remoteId, { resolve, reject, timestamp: Date.now(), username: senderUsername, messageBody: message.messageBody || '' });
     });
 
     const timeoutPromise = new Promise<null>((resolve) => {
@@ -1379,8 +1379,8 @@ export class KeyExchange {
 
   getPendingAcceptances(): PendingAcceptance[] {
     return Array.from(this.pendingAcceptances.entries())
-      .map(([peerId, { resolve, reject, timestamp, username }]) =>
-        ({ peerId, resolve, reject, timestamp, username })
+      .map(([peerId, { resolve, reject, timestamp, username, messageBody }]) =>
+        ({ peerId, resolve, reject, timestamp, username, messageBody })
       );
   }
 

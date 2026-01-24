@@ -3,7 +3,6 @@ import { SidebarHeader } from './header/SidebarHeader'
 import { ChatList } from './chats/ChatList'
 import { SidebarFooter } from './footer/SidebarFooter'
 import { ContactAttemptItem, type ContactAttempt } from './ContactAttemptItem'
-import { PENDING_KEY_EXCHANGE_EXPIRATION } from '../../constants'
 
 export const Sidebar: FC = () => {
   const [contactAttempts, setContactAttempts] = useState<ContactAttempt[]>([]);
@@ -23,13 +22,7 @@ export const Sidebar: FC = () => {
         const result = await window.kiyeovoAPI.getContactAttempts();
         console.log('[UI] Contact attempts:', result);
         if (result.success) {
-          setContactAttempts(result.contactAttempts.map(attempt => ({
-            peerId: attempt.sender_peer_id,
-            username: attempt.sender_username,
-            message: attempt.message,
-            receivedAt: attempt.created_at.getTime(),
-            expiresAt: attempt.timestamp + PENDING_KEY_EXCHANGE_EXPIRATION
-          } as ContactAttempt)));
+          setContactAttempts(result.contactAttempts as ContactAttempt[]);
         } else {
           setContactAttemptsError(result.error || 'Failed to fetch contact attempts');
         }

@@ -1,5 +1,5 @@
 import type { IpcMain } from 'electron';
-import { IPC_CHANNELS, type P2PCore } from '../core/index.js';
+import { IPC_CHANNELS, PENDING_KEY_EXCHANGE_EXPIRATION, type P2PCore } from '../core/index.js';
 import { validateMessageLength, validateUsername } from '../core/utils/validators.js';
 
 /**
@@ -234,7 +234,16 @@ function setupContactAttemptHandlers(
       }
 
     console.log('[IPC] Fetching contact attempts from database...');
-    const contactAttempts = p2pCore.database.getContactAttempts();
+    const pendingAcceptances = p2pCore.messageHandler.getKeyExchange().getPendingAcceptances();
+    
+    const contactAttempts = pendingAcceptances.map(attempt => ({
+      peerId: attempt.peerId,
+      username: attempt.username,
+      message: "Contact request",
+      messageBody: attempt.messageBody,
+      receivedAt: attempt.timestamp,
+      expiresAt: attempt.timestamp + PENDING_KEY_EXCHANGE_EXPIRATION
+    }));
 
     console.log(`[IPC] Found ${contactAttempts.length} contact attempts`);
 
