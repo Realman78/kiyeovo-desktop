@@ -1,0 +1,1 @@
+export const PENDING_KEY_EXCHANGE_EXPIRATION = 2 * 60 * 1000;

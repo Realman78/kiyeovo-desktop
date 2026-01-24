@@ -171,7 +171,8 @@ export interface PendingAcceptance {
 
 export interface EncryptedMessage {
   type: 'encrypted' | 'plain' | 'key_exchange'
-  content: string
+  content: string // This is the content of the message, but in the key exchange case, it is the message body
+  messageBody?: string // This is the message body of the key exchange message
   nonce?: string // For encrypted messages
   senderPublicKey?: string // Sender's encryption public key
   ephemeralPublicKey?: string // For key exchange
@@ -277,6 +278,7 @@ export type MessageToVerify = {
   ephemeralPublicKey: string;
   senderUsername: string;
   timestamp: number;
+  messageBody?: string;
 }
 
 // User Profile Export/Import
@@ -449,12 +451,20 @@ export const IPC_CHANNELS = {
   // Key exchange events
   KEY_EXCHANGE_SENT: 'keyExchange:sent',
 
+  // Contact request events
+  CONTACT_REQUEST_RECEIVED: 'contactRequest:received',
+  ACCEPT_CONTACT_REQUEST: 'contactRequest:accept',
+  REJECT_CONTACT_REQUEST: 'contactRequest:reject',
+
   // Bootstrap nodes
   BOOTSTRAP_NODES: 'bootstrap:nodes',
   GET_BOOTSTRAP_NODES: 'bootstrap:getNodes',
   RETRY_BOOTSTRAP: 'bootstrap:retry',
   ADD_BOOTSTRAP_NODE: 'bootstrap:addNode',
   REMOVE_BOOTSTRAP_NODE: 'bootstrap:removeNode',
+
+  // Contact attempts
+  GET_CONTACT_ATTEMPTS: 'contactAttempts:get',
 } as const;
 
 export interface PasswordRequest {
@@ -482,6 +492,15 @@ export interface InitStatus {
 export interface KeyExchangeEvent {
   username: string;
   peerId: string;
+  messageContent?: string;
+}
+
+export interface ContactRequestEvent {
+  senderPeerId: string;
+  senderUsername: string;
+  message: string;
+  messageBody?: string;
+  expiresAt: number;
 }
 
 export type MessageSentStatus = 'online' | 'offline' | null;

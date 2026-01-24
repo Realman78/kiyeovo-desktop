@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { InitStatus, IPC_CHANNELS, KeyExchangeEvent, MessageSentStatus, PasswordRequest } from '../core';
+import { InitStatus, IPC_CHANNELS, KeyExchangeEvent, MessageSentStatus, PasswordRequest, ContactRequestEvent } from '../core';
+import { ContactAttempt } from '../core/lib/db/database';
 
 contextBridge.exposeInMainWorld('kiyeovoAPI', {
     // Password authentication
@@ -53,6 +54,19 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
         return () => ipcRenderer.removeListener(IPC_CHANNELS.KEY_EXCHANGE_SENT, listener);
     },
 
+    // Contact request events
+    onContactRequestReceived: (callback: (data: ContactRequestEvent) => void) => {
+        const listener = (_event: any, data: ContactRequestEvent) => callback(data);
+        ipcRenderer.on(IPC_CHANNELS.CONTACT_REQUEST_RECEIVED, listener);
+        return () => ipcRenderer.removeListener(IPC_CHANNELS.CONTACT_REQUEST_RECEIVED, listener);
+    },
+    acceptContactRequest: async (peerId: string): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.ACCEPT_CONTACT_REQUEST, peerId);
+    },
+    rejectContactRequest: async (peerId: string): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.REJECT_CONTACT_REQUEST, peerId);
+    },
+
     // Bootstrap nodes
     getBootstrapNodes: async (): Promise<{ success: boolean; nodes: Array<{ address: string; connected: boolean }>; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.GET_BOOTSTRAP_NODES);
@@ -65,5 +79,10 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     },
     removeBootstrapNode: async (address: string): Promise<{ success: boolean; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.REMOVE_BOOTSTRAP_NODE, address);
+    },
+
+    // Contact attempts
+    getContactAttempts: async (): Promise<{ success: boolean; contactAttempts: Array<ContactAttempt>; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.GET_CONTACT_ATTEMPTS);
     },
 });

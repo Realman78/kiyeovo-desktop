@@ -5,7 +5,7 @@ import { MessageHandler } from './lib/message-handler.js';
 import { EncryptedUserIdentity } from './lib/encrypted-user-identity.js';
 import { ChatDatabase } from './lib/db/database.js';
 import { DATABASE_CLEANUP_INTERVAL } from './constants.js';
-import type { ChatNode, KeyExchangeEvent, PasswordResponse } from './types.js';
+import type { ChatNode, ContactRequestEvent, KeyExchangeEvent, PasswordResponse } from './types.js';
 
 export interface P2PCore {
   node: ChatNode;
@@ -24,6 +24,7 @@ export interface P2PCoreConfig {
   onStatus: (message: string, stage: 'database' | 'identity' | 'node' | 'registry' | 'messaging' | 'complete' | 'peerId') => void;
   onDHTConnectionStatus: (status: { connected: boolean }) => void;
   onKeyExchangeSent: (data: KeyExchangeEvent) => void;
+  onContactRequestReceived: (data: ContactRequestEvent) => void;
   onBootstrapNodes: (nodes: string[]) => void;
 }
 
@@ -32,7 +33,7 @@ export interface P2PCoreConfig {
  * This is the main entry point for the Kiyeovo P2P functionality
  */
 export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore> {
-  const { onStatus, onDHTConnectionStatus, onKeyExchangeSent, onBootstrapNodes } = config;
+  const { onStatus, onDHTConnectionStatus, onKeyExchangeSent, onContactRequestReceived, onBootstrapNodes } = config;
   const sendStatus = (message: string, stage: any) => {
     console.log(`[P2P Core] ${message}`);
     onStatus(message, stage);
@@ -127,7 +128,13 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
 
   // Initialize message handler
   sendStatus('Initializing message handler...', 'messaging');
-  const messageHandler = new MessageHandler(node, usernameRegistry, database, sendKeyExchangeSent);
+
+  const sendContactRequestReceived = (data: ContactRequestEvent) => {
+    console.log(`[P2P Core] Contact request received from ${data.senderUsername}`);
+    onContactRequestReceived(data);
+  };
+
+  const messageHandler = new MessageHandler(node, usernameRegistry, database, sendKeyExchangeSent, sendContactRequestReceived);
 
   // Check offline messages once at startup
   sendStatus('Checking for offline messages...', 'messaging');

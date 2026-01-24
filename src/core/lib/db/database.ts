@@ -6,6 +6,7 @@ import * as path from 'path';
 import { generalErrorHandler } from '../../utils/general-error.js';
 import type { ContactMode, OfflineMessage } from '../../types.js';
 import { DEFAULT_BOOTSTRAP_NODES } from '../../default-bootstrap-nodes.js';
+import { PENDING_KEY_EXCHANGE_EXPIRATION } from '../../constants.js';
 
 export interface User {
     peer_id: string
@@ -73,8 +74,9 @@ export interface EncryptedUserIdentityDb {
 export interface ContactAttempt {
     id: number
     sender_peer_id: string
-    sender_username: string // do we really need to save both username and peer_id?
+    sender_username: string // TODO:do we really need to save both username and peer_id?
     message: string
+    message_body: string
     timestamp: number
     created_at: Date
 }
@@ -91,6 +93,7 @@ export interface FailedKeyExchange {
     target_peer_id: string
     target_username: string // do we really need to save both username and peer_id?
     timestamp: number
+    content: string
     reason: string
     created_at: Date
 }
@@ -258,6 +261,7 @@ export class ChatDatabase {
                 sender_peer_id TEXT NOT NULL,
                 sender_username TEXT NOT NULL,
                 message TEXT NOT NULL,
+                message_body TEXT NOT NULL,
                 timestamp INTEGER NOT NULL,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
@@ -280,6 +284,7 @@ export class ChatDatabase {
                 target_peer_id TEXT NOT NULL,
                 target_username TEXT NOT NULL,
                 timestamp INTEGER NOT NULL,
+                content TEXT NOT NULL,
                 reason TEXT NOT NULL,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
@@ -594,13 +599,14 @@ export class ChatDatabase {
     // Contact attempt operations (silent mode logging)
     logContactAttempt(attempt: Omit<ContactAttempt, 'id' | 'created_at'>): number {
         const stmt = this.db.prepare(`
-            INSERT INTO contact_attempts (sender_peer_id, sender_username, message, timestamp)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO contact_attempts (sender_peer_id, sender_username, message, message_body, timestamp)
+            VALUES (?, ?, ?, ?, ?)
         `);
         const result = stmt.run(
             attempt.sender_peer_id,
             attempt.sender_username,
             attempt.message,
+            attempt.message_body,
             attempt.timestamp
         );
 
@@ -618,6 +624,11 @@ export class ChatDatabase {
         return result.lastInsertRowid as number;
     }
 
+    getActiveContactAttempts(): ContactAttempt[] {
+        // Active are the ones who are not older than PENDING_KEY_EXCHANGE_EXPIRATION (2 minutes)
+        return this.getContactAttempts().filter(attempt => attempt.timestamp > Date.now() - PENDING_KEY_EXCHANGE_EXPIRATION);
+    }
+
     getContactAttempts(limit: number = 50, page: number = 1): ContactAttempt[] {
         const stmt = this.db.prepare('SELECT * FROM contact_attempts ORDER BY created_at DESC LIMIT ? OFFSET ?');
         const rows = stmt.all(limit, (page - 1) * limit) as any[];
@@ -626,6 +637,7 @@ export class ChatDatabase {
             sender_peer_id: row.sender_peer_id,
             sender_username: row.sender_username,
             message: row.message,
+            message_body: row.message_body,
             timestamp: row.timestamp,
             created_at: new Date(row.created_at)
         }));
@@ -639,6 +651,7 @@ export class ChatDatabase {
             sender_peer_id: row.sender_peer_id,
             sender_username: row.sender_username,
             message: row.message,
+            message_body: row.message_body,
             timestamp: row.timestamp,
             created_at: new Date(row.created_at)
         }));
@@ -681,12 +694,12 @@ export class ChatDatabase {
     }
 
     // Failed key exchange operations (sender-side rate limiting)
-    logFailedKeyExchange(targetPeerId: string, targetUsername: string, reason: string): void {
+    logFailedKeyExchange(targetPeerId: string, targetUsername: string, content: string, reason: string): void {
         const stmt = this.db.prepare(`
-            INSERT INTO failed_key_exchanges (target_peer_id, target_username, timestamp, reason)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO failed_key_exchanges (target_peer_id, target_username, timestamp, content, reason)
+            VALUES (?, ?, ?, ?, ?)
         `);
-        stmt.run(targetPeerId, targetUsername, Date.now(), reason);
+        stmt.run(targetPeerId, targetUsername, Date.now(), content, reason);
     }
 
     getRecentFailedKeyExchange(targetPeerId: string, withinMinutes: number = 5): FailedKeyExchange | null {
@@ -704,6 +717,7 @@ export class ChatDatabase {
             target_peer_id: row.target_peer_id,
             target_username: row.target_username,
             timestamp: row.timestamp,
+            content: row.content,
             reason: row.reason,
             created_at: new Date(row.created_at)
         };

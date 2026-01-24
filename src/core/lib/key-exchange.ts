@@ -4,7 +4,7 @@ import type { Stream } from '@libp2p/interface';
 import { x25519 } from '@noble/curves/ed25519';
 import { hkdf } from '@noble/hashes/hkdf';
 import { sha256 } from '@noble/hashes/sha2';
-import type { ChatNode, ConversationSession, AuthenticatedEncryptedMessage, MessageToVerify, PendingAcceptance, UserRegistration, KeyExchangeEvent } from '../types.js';
+import type { ChatNode, ConversationSession, AuthenticatedEncryptedMessage, MessageToVerify, PendingAcceptance, UserRegistration, KeyExchangeEvent, ContactRequestEvent } from '../types.js';
 import { EncryptedUserIdentity } from './encrypted-user-identity.js';
 import { SessionManager } from './session-manager.js';
 import { CHAT_PROTOCOL, KEY_EXCHANGE_RATE_LIMIT_DEFAULT, KEY_ROTATION_TIMEOUT, MAX_KEY_EXCHANGE_AGE, PENDING_KEY_EXCHANGE_EXPIRATION, RECENT_KEY_EXCHANGE_ATTEMPTS_WINDOW, ROTATION_COOLDOWN } from '../constants.js';
@@ -28,19 +28,22 @@ export class KeyExchange {
   private database: ChatDatabase;
   private pendingAcceptances = new Map<string, PendingAcceptance>();
   private onKeyExchangeSent: (data: KeyExchangeEvent) => void;
+  private onContactRequestReceived: (data: ContactRequestEvent) => void;
 
   constructor(
     node: ChatNode,
     usernameRegistry: UsernameRegistry,
     sessionManager: SessionManager,
     database: ChatDatabase,
-    onKeyExchangeSent: (data: KeyExchangeEvent) => void
+    onKeyExchangeSent: (data: KeyExchangeEvent) => void,
+    onContactRequestReceived: (data: ContactRequestEvent) => void
   ) {
     this.node = node;
     this.usernameRegistry = usernameRegistry;
     this.sessionManager = sessionManager;
     this.database = database;
     this.onKeyExchangeSent = onKeyExchangeSent;
+    this.onContactRequestReceived = onContactRequestReceived;
   }
 
   acceptPendingContact(senderPeerId: string): void {
@@ -228,7 +231,7 @@ export class KeyExchange {
   }
 
   //Initiate a key exchange with a target peer
-  async initiateKeyExchange(targetPeerId: PeerId, targetUsername: string): Promise<User | null> {
+  async initiateKeyExchange(targetPeerId: PeerId, targetUsername: string, message: string): Promise<User | null> {
     const userIdentity = this.usernameRegistry.getUserIdentity();
     if (!userIdentity) {
       throw new Error('No user identity available');
@@ -254,7 +257,8 @@ export class KeyExchange {
       content: 'key_exchange_init' as const,
       ephemeralPublicKey: Buffer.from(ephemeralPublicKey).toString('base64'),
       senderUsername: currentUsername,
-      timestamp: timestamp,
+      messageBody: message,
+      timestamp,
     };
     const stringifiedSignFields = JSON.stringify(signFields);
 
@@ -286,7 +290,8 @@ export class KeyExchange {
     // Key exchange request successfully sent - notify frontend (dialog can close now)
     this.onKeyExchangeSent({
       username: targetUsername,
-      peerId: targetPeerId.toString()
+      peerId: targetPeerId.toString(),
+      messageContent: message,
     });
 
     try {
@@ -304,7 +309,7 @@ export class KeyExchange {
       this.sessionManager.removePendingKeyExchange(targetPeerId.toString());
 
       if (error instanceof Error && !error.message.includes('Rate limit')) {
-        this.database.logFailedKeyExchange(targetPeerId.toString(), targetUsername, error.message);
+        this.database.logFailedKeyExchange(targetPeerId.toString(), targetUsername, message, error.message);
       }
 
       throw error;
@@ -406,29 +411,33 @@ export class KeyExchange {
       return null;
     }
 
-    // Check if user has contacted me recently
-    if (this.didUserContactMeRecently(remoteId)) {
-      console.log(`User has contacted me recently - rejecting contact request from ${senderUsername}`);
-      return null;
-    }
+    // TODO: Re-enable this once testing is finished
+    // // Check if user has contacted me recently
+    // if (this.didUserContactMeRecently(remoteId)) {
+    //   console.log(`User has contacted me recently - rejecting contact request from ${senderUsername}`);
+    //   return null;
+    // }
 
-    // Rate limiting check
-    if (this.isKeyExchangeRateLimitExceeded()) {
-      console.log(`Rate limit exceeded - rejecting contact request from ${senderUsername}`);
-      return null;
-    }
+    // // Rate limiting check
+    // if (this.isKeyExchangeRateLimitExceeded()) {
+    //   console.log(`Rate limit exceeded - rejecting contact request from ${senderUsername}`);
+    //   return null;
+    // }
 
     // Silent mode - just log the attempt
     const contactAttemptId = this.database.logContactAttempt({
       sender_peer_id: remoteId,
       sender_username: senderUsername,
-      message: `Contact request (key exchange init)`,
+      message: message.content || 'Contact request',
+      message_body: message.messageBody || '',
       timestamp: Date.now()
     });
-    if (contactMode === 'silent') {
-      console.log(`Logged contact attempt from ${senderUsername} (silent mode)`);
-      return null;
-    }
+
+    // Silent does not make sense with the new UI.
+    // if (contactMode === 'silent') {
+    //   console.log(`Logged contact attempt from ${senderUsername} (silent mode)`);
+    //   return null;
+    // }
 
     // Active mode
     return await this.handleActiveContactRequest(remoteId, message, contactAttemptId);
@@ -445,6 +454,16 @@ export class KeyExchange {
     if (!message.ephemeralPublicKey || !message.signature) {
       throw new Error('Key exchange missing signature or ephemeral public key - this should never happen');
     }
+
+    const expiresAt = Date.now() + PENDING_KEY_EXCHANGE_EXPIRATION;
+
+    this.onContactRequestReceived({
+      senderPeerId: remoteId,
+      message: message.content || 'wants to contact you',
+      senderUsername,
+      messageBody: message.messageBody || '',
+      expiresAt
+    });
 
     // Show prompt to user
     console.log(`\n Contact Request from ${senderUsername}`);
@@ -521,6 +540,9 @@ export class KeyExchange {
       senderUsername: message.senderUsername,
       timestamp: message.timestamp,
     };
+    if (message.messageBody) {
+      messageToVerify.messageBody = message.messageBody;
+    }
 
     let signingPublicKey = '';
     let offlinePublicKey = '';

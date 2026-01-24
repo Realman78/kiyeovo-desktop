@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { isDev } from './util.js';
-import { initializeP2PCore, InitStatus, IPC_CHANNELS, KeyExchangeEvent, type P2PCore } from '../core/index.js';
+import { initializeP2PCore, InitStatus, IPC_CHANNELS, KeyExchangeEvent, type P2PCore, type ContactRequestEvent } from '../core/index.js';
 import { ensureAppDataDir } from '../core/utils/miscellaneous.js';
 import { requestPasswordFromUI } from './password-prompt.js';
 import { setupIPCHandlers } from './ipc-handlers.js';
@@ -60,6 +60,13 @@ function sendKeyExchangeSent(data: KeyExchangeEvent) {
   }
 }
 
+function sendContactRequestReceived(data: ContactRequestEvent) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    console.log(`[Electron] Contact request received from ${data.senderUsername}`);
+    mainWindow.webContents.send(IPC_CHANNELS.CONTACT_REQUEST_RECEIVED, data);
+  }
+}
+
 function sendBootstrapNodes(nodes: string[]) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     console.log(`[Electron] Sending bootstrap nodes: ${nodes}`);
@@ -100,6 +107,9 @@ async function initializeP2PAfterWindow() {
       },
       onKeyExchangeSent: (data: KeyExchangeEvent) => {
         sendKeyExchangeSent(data);
+      },
+      onContactRequestReceived: (data: ContactRequestEvent) => {
+        sendContactRequestReceived(data);
       },
       onBootstrapNodes: (nodes: string[]) => {
         sendBootstrapNodes(nodes);

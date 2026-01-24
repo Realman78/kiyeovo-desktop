@@ -28,3 +28,13 @@ Still “startup blocked” (by design) until the user submits; but at least it 
 3. Animations!
 
 4. drag and drop bootstrap nodeova za redoslijed spajanja
+
+5.     const signFields = {
+      type: 'key_exchange' as const,
+      content: 'key_exchange_init' as const,
+      ephemeralPublicKey: Buffer.from(ephemeralPublicKey).toString('base64'),
+      senderUsername: currentUsername,
+      messageBody: message,
+      timestamp,
+    };
+    ovo gori je redundantno. umjesto da content bude keyexchangeinit, neka to prijede u type i neka se samo type gleda pa ces moc maknut messagebody

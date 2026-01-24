@@ -1,5 +1,5 @@
 import { peerIdFromString } from '@libp2p/peer-id';
-import type { ChatNode, StreamHandlerContext, AuthenticatedEncryptedMessage, OfflineMessage, OfflineSenderInfo, ConversationSession, EncryptedMessage, ContactMode, KeyExchangeEvent } from '../types.js';
+import type { ChatNode, StreamHandlerContext, AuthenticatedEncryptedMessage, OfflineMessage, OfflineSenderInfo, ConversationSession, EncryptedMessage, ContactMode, KeyExchangeEvent, ContactRequestEvent } from '../types.js';
 import { CHAT_PROTOCOL, MESSAGE_TIMEOUT, SESSION_MANAGER_CLEANUP_INTERVAL } from '../constants.js';
 import { SessionManager } from './session-manager.js';
 import { MessageEncryption } from './message-encryption.js';
@@ -27,13 +27,14 @@ export class MessageHandler {
     node: ChatNode,
     usernameRegistry: UsernameRegistry,
     database: ChatDatabase,
-    onKeyExchangeSent: (data: KeyExchangeEvent) => void
+    onKeyExchangeSent: (data: KeyExchangeEvent) => void,
+    onContactRequestReceived: (data: ContactRequestEvent) => void
   ) {
     this.node = node;
     this.usernameRegistry = usernameRegistry;
     this.database = database;
     this.sessionManager = new SessionManager();
-    this.keyExchange = new KeyExchange(node, usernameRegistry, this.sessionManager, database, onKeyExchangeSent);
+    this.keyExchange = new KeyExchange(node, usernameRegistry, this.sessionManager, database, onKeyExchangeSent, onContactRequestReceived);
     this.setupProtocolHandler();
     this.cleanupPeerEvents = PeerConnectionHandler.setupPeerEvents(node, this.sessionManager);
     this.startSessionCleanup();
@@ -118,7 +119,7 @@ export class MessageHandler {
   /**
    * Ensures a user exists and has an active session with key rotation handling.
    */
-  async ensureUserSession(targetUsernameOrPeerId: string): Promise<{
+  async ensureUserSession(targetUsernameOrPeerId: string, message: string): Promise<{
     user: User
     session: ConversationSession
     peerId: PeerId
@@ -134,7 +135,7 @@ export class MessageHandler {
         throw new Error(`User '${targetUsernameOrPeerId}' not found: ${lookupErr instanceof Error ? lookupErr.message : String(lookupErr)}`);
       }
 
-      user = await this.keyExchange.initiateKeyExchange(targetPeerId, targetUsernameOrPeerId);
+      user = await this.keyExchange.initiateKeyExchange(targetPeerId, targetUsernameOrPeerId, message);
       if (!user) {
         throw new Error('Key exchange failed');
       }
@@ -147,7 +148,7 @@ export class MessageHandler {
         try {
           console.log(`Chat with ${targetUsernameOrPeerId} was established out-of-band.
             Upgrading to full key exchange if user is online...`);
-          const exchangedUser = await this.keyExchange.initiateKeyExchange(targetPeerId, targetUsernameOrPeerId);
+          const exchangedUser = await this.keyExchange.initiateKeyExchange(targetPeerId, targetUsernameOrPeerId, message);
           if (exchangedUser) {
             user = exchangedUser;
             console.log(`✓ Upgraded to stronger encryption with ECDH-derived keys`);
@@ -174,7 +175,7 @@ export class MessageHandler {
     if (!session) {
       console.log(`No session found, initiating key exchange with ${targetUsernameOrPeerId}`);
 
-      const exchangedUser = await this.keyExchange.initiateKeyExchange(targetPeerId, targetUsernameOrPeerId);
+      const exchangedUser = await this.keyExchange.initiateKeyExchange(targetPeerId, targetUsernameOrPeerId, message);
       if (!exchangedUser) {
         throw new Error('Key exchange failed');
       }
@@ -212,7 +213,7 @@ export class MessageHandler {
   async sendMessage(targetUsernameOrPeerId: string, message: string): Promise<{ success: boolean, messageSentStatus: 'online' | 'offline' | null, error: string | null }> {
     let user: User | null = null;
     try {
-      const { user: resolvedUser, session, peerId: targetPeerId } = await this.ensureUserSession(targetUsernameOrPeerId);
+      const { user: resolvedUser, session, peerId: targetPeerId } = await this.ensureUserSession(targetUsernameOrPeerId, message);
       user = resolvedUser;
 
       // Check if we need to send an ACK for offline messages we've read

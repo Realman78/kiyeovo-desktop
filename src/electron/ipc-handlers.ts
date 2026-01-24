@@ -15,8 +15,14 @@ export function setupIPCHandlers(
   // Messaging handlers
   setupMessagingHandlers(ipcMain, getP2PCore);
 
+  // Contact request handlers
+  setupContactRequestHandlers(ipcMain, getP2PCore);
+
   // Bootstrap node handlers
   setupBootstrapHandlers(ipcMain, getP2PCore);
+
+  // Contact attempt handlers
+  setupContactAttemptHandlers(ipcMain, getP2PCore);
 }
 
 /**
@@ -83,6 +89,50 @@ function setupMessagingHandlers(
     } catch (error) {
       console.error('[IPC] Failed to send message:', error);
       return { success: false, messageSentStatus: null, error: error instanceof Error ? error.message : "Failed to send message" };
+    }
+  });
+}
+
+/**
+ * Contact request handlers
+ */
+function setupContactRequestHandlers(
+  ipcMain: IpcMain,
+  getP2PCore: () => P2PCore | null
+): void {
+  // Accept contact request
+  ipcMain.handle(IPC_CHANNELS.ACCEPT_CONTACT_REQUEST, async (_event, peerId: string) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+
+      console.log(`[IPC] Accepting contact request from peer: ${peerId}`);
+      p2pCore.messageHandler.getKeyExchange().acceptPendingContact(peerId);
+
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to accept contact request:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to accept contact request' };
+    }
+  });
+
+  // Reject contact request
+  ipcMain.handle(IPC_CHANNELS.REJECT_CONTACT_REQUEST, async (_event, peerId: string) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+
+      console.log(`[IPC] Rejecting contact request from peer: ${peerId}`);
+      p2pCore.messageHandler.getKeyExchange().rejectPendingContact(peerId);
+
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to reject contact request:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to reject contact request' };
     }
   });
 }
@@ -170,3 +220,27 @@ function setupBootstrapHandlers(
     }
   });
 }
+
+// Contact attempt handlers
+function setupContactAttemptHandlers(
+  ipcMain: IpcMain,
+  getP2PCore: () => P2PCore | null
+): void {
+  ipcMain.handle(IPC_CHANNELS.GET_CONTACT_ATTEMPTS, async () => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, contactAttempts: [], error: 'P2P core not initialized' };
+      }
+
+    console.log('[IPC] Fetching contact attempts from database...');
+    const contactAttempts = p2pCore.database.getContactAttempts();
+
+    console.log(`[IPC] Found ${contactAttempts.length} contact attempts`);
+
+    return { success: true, contactAttempts, error: null };
+  } catch (error) {
+    console.error('[IPC] Failed to get contact attempts:', error);
+    return { success: false, contactAttempts: [], error: error instanceof Error ? error.message : 'Failed to get contact attempts' };
+  }});
+};

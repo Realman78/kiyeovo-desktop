@@ -1,4 +1,3 @@
-
 interface Window {
     kiyeovoAPI: {
         // Password authentication
@@ -22,10 +21,18 @@ interface Window {
         // Key exchange event
         onKeyExchangeSent: (callback: (data: { username: string; peerId: string }) => void) => () => void;
 
+        // Contact request events
+        onContactRequestReceived: (callback: (data: ContactRequestEvent) => void) => () => void;
+        acceptContactRequest: (peerId: string) => Promise<{ success: boolean; error: string | null }>;
+        rejectContactRequest: (peerId: string) => Promise<{ success: boolean; error: string | null }>;
+
         // Bootstrap nodes
         getBootstrapNodes: () => Promise<{ success: boolean; nodes: Array<{ address: string; connected: boolean }>; error: string | null }>;
         retryBootstrap: () => Promise<{ success: boolean; error: string | null }>;
         addBootstrapNode: (address: string) => Promise<{ success: boolean; error: string | null }>;
         removeBootstrapNode: (address: string) => Promise<{ success: boolean; error: string | null }>;
+
+        // Contact attempts
+        getContactAttempts: () => Promise<{ success: boolean; contactAttempts: Array<ContactAttempt>; error: string | null }>;
     };
 }
