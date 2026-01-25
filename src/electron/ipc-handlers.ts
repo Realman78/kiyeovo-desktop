@@ -23,6 +23,12 @@ export function setupIPCHandlers(
 
   // Contact attempt handlers
   setupContactAttemptHandlers(ipcMain, getP2PCore);
+
+  // Chat handlers
+  setupChatHandlers(ipcMain, getP2PCore);
+
+  // Message handlers
+  setupMessageHandlers(ipcMain, getP2PCore);
 }
 
 /**
@@ -252,4 +258,57 @@ function setupContactAttemptHandlers(
     console.error('[IPC] Failed to get contact attempts:', error);
     return { success: false, contactAttempts: [], error: error instanceof Error ? error.message : 'Failed to get contact attempts' };
   }});
-};
+}
+
+/**
+ * Chat handlers
+ */
+function setupChatHandlers(
+  ipcMain: IpcMain,
+  getP2PCore: () => P2PCore | null
+): void {
+  ipcMain.handle(IPC_CHANNELS.GET_CHATS, async () => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, chats: [], error: 'P2P core not initialized' };
+      }
+
+      console.log('[IPC] Fetching chats from database...');
+      const myPeerId = p2pCore.userIdentity.id;
+      const chats = p2pCore.database.getAllChatsWithUsernameAndLastMsg(myPeerId);
+      console.log(`[IPC] Found ${chats.length} chats`);
+
+      return { success: true, chats, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to get chats:', error);
+      return { success: false, chats: [], error: error instanceof Error ? error.message : 'Failed to get chats' };
+    }
+  });
+}
+
+/**
+ * Message handlers
+ */
+function setupMessageHandlers(
+  ipcMain: IpcMain,
+  getP2PCore: () => P2PCore | null
+): void {
+  ipcMain.handle(IPC_CHANNELS.GET_MESSAGES, async (_event, chatId: number) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, messages: [], error: 'P2P core not initialized' };
+      }
+
+      console.log(`[IPC] Fetching messages for chat: ${chatId}`);
+      const messages = p2pCore.database.getMessagesByChatId(chatId);
+      console.log(`[IPC] Found ${messages.length} messages`);
+
+      return { success: true, messages, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to get messages:', error);
+      return { success: false, messages: [], error: error instanceof Error ? error.message : 'Failed to get messages' };
+    }
+  });
+}

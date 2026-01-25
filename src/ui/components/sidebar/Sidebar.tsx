@@ -43,28 +43,6 @@ export const Sidebar: FC = () => {
     const unsubscribe = window.kiyeovoAPI.onContactRequestReceived((data) => {
       console.log('[UI] Contact request received:', data);
       dispatch(addContactAttempt(data))
-
-      // const id = Math.random() * 1000000
-      // // id will be a random number
-      // dispatch(addChat({
-      //   id,
-      //   type: 'direct',
-      //   name: data.username,
-      //   peerId: data.peerId,
-      //   lastMessage: data.messageBody ?? data.message,
-      //   lastMessageTimestamp: data.receivedAt,
-      //   unreadCount: 0,
-      //   status: 'pending',
-      // }));
-      // dispatch(addMessage({
-      //   id: crypto.randomUUID(),
-      //   chatId: id,
-      //   content: data.messageBody ?? data.message,
-      //   messageType: 'text',
-      //   senderPeerId: data.peerId,
-      //   senderUsername: data.username,
-      //   timestamp: data.receivedAt
-      // }))
     });
 
     return () => unsubscribe();

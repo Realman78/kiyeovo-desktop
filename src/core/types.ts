@@ -451,11 +451,19 @@ export const IPC_CHANNELS = {
 
   // Key exchange events
   KEY_EXCHANGE_SENT: 'keyExchange:sent',
+  KEY_EXCHANGE_FAILED: 'keyExchange:failed',
 
   // Contact request events
   CONTACT_REQUEST_RECEIVED: 'contactRequest:received',
   ACCEPT_CONTACT_REQUEST: 'contactRequest:accept',
   REJECT_CONTACT_REQUEST: 'contactRequest:reject',
+
+  // Chat events
+  CHAT_CREATED: 'chat:created',
+  GET_CHATS: 'chats:get',
+
+  // Message events
+  MESSAGE_RECEIVED: 'message:received',
 
   // Bootstrap nodes
   BOOTSTRAP_NODES: 'bootstrap:nodes',
@@ -466,6 +474,9 @@ export const IPC_CHANNELS = {
 
   // Contact attempts
   GET_CONTACT_ATTEMPTS: 'contactAttempts:get',
+  
+  // Messages
+  GET_MESSAGES: 'messages:get',
 } as const;
 
 export interface PasswordRequest {
@@ -503,6 +514,27 @@ export interface ContactRequestEvent {
   messageBody?: string;
   receivedAt: number;
   expiresAt: number;
+}
+
+export interface ChatCreatedEvent {
+  chatId: number;
+  peerId: string;
+  username: string;
+}
+
+export interface KeyExchangeFailedEvent {
+  peerId: string;
+  username: string;
+  error: string;
+}
+
+export interface MessageReceivedEvent {
+  chatId: number;
+  messageId: string;
+  content: string;
+  senderPeerId: string;
+  senderUsername: string;
+  timestamp: number;
 }
 
 export type MessageSentStatus = 'online' | 'offline' | null;

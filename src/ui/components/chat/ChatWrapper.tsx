@@ -63,7 +63,7 @@ const ChatWrapper = ({
             isPending={!!activeContactAttempt}
           />
           {!!activeContactAttempt ? (
-            <InvitationManager />
+            <InvitationManager peerId={activeContactAttempt.peerId} />
           ) : <ChatInput />
           }
         </>

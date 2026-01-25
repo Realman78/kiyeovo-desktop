@@ -4,7 +4,7 @@ import type { Stream } from '@libp2p/interface';
 import { x25519 } from '@noble/curves/ed25519';
 import { hkdf } from '@noble/hashes/hkdf';
 import { sha256 } from '@noble/hashes/sha2';
-import type { ChatNode, ConversationSession, AuthenticatedEncryptedMessage, MessageToVerify, PendingAcceptance, UserRegistration, KeyExchangeEvent, ContactRequestEvent } from '../types.js';
+import type { ChatNode, ConversationSession, AuthenticatedEncryptedMessage, MessageToVerify, PendingAcceptance, UserRegistration, KeyExchangeEvent, ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent } from '../types.js';
 import { EncryptedUserIdentity } from './encrypted-user-identity.js';
 import { SessionManager } from './session-manager.js';
 import { CHAT_PROTOCOL, KEY_EXCHANGE_RATE_LIMIT_DEFAULT, KEY_ROTATION_TIMEOUT, MAX_KEY_EXCHANGE_AGE, PENDING_KEY_EXCHANGE_EXPIRATION, RECENT_KEY_EXCHANGE_ATTEMPTS_WINDOW, ROTATION_COOLDOWN } from '../constants.js';
@@ -29,6 +29,8 @@ export class KeyExchange {
   private pendingAcceptances = new Map<string, PendingAcceptance>();
   private onKeyExchangeSent: (data: KeyExchangeEvent) => void;
   private onContactRequestReceived: (data: ContactRequestEvent) => void;
+  private onChatCreated: (data: ChatCreatedEvent) => void;
+  private onKeyExchangeFailed: (data: KeyExchangeFailedEvent) => void;
 
   constructor(
     node: ChatNode,
@@ -36,7 +38,9 @@ export class KeyExchange {
     sessionManager: SessionManager,
     database: ChatDatabase,
     onKeyExchangeSent: (data: KeyExchangeEvent) => void,
-    onContactRequestReceived: (data: ContactRequestEvent) => void
+    onContactRequestReceived: (data: ContactRequestEvent) => void,
+    onChatCreated: (data: ChatCreatedEvent) => void,
+    onKeyExchangeFailed: (data: KeyExchangeFailedEvent) => void
   ) {
     this.node = node;
     this.usernameRegistry = usernameRegistry;
@@ -44,6 +48,8 @@ export class KeyExchange {
     this.database = database;
     this.onKeyExchangeSent = onKeyExchangeSent;
     this.onContactRequestReceived = onContactRequestReceived;
+    this.onChatCreated = onChatCreated;
+    this.onKeyExchangeFailed = onKeyExchangeFailed;
   }
 
   acceptPendingContact(senderPeerId: string): void {
@@ -556,6 +562,8 @@ export class KeyExchange {
       messageToVerify.messageBody = message.messageBody;
     }
 
+    console.log("message to verify", messageToVerify)
+
     let signingPublicKey = '';
     let offlinePublicKey = '';
     let signature = '';
@@ -791,6 +799,11 @@ export class KeyExchange {
 
       if (!valid) {
         console.error('Key exchange init signature verification failed');
+        this.onKeyExchangeFailed({
+          peerId: remoteId,
+          username: message.senderUsername,
+          error: 'Signature verification failed'
+        });
         return;
       }
 
@@ -840,6 +853,14 @@ export class KeyExchange {
         );
         return;
       }
+
+      // Fire key exchange failed event
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.onKeyExchangeFailed({
+        peerId: remoteId,
+        username: message.senderUsername,
+        error: errorMessage
+      });
 
       generalErrorHandler(error);
       throw error;
@@ -1340,6 +1361,12 @@ export class KeyExchange {
       if (!chatId) {
         throw new Error('Failed to create chat');
       }
+
+      this.onChatCreated({
+        chatId,
+        peerId: remoteId,
+        username
+      });
     } else if (chat.trusted_out_of_band) {
       // Upgrade from out-of-band trust to full ECDH-derived keys
       console.log(`Upgrading chat ${chat.id} from out-of-band trust to ECDH-derived keys`);
@@ -1348,6 +1375,12 @@ export class KeyExchange {
         notifications_bucket_key: toBase64Url(notificationsBucketKey),
         trusted_out_of_band: false
       });
+
+      // this.onChatCreated({
+      //   chatId: chat.id,
+      //   peerId: remoteId,
+      //   username
+      // });
     }
   }
 

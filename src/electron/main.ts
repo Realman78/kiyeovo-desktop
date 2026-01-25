@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { isDev } from './util.js';
-import { initializeP2PCore, InitStatus, IPC_CHANNELS, KeyExchangeEvent, type P2PCore, type ContactRequestEvent } from '../core/index.js';
+import { initializeP2PCore, InitStatus, IPC_CHANNELS, KeyExchangeEvent, type P2PCore, type ContactRequestEvent, type ChatCreatedEvent, type KeyExchangeFailedEvent, type MessageReceivedEvent } from '../core/index.js';
 import { ensureAppDataDir } from '../core/utils/miscellaneous.js';
 import { requestPasswordFromUI } from './password-prompt.js';
 import { setupIPCHandlers } from './ipc-handlers.js';
@@ -74,6 +74,27 @@ function sendBootstrapNodes(nodes: string[]) {
   }
 }
 
+function sendChatCreated(data: ChatCreatedEvent) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    console.log(`[Electron] Chat created for ${data.username} (chatId: ${data.chatId})`);
+    mainWindow.webContents.send(IPC_CHANNELS.CHAT_CREATED, data);
+  }
+}
+
+function sendKeyExchangeFailed(data: KeyExchangeFailedEvent) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    console.log(`[Electron] Key exchange failed with ${data.username}: ${data.error}`);
+    mainWindow.webContents.send(IPC_CHANNELS.KEY_EXCHANGE_FAILED, data);
+  }
+}
+
+function sendMessageReceived(data: MessageReceivedEvent) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    console.log(`[Electron] Message received in chat ${data.chatId} from ${data.senderUsername}`);
+    mainWindow.webContents.send(IPC_CHANNELS.MESSAGE_RECEIVED, data);
+  }
+}
+
 async function initializeP2PAfterWindow() {
   try {
     if (!mainWindow) {
@@ -113,6 +134,15 @@ async function initializeP2PAfterWindow() {
       },
       onBootstrapNodes: (nodes: string[]) => {
         sendBootstrapNodes(nodes);
+      },
+      onChatCreated: (data: ChatCreatedEvent) => {
+        sendChatCreated(data);
+      },
+      onKeyExchangeFailed: (data: KeyExchangeFailedEvent) => {
+        sendKeyExchangeFailed(data);
+      },
+      onMessageReceived: (data: MessageReceivedEvent) => {
+        sendMessageReceived(data);
       }
     });
 

@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { InitStatus, IPC_CHANNELS, KeyExchangeEvent, MessageSentStatus, PasswordRequest, ContactRequestEvent } from '../core';
-import { ContactAttempt } from '../core/lib/db/database';
+import { InitStatus, IPC_CHANNELS, KeyExchangeEvent, MessageSentStatus, PasswordRequest, ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent } from '../core';
+import { ContactAttempt, Message } from '../core/lib/db/database';
 
 contextBridge.exposeInMainWorld('kiyeovoAPI', {
     // Password authentication
@@ -84,5 +84,36 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     // Contact attempts
     getContactAttempts: async (): Promise<{ success: boolean; contactAttempts: Array<ContactAttempt>; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.GET_CONTACT_ATTEMPTS);
+    },
+
+    // Chat created event
+    onChatCreated: (callback: (data: ChatCreatedEvent) => void) => {
+        const listener = (_event: any, data: ChatCreatedEvent) => callback(data);
+        ipcRenderer.on(IPC_CHANNELS.CHAT_CREATED, listener);
+        return () => ipcRenderer.removeListener(IPC_CHANNELS.CHAT_CREATED, listener);
+    },
+
+    // Key exchange failed event
+    onKeyExchangeFailed: (callback: (data: KeyExchangeFailedEvent) => void) => {
+        const listener = (_event: any, data: KeyExchangeFailedEvent) => callback(data);
+        ipcRenderer.on(IPC_CHANNELS.KEY_EXCHANGE_FAILED, listener);
+        return () => ipcRenderer.removeListener(IPC_CHANNELS.KEY_EXCHANGE_FAILED, listener);
+    },
+
+    // Message received event
+    onMessageReceived: (callback: (data: MessageReceivedEvent) => void) => {
+        const listener = (_event: any, data: MessageReceivedEvent) => callback(data);
+        ipcRenderer.on(IPC_CHANNELS.MESSAGE_RECEIVED, listener);
+        return () => ipcRenderer.removeListener(IPC_CHANNELS.MESSAGE_RECEIVED, listener);
+    },
+
+    // Chats
+    getChats: async (): Promise<{ success: boolean; chats: Array<any>; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.GET_CHATS);
+    },
+
+    // Messages
+    getMessages: async (chatId: number): Promise<{ success: boolean; messages: Array<Message>; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.GET_MESSAGES, chatId);
     },
 });

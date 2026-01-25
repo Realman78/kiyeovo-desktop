@@ -5,31 +5,43 @@ import { ChatPreview } from "./ChatPreview";
 import { useDispatch, useSelector } from "react-redux";
 import type { RootState } from "../../../state/store";
 import { setActiveChat } from "../../../state/slices/chatSlice";
+import { EmptyChatList } from "./EmptyChatList";
 
 export const ChatList: FC = () => {
     const [searchQuery, setSearchQuery] = useState("");
     const chats = useSelector((state: RootState) => state.chat.chats);
+    const contactAttempts = useSelector((state: RootState) => state.chat.contactAttempts);
     const selectedChatId = useSelector((state: RootState) => state.chat.activeChat);
     const dispatch = useDispatch();
-    
+
     const onSelectChat = (chatId: number) => {
         dispatch(setActiveChat(chatId));
     }
+
+    const activeChats = chats.filter((chat) => chat.status !== 'pending');
+    const hasNoConversations = activeChats.length === 0 && contactAttempts.length === 0;
+
     return (
         <div className="flex flex-col flex-1 overflow-y-auto">
-            <div className="p-4 pt-0 border-b border-sidebar-border">
-                <Input
-                    placeholder="Search conversations..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    icon={<Search className="w-4 h-4" />}
-                    className="bg-sidebar-accent border-sidebar-border"
-                />
-            </div>
+            {!hasNoConversations && (
+                <div className="p-4 pt-0 border-b border-sidebar-border">
+                    <Input
+                        placeholder="Search conversations..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        icon={<Search className="w-4 h-4" />}
+                        className="bg-sidebar-accent border-sidebar-border"
+                    />
+                </div>
+            )}
             <div className="flex flex-col flex-1 overflow-y-auto">
-                {chats.filter((chat) => chat.status !== 'pending').map((chat) => (
-                    <ChatPreview key={chat.id} chat={chat} onSelectChat={onSelectChat} selectedChatId={selectedChatId?.id ?? null} />
-                ))}
+                {hasNoConversations ? (
+                    <EmptyChatList />
+                ) : (
+                    activeChats.map((chat) => (
+                        <ChatPreview key={chat.id} chat={chat} onSelectChat={onSelectChat} selectedChatId={selectedChatId?.id ?? null} />
+                    ))
+                )}
             </div>
         </div>
     );

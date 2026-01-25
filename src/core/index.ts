@@ -5,7 +5,7 @@ import { MessageHandler } from './lib/message-handler.js';
 import { EncryptedUserIdentity } from './lib/encrypted-user-identity.js';
 import { ChatDatabase } from './lib/db/database.js';
 import { DATABASE_CLEANUP_INTERVAL } from './constants.js';
-import type { ChatNode, ContactRequestEvent, KeyExchangeEvent, PasswordResponse } from './types.js';
+import type { ChatNode, ContactRequestEvent, KeyExchangeEvent, PasswordResponse, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent } from './types.js';
 
 export interface P2PCore {
   node: ChatNode;
@@ -25,6 +25,9 @@ export interface P2PCoreConfig {
   onDHTConnectionStatus: (status: { connected: boolean }) => void;
   onKeyExchangeSent: (data: KeyExchangeEvent) => void;
   onContactRequestReceived: (data: ContactRequestEvent) => void;
+  onChatCreated: (data: ChatCreatedEvent) => void;
+  onKeyExchangeFailed: (data: KeyExchangeFailedEvent) => void;
+  onMessageReceived: (data: MessageReceivedEvent) => void;
   onBootstrapNodes: (nodes: string[]) => void;
 }
 
@@ -33,7 +36,7 @@ export interface P2PCoreConfig {
  * This is the main entry point for the Kiyeovo P2P functionality
  */
 export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore> {
-  const { onStatus, onDHTConnectionStatus, onKeyExchangeSent, onContactRequestReceived } = config;
+  const { onStatus, onDHTConnectionStatus, onKeyExchangeSent, onContactRequestReceived, onChatCreated, onKeyExchangeFailed, onMessageReceived } = config;
   const sendStatus = (message: string, stage: any) => {
     console.log(`[P2P Core] ${message}`);
     onStatus(message, stage);
@@ -47,6 +50,21 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
   const sendKeyExchangeSent = (data: KeyExchangeEvent) => {
     console.log(`[P2P Core] Key exchange sent: ${data.username}`);
     onKeyExchangeSent(data);
+  };
+
+  const sendChatCreated = (data: ChatCreatedEvent) => {
+    console.log(`[P2P Core] Chat created with ${data.username}: chatId=${data.chatId}`);
+    onChatCreated(data);
+  };
+
+  const sendKeyExchangeFailed = (data: KeyExchangeFailedEvent) => {
+    console.log(`[P2P Core] Key exchange failed with ${data.username}: ${data.error}`);
+    onKeyExchangeFailed(data);
+  };
+
+  const sendMessageReceived = (data: MessageReceivedEvent) => {
+    console.log(`[P2P Core] Message received in chat ${data.chatId} from ${data.senderUsername}`);
+    onMessageReceived(data);
   };
 
   sendStatus(`Starting Kiyeovo P2P node on port ${config.port}...`, 'database');
@@ -129,7 +147,7 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
     onContactRequestReceived(data);
   };
 
-  const messageHandler = new MessageHandler(node, usernameRegistry, database, sendKeyExchangeSent, sendContactRequestReceived);
+  const messageHandler = new MessageHandler(node, usernameRegistry, database, sendKeyExchangeSent, sendContactRequestReceived, sendChatCreated, sendKeyExchangeFailed, sendMessageReceived);
 
   // Check offline messages once at startup
   sendStatus('Checking for offline messages...', 'messaging');

@@ -790,9 +790,75 @@ export class ChatDatabase {
         });
     }
 
+    getAllChats(): Chat[] {
+        const stmt = this.db.prepare(`
+            SELECT * FROM chats
+            ORDER BY updated_at DESC
+        `);
+        const rows = stmt.all() as any[];
+
+        if (!rows) return [];
+        return rows.map(row => this.mapChatRow(row));
+    }
+
+    getAllChatsWithUsernames(myPeerId: string): Array<Chat & { username?: string }> {
+        const stmt = this.db.prepare(`
+            SELECT
+                c.*,
+                u.username
+            FROM chats c
+            LEFT JOIN chat_participants cp ON c.id = cp.chat_id AND c.type = 'direct'
+            LEFT JOIN users u ON cp.peer_id = u.peer_id AND cp.peer_id != ?
+            ORDER BY c.updated_at DESC
+        `);
+        const rows = stmt.all(myPeerId) as any[];
+
+        if (!rows) return [];
+        return rows.map(row => ({
+            ...this.mapChatRow(row),
+            username: row.username || undefined
+        }));
+    }
+
+    getAllChatsWithUsernameAndLastMsg(myPeerId: string): Array<Chat & { 
+        username?: string | undefined;
+        last_message_content?: string | undefined;
+        last_message_timestamp?: Date | undefined;
+        last_message_sender?: string | undefined;
+    }> {
+        const stmt = this.db.prepare(`
+            SELECT
+                c.*,
+                u.username,
+                last_msg.content as last_message_content,
+                last_msg.timestamp as last_message_timestamp,
+                last_msg.sender_peer_id as last_message_sender
+            FROM chats c
+            LEFT JOIN chat_participants cp ON c.id = cp.chat_id AND c.type = 'direct' AND cp.peer_id != ?
+            LEFT JOIN users u ON cp.peer_id = u.peer_id
+            LEFT JOIN messages last_msg ON last_msg.id = (
+                SELECT id FROM messages 
+                WHERE chat_id = c.id 
+                ORDER BY timestamp DESC 
+                LIMIT 1
+            )
+            ORDER BY c.updated_at DESC
+        `);
+        const rows = stmt.all(myPeerId) as any[];
+
+        if (!rows) return [];
+        return rows.map(row => ({
+            ...this.mapChatRow(row),
+            username: row.username || undefined,
+            last_message_content: row.last_message_content || undefined,
+            last_message_timestamp: row.last_message_timestamp ? new Date(row.last_message_timestamp) : undefined,
+            last_message_sender: row.last_message_sender || undefined
+        }));
+    }
+
     getChats(chatIds: number[]): Chat[] {
-        const stmt = this.db.prepare(`SELECT * FROM chats WHERE id IN (${chatIds.map(() => '?').join(',')})`);
         if (chatIds.length === 0) return [];
+        const stmt = this.db.prepare(`SELECT * FROM chats WHERE id IN (${chatIds.map(() => '?').join(',')})`);
         const rows = stmt.all(...chatIds) as any[];
 
         if (!rows) return [];
@@ -1104,15 +1170,28 @@ export class ChatDatabase {
                 message.timestamp instanceof Date ? message.timestamp.toISOString() : message.timestamp
             );
 
+            // Update the chat's updated_at to match the message timestamp
+            const updateChatStmt = this.db.prepare(`
+                UPDATE chats SET updated_at = ? WHERE id = ?
+            `);
+            updateChatStmt.run(
+                message.timestamp instanceof Date ? message.timestamp.toISOString() : message.timestamp,
+                message.chat_id
+            );
+
             return message.id;
         });
     }
 
-    getMessagesByChatId(chatId: number, limit: number = 50, offset: number = 0): Message[] {
+    getMessagesByChatId(chatId: number, limit: number = 50, offset: number = 0): Array<Message & { sender_username?: string | undefined }> {
         const stmt = this.db.prepare(`
-            SELECT * FROM messages 
-            WHERE chat_id = ? 
-            ORDER BY timestamp DESC 
+            SELECT 
+                m.*,
+                u.username as sender_username
+            FROM messages m
+            LEFT JOIN users u ON m.sender_peer_id = u.peer_id
+            WHERE m.chat_id = ? 
+            ORDER BY m.timestamp ASC 
             LIMIT ? OFFSET ?
         `);
 
@@ -1121,7 +1200,8 @@ export class ChatDatabase {
         return rows.map(row => ({
             ...row,
             timestamp: new Date(row.timestamp),
-            created_at: new Date(row.created_at)
+            created_at: new Date(row.created_at),
+            sender_username: row.sender_username || undefined
         }));
     }
 

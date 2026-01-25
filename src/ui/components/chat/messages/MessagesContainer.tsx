@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { setActiveChat, type ChatMessage } from "../../../state/slices/chatSlice";
+import { setMessages, type ChatMessage } from "../../../state/slices/chatSlice";
 import type { RootState } from "../../../state/store";
 import { useDispatch, useSelector } from "react-redux";
 import { formatTimestampToHourMinute } from "../../../utils/dateUtils";
@@ -14,9 +14,12 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const myPeerId = useSelector((state: RootState) => state.user.peerId);
   const activeContactAttempt = useSelector((state: RootState) => state.chat.activeContactAttempt);
+  const activeChat = useSelector((state: RootState) => state.chat.activeChat);
+  const dispatch = useDispatch();
 
   const [isCopied, setIsCopied] = useState(false);
-  
+  const [error, setError] = useState<string | null>(null);
+
   const handleCopyPeerId = () => {
     setIsCopied(true);
     navigator.clipboard.writeText(messages[0].senderPeerId);
@@ -25,9 +28,53 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
     }, 2000);
   }
 
-  
+  //   export interface Message {
+  //     id: string // UUID for deduplication
+  //     chat_id: number
+  //     sender_peer_id: string
+  //     content: string // Encrypted
+  //     message_type: 'text' | 'file' | 'image' | 'system'
+  //     timestamp: Date
+  //     created_at: Date
+  // }
+
+  // Fetch messages for the active chat
+  useEffect(() => {
+    const fetchMessages = async () => {
+      if (activeChat) {
+        const result = await window.kiyeovoAPI.getMessages(activeChat.id);
+        if (result.success) {
+          const messages = result.messages.map(msg => {
+            return {
+              id: msg.id,
+              chatId: msg.chat_id,
+              senderPeerId: msg.sender_peer_id,
+              senderUsername: msg.sender_username || 'UNKNOWN',
+              content: msg.content,
+              timestamp: msg.timestamp.getTime(),
+              messageType: msg.message_type as 'text' | 'file' | 'image' | 'system',
+            }
+          });
+          dispatch(setMessages(messages));
+        } else {
+          setError(result.error || 'Failed to fetch messages');
+        }
+      }
+    }
+    fetchMessages();
+  }, [activeChat]);
+
+  // Check if we should show loading state for newly created chat
+  const showLoadingState = !isPending && activeChat?.justCreated && messages.length === 0;
 
   return <div className={`flex-1 overflow-y-auto p-6 space-y-4`}>
+    {showLoadingState && (
+      <div className="w-full flex justify-center items-center h-full">
+        <div className="text-muted-foreground text-sm">
+          Loading messages...
+        </div>
+      </div>
+    )}
     {isPending && <div className="w-full flex justify-center">
       <div className="text-foreground relative text-center w-1/2 border p-6 rounded-lg border-warning/50 bg-warning/20" style={{ wordBreak: "break-word" }}>
         <div onClick={handleCopyPeerId} className="absolute right-2 top-2 cursor-pointer hover:text-foreground/80">
@@ -37,6 +84,11 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
       </div>
     </div>}
     {isPending && activeContactAttempt?.expiresAt && <TimeToRespond expiresAt={activeContactAttempt.expiresAt} />}
+    {error && <div className="w-full flex justify-center">
+      <div className="text-foreground relative text-center w-1/2 border p-6 rounded-lg border-warning/50 bg-warning/20" style={{ wordBreak: "break-word" }}>
+        {error}
+      </div>
+    </div>}
     {messages.map((message, index) => {
       const showTimestamp =
         index === 0 ||

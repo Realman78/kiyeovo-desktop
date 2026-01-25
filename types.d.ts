@@ -1,38 +1,54 @@
-interface Window {
-    kiyeovoAPI: {
-        // Password authentication
-        onPasswordRequest: (callback: (request: PasswordRequest) => void) => () => void;
-        submitPassword: (password: string, rememberMe: boolean) => void;
+import type { ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, InitStatus, PasswordRequest, MessageReceivedEvent } from './src/core/types';
+import type { Chat, Message } from './src/core/lib/db/database';
 
-        // Initialization status
-        onInitStatus: (callback: (status: InitStatus) => void) => () => void;
-        onInitComplete: (callback: () => void) => () => void;
-        onInitError: (callback: (error: string) => void) => () => void;
+declare global {
+    interface Window {
+        kiyeovoAPI: {
+            // Password authentication
+            onPasswordRequest: (callback: (request: PasswordRequest) => void) => () => void;
+            submitPassword: (password: string, rememberMe: boolean) => void;
 
-        // DHT connection status
-        onDHTConnectionStatus: (callback: (status: { connected: boolean }) => void) => () => void;
+            // Initialization status
+            onInitStatus: (callback: (status: InitStatus) => void) => () => void;
+            onInitComplete: (callback: () => void) => () => void;
+            onInitError: (callback: (error: string) => void) => () => void;
 
-        // Register
-        register: (username: string) => Promise<{ success: boolean; error?: string }>;
+            // DHT connection status
+            onDHTConnectionStatus: (callback: (status: { connected: boolean }) => void) => () => void;
 
-        // Send message
-        sendMessage: (identifier: string, message: string) => Promise<{ success: boolean; messageSentStatus: 'online' | 'offline' | null; error: string | null }>;
+            // Register
+            register: (username: string) => Promise<{ success: boolean; error?: string }>;
 
-        // Key exchange event
-        onKeyExchangeSent: (callback: (data: { username: string; peerId: string }) => void) => () => void;
+            // Send message
+            sendMessage: (identifier: string, message: string) => Promise<{ success: boolean; messageSentStatus: 'online' | 'offline' | null; error: string | null }>;
 
-        // Contact request events
-        onContactRequestReceived: (callback: (data: ContactRequestEvent) => void) => () => void;
-        acceptContactRequest: (peerId: string) => Promise<{ success: boolean; error: string | null }>;
-        rejectContactRequest: (peerId: string) => Promise<{ success: boolean; error: string | null }>;
+            // Key exchange events
+            onKeyExchangeSent: (callback: (data: { username: string; peerId: string }) => void) => () => void;
+            onKeyExchangeFailed: (callback: (data: KeyExchangeFailedEvent) => void) => () => void;
 
-        // Bootstrap nodes
-        getBootstrapNodes: () => Promise<{ success: boolean; nodes: Array<{ address: string; connected: boolean }>; error: string | null }>;
-        retryBootstrap: () => Promise<{ success: boolean; error: string | null }>;
-        addBootstrapNode: (address: string) => Promise<{ success: boolean; error: string | null }>;
-        removeBootstrapNode: (address: string) => Promise<{ success: boolean; error: string | null }>;
+            // Contact request events
+            onContactRequestReceived: (callback: (data: ContactRequestEvent) => void) => () => void;
+            acceptContactRequest: (peerId: string) => Promise<{ success: boolean; error: string | null }>;
+            rejectContactRequest: (peerId: string) => Promise<{ success: boolean; error: string | null }>;
 
-        // Contact attempts
-        getContactAttempts: () => Promise<{ success: boolean; contactAttempts: Array<ContactAttempt>; error: string | null }>;
-    };
+            // Bootstrap nodes
+            getBootstrapNodes: () => Promise<{ success: boolean; nodes: Array<{ address: string; connected: boolean }>; error: string | null }>;
+            retryBootstrap: () => Promise<{ success: boolean; error: string | null }>;
+            addBootstrapNode: (address: string) => Promise<{ success: boolean; error: string | null }>;
+            removeBootstrapNode: (address: string) => Promise<{ success: boolean; error: string | null }>;
+
+            // Contact attempts
+            getContactAttempts: () => Promise<{ success: boolean; contactAttempts: Array<ContactAttempt>; error: string | null }>;
+
+            // Chat events
+            onChatCreated: (callback: (data: ChatCreatedEvent) => void) => () => void;
+            getChats: () => Promise<{ success: boolean; chats: Array<Chat>; error: string | null }>;
+
+            // Message events
+            getMessages: (chatId: number) => Promise<{ success: boolean; messages: Array<Message & { sender_username?: string }>; error: string | null }>;
+            onMessageReceived: (callback: (data: MessageReceivedEvent) => void) => () => void;
+        };
+    }
 }
+
+export {};

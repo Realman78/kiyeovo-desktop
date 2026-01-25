@@ -1,5 +1,6 @@
 import type { FC } from "react";
 import type { Chat } from "../../../state/slices/chatSlice";
+import { formatTimestampToHourMinute } from "../../../utils/dateUtils";
 
 type ChatPreviewProps = {
     chat: Chat;
@@ -19,20 +20,21 @@ export const ChatPreview: FC<ChatPreviewProps> = ({ chat, onSelectChat, selected
                         {chat.name}
                     </span>
                     <span className="text-xs text-muted-foreground shrink-0">
-                        {chat.lastMessageTimestamp}
+                        {formatTimestampToHourMinute(chat.lastMessageTimestamp)}
                     </span>
                 </div>
-                <p className="text-xs text-muted-foreground truncate">
-                    {chat.lastMessage}
-                </p>
-            </div>
+                <div className="flex items-center justify-between">
 
-            {/* Unread badge */}
-            {/* {chat.unread > 0 && (
-                  <div className="shrink-0 w-5 h-5 rounded-full bg-primary text-primary-foreground text-xs font-mono flex items-center justify-center">
-                    {chat.unread}
-                  </div>
-                )} */}
+                    <p className="text-xs text-muted-foreground truncate w-[90%]">
+                        {chat.lastMessage}
+                    </p>
+                    {chat.unreadCount > 0 && (
+                        <div className="shrink-0 w-5 h-5 rounded-full bg-primary text-primary-foreground text-xs font-mono flex items-center justify-center">
+                            {chat.unreadCount}
+                        </div>
+                    )}
+                </div>
+            </div>
         </button>
     );
 }

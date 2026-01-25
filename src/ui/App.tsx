@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
 import './App.css'
-import {Lock} from 'lucide-react'
 import { Login } from './pages/Login';
 import { Main } from './pages/Main';
 import { useDispatch } from 'react-redux';
@@ -9,7 +8,6 @@ import { setPeerId } from './state/slices/userSlice';
 function App() {
   const [initStatus, setInitStatus] = useState('Initializing...');
   const [isInitialized, setIsInitialized] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   const dispatch = useDispatch();
 
@@ -27,16 +25,17 @@ function App() {
       setInitStatus('Initialized successfully!');
     });
 
-    const unsubError = window.kiyeovoAPI.onInitError((errorMsg) => {
-      setError(errorMsg);
+    const unsubError = window.kiyeovoAPI.onInitError(() => {
+      // Error handling can be added here if needed
     });
+
 
     return () => {
       unsubStatus();
       unsubComplete();
       unsubError();
     };
-  }, []);
+  }, [dispatch]);
 
   return <div className='w-full h-full'>
     {isInitialized ? <Main /> : <Login initStatus={initStatus} />}

@@ -1,5 +1,5 @@
 import { peerIdFromString } from '@libp2p/peer-id';
-import type { ChatNode, StreamHandlerContext, AuthenticatedEncryptedMessage, OfflineMessage, OfflineSenderInfo, ConversationSession, EncryptedMessage, ContactMode, KeyExchangeEvent, ContactRequestEvent } from '../types.js';
+import type { ChatNode, StreamHandlerContext, AuthenticatedEncryptedMessage, OfflineMessage, OfflineSenderInfo, ConversationSession, EncryptedMessage, ContactMode, KeyExchangeEvent, ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent } from '../types.js';
 import { CHAT_PROTOCOL, MESSAGE_TIMEOUT, SESSION_MANAGER_CLEANUP_INTERVAL } from '../constants.js';
 import { SessionManager } from './session-manager.js';
 import { MessageEncryption } from './message-encryption.js';
@@ -22,19 +22,24 @@ export class MessageHandler {
   private keyExchange: KeyExchange;
   private database: ChatDatabase;
   private cleanupPeerEvents: (() => void) | null = null;
+  private onMessageReceived: (data: MessageReceivedEvent) => void;
 
   constructor(
     node: ChatNode,
     usernameRegistry: UsernameRegistry,
     database: ChatDatabase,
     onKeyExchangeSent: (data: KeyExchangeEvent) => void,
-    onContactRequestReceived: (data: ContactRequestEvent) => void
+    onContactRequestReceived: (data: ContactRequestEvent) => void,
+    onChatCreated: (data: ChatCreatedEvent) => void,
+    onKeyExchangeFailed: (data: KeyExchangeFailedEvent) => void,
+    onMessageReceived: (data: MessageReceivedEvent) => void
   ) {
     this.node = node;
     this.usernameRegistry = usernameRegistry;
     this.database = database;
     this.sessionManager = new SessionManager();
-    this.keyExchange = new KeyExchange(node, usernameRegistry, this.sessionManager, database, onKeyExchangeSent, onContactRequestReceived);
+    this.onMessageReceived = onMessageReceived;
+    this.keyExchange = new KeyExchange(node, usernameRegistry, this.sessionManager, database, onKeyExchangeSent, onContactRequestReceived, onChatCreated, onKeyExchangeFailed);
     this.setupProtocolHandler();
     this.cleanupPeerEvents = PeerConnectionHandler.setupPeerEvents(node, this.sessionManager);
     this.startSessionCleanup();
@@ -84,8 +89,9 @@ export class MessageHandler {
           if (!chat) {
             throw new Error('Chat not found');
           }
-          const messageId = await this.database.createMessage({
-            id: crypto.randomUUID(),
+          const messageId = crypto.randomUUID();
+          await this.database.createMessage({
+            id: messageId,
             chat_id: chat.id,
             sender_peer_id: remoteId,
             content: decryptedContent,
@@ -93,6 +99,20 @@ export class MessageHandler {
             timestamp: new Date()
           });
           console.log(`Saved message with ID: ${messageId}`);
+
+          // Get sender username for the event
+          const sender = this.database.getUserByPeerId(remoteId);
+          const senderUsername = sender?.username || 'Unknown';
+
+          // Fire message received event
+          this.onMessageReceived({
+            chatId: chat.id,
+            messageId: messageId,
+            content: decryptedContent,
+            senderPeerId: remoteId,
+            senderUsername: senderUsername,
+            timestamp: Date.now()
+          });
         } catch (error: unknown) {
           generalErrorHandler(error, `Error saving message to database`);
         }
