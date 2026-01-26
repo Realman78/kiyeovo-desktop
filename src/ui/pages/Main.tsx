@@ -12,22 +12,14 @@ export const Main = () => {
 
   useEffect(() => {
     const unsubKeyExchangeFailed = window.kiyeovoAPI.onKeyExchangeFailed((data) => {
-      console.log(`Key exchange failed with ${data.username}: ${data.error}`);
-
-      // Show error toast
-      toast.error(`Key exchange with ${data.username} failed`);
-
-      // Remove contact attempt from Redux
+      toast.error(`Key exchange with ${data.username} failed or timed out`);
       dispatch(removeContactAttempt(data.peerId));
-
-      // Clear active contact attempt if it was this one
       dispatch(setActiveContactAttempt(null));
     });
 
     const unsubMessageReceived = window.kiyeovoAPI.onMessageReceived((data) => {
       console.log(`Message received in chat ${data.chatId} from ${data.senderUsername}`);
 
-      // Add message to Redux
       dispatch(addMessage({
         id: data.messageId,
         chatId: data.chatId,
@@ -56,17 +48,16 @@ export const Main = () => {
         if (result.success) {
           console.log(`[UI] Loaded ${result.chats.length} chats`);
 
-          // Map database Chat to Redux Chat type
           const mappedChats = result.chats.map((dbChat: any) => ({
             id: dbChat.id,
             type: dbChat.type,
-            name: dbChat.username || dbChat.name, // Use username for direct chats, fallback to name
-            peerId: dbChat.name, // For direct chats, this is the peer's ID
-            lastMessage: dbChat.last_message_content || 'No messages yet', // From database
+            name: dbChat.username || dbChat.name,
+            peerId: dbChat.name,
+            lastMessage: dbChat.last_message_content || 'No messages yet',
             lastMessageTimestamp: dbChat.last_message_timestamp 
               ? new Date(dbChat.last_message_timestamp).getTime() 
-              : new Date(dbChat.updated_at).getTime(), // Use last_message_timestamp if available, otherwise updated_at
-            unreadCount: 0, // Will be calculated based on message read status later
+              : new Date(dbChat.updated_at).getTime(),
+            unreadCount: 0,
             status: dbChat.status,
           }));
 

@@ -64,6 +64,73 @@ function setupRegistrationHandlers(
       return { success: false, error: errorMessage };
     }
   });
+
+  // Get current user state (username, registration status)
+  ipcMain.handle(IPC_CHANNELS.GET_USER_STATE, async () => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { username: null, isRegistered: false };
+      }
+
+      const username = p2pCore.usernameRegistry.getCurrentUsername();
+      return { 
+        username: username || null, 
+        isRegistered: !!username 
+      };
+    } catch (error) {
+      console.error('[IPC] Failed to get user state:', error);
+      return { username: null, isRegistered: false };
+    }
+  });
+
+  // Unregister
+  ipcMain.handle(IPC_CHANNELS.UNREGISTER_REQUEST, async (_event, username: string) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { usernameUnregistered: false, peerIdUnregistered: false };
+      }
+
+      const result = await p2pCore.usernameRegistry.unregister(username);
+      return result;
+    } catch (error) {
+      console.error('[IPC] Failed to unregister:', error);
+      return { usernameUnregistered: false, peerIdUnregistered: false };
+    }
+  });
+  // Get auto-register setting
+  ipcMain.handle(IPC_CHANNELS.GET_AUTO_REGISTER, async () => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { autoRegister: false };
+      }
+
+      const setting = p2pCore.database.getSetting('auto_register');
+      return { autoRegister: setting === 'true' };
+    } catch (error) {
+      console.error('[IPC] Failed to get auto-register setting:', error);
+      return { autoRegister: false };
+    }
+  });
+
+  // Set auto-register setting
+  ipcMain.handle(IPC_CHANNELS.SET_AUTO_REGISTER, async (_event, enabled: boolean) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+
+      p2pCore.database.setSetting('auto_register', enabled ? 'true' : 'never');
+      console.log(`[IPC] Auto-register setting updated to: ${enabled}`);
+      return { success: true };
+    } catch (error) {
+      console.error('[IPC] Failed to set auto-register:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to set auto-register' };
+    }
+  });
 }
 
 /**

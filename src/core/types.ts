@@ -445,7 +445,11 @@ export const IPC_CHANNELS = {
 
   // Register
   REGISTER_REQUEST: 'register:request',
-
+  GET_USER_STATE: 'user:getState',
+  GET_AUTO_REGISTER: 'user:getAutoRegister',
+  SET_AUTO_REGISTER: 'user:setAutoRegister',
+  UNREGISTER_REQUEST: 'user:unregister',
+  
   // Restore username
   RESTORE_USERNAME: 'restoreUsername:request',
 

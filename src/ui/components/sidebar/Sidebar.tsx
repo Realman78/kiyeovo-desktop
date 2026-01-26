@@ -43,6 +43,19 @@ export const Sidebar: FC = () => {
   }, []);
 
   useEffect(() => {
+    // Pull current user state on mount (solves race condition)
+    const checkUserState = async () => {
+      const userState = await window.kiyeovoAPI.getUserState();
+      if (userState.username && userState.isRegistered) {
+        console.log('[UI] Restored username from state:', userState.username);
+        dispatch(setUsername(userState.username));
+        dispatch(setRegistered(true));
+        dispatch(setConnected(true));
+      }
+    };
+    checkUserState();
+
+    // Also listen for future username restoration events
     const unsubscribe = window.kiyeovoAPI.onContactRequestReceived((data) => {
       console.log('[UI] Contact request received:', data);
       dispatch(addContactAttempt(data))

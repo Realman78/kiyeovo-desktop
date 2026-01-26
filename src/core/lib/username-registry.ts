@@ -204,13 +204,20 @@ export class UsernameRegistry {
   }
 
   // Use this when you want to go offline or stop using a username temporarily
-  async unregister(username: string): Promise<boolean> {
+  async unregister(username: string): Promise<{ usernameUnregistered: boolean; peerIdUnregistered: boolean }> {
     if (!this.userIdentity) {
       throw new Error('User identity not initialized');
     }
 
+    const result = {
+      usernameUnregistered: false,
+      peerIdUnregistered: false,
+    }
+
     // Clear username from DHT
     const usernameKey = UsernameRegistry.TEXT_ENCODER.encode(hashUsingSha256(username));
+    const peerIdKey = UsernameRegistry.TEXT_ENCODER.encode(hashUsingSha256(this.node.peerId.toString()));
+
     let errorCount = 0;
     let hadSuccess = false;
     for await (const event of this.node.services.dht.put(
@@ -223,16 +230,30 @@ export class UsernameRegistry {
 
     if (errorCount > 0 && !hadSuccess) {
       console.log(`Failed to unregister username: All ${errorCount} peers unreachable`);
-      return false;
+      result.usernameUnregistered = false;
     }
 
     // Stop re-registration and clear in-memory username
-    this.stopReregistration();
     this.currentUsername = null;
+    result.usernameUnregistered = true;
     
-    console.log(`Unregistered username: ${username}`);
+    errorCount = 0;
+    hadSuccess = false;
+    for await (const event of this.node.services.dht.put(
+      peerIdKey, 
+      UsernameRegistry.TEXT_ENCODER.encode('')
+    ) as AsyncIterable<QueryEvent>) {
+      if (event.name === 'QUERY_ERROR') errorCount++;
+      else if (event.name === 'PEER_RESPONSE') hadSuccess = true;
+    }
+    if (errorCount > 0 && !hadSuccess) {
+      console.log(`Failed to unregister peer ID: All ${errorCount} peers unreachable`);
+      result.peerIdUnregistered = false;
+    }
+    result.peerIdUnregistered = true;
 
-    return true;
+    this.stopReregistration();
+    return result;
   }
 
   async lookup(username: string): Promise<UserRegistration> {

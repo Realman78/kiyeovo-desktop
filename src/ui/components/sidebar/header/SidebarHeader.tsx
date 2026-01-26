@@ -4,10 +4,11 @@ import { Plus } from "lucide-react";
 import { Button } from "../../ui/Button";
 import ConnectionStatusDialog from "./ConnectionStatusDialog";
 import { KiyeovoDialog } from "./KiyeovoDialog";
-import { useDispatch } from "react-redux";
+import { useDispatch, useSelector } from "react-redux";
 import { setConnected } from "../../../state/slices/userSlice";
 import NewConversationDialog from "./NewConversationDialog";
 import { addPendingKeyExchange, setActivePendingKeyExchange } from "../../../state/slices/chatSlice";
+import type { RootState } from "../../../state/store";
 
 type SidebarHeaderProps = {};
 
@@ -17,6 +18,7 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
     const [isDHTConnected, setIsDHTConnected] = useState<boolean | null>(null);
     const [newConversationDialogOpen, setNewConversationDialogOpen] = useState(false);
     const [error, setError] = useState<string | undefined>(undefined);
+    const isConnected = useSelector((state: RootState) => state.user.connected);
 
     const dispatch = useDispatch();
 
@@ -58,6 +60,12 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
           unsubSent();
         };
       }, [dispatch]);
+
+      useEffect(() => {
+        if (isConnected) {
+            setIsDHTConnected(true);
+        }
+      }, [isConnected]);
     
 
     const handleShowDhtDialog = () => {

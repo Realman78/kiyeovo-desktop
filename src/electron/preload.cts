@@ -42,10 +42,28 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
         return ipcRenderer.invoke(IPC_CHANNELS.REGISTER_REQUEST, username, rememberMe);
     },
 
+    // Get current user state
+    getUserState: async (): Promise<{ username: string | null; isRegistered: boolean }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.GET_USER_STATE);
+    },
+
+    // Auto-register setting
+    getAutoRegister: async (): Promise<{ autoRegister: boolean }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.GET_AUTO_REGISTER);
+    },
+    setAutoRegister: async (enabled: boolean): Promise<{ success: boolean; error?: string }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.SET_AUTO_REGISTER, enabled);
+    },
+
     onRestoreUsername: (callback: (username: string) => void) => {
         const listener = (_event: any, username: string) => callback(username);
         ipcRenderer.on(IPC_CHANNELS.RESTORE_USERNAME, listener);
         return () => ipcRenderer.removeListener(IPC_CHANNELS.RESTORE_USERNAME, listener);
+    },
+
+    // Unregister
+    unregister: async (username: string): Promise<{ usernameUnregistered: boolean; peerIdUnregistered: boolean }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.UNREGISTER_REQUEST, username);
     },
 
     // Send message
