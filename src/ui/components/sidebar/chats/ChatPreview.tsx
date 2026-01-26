@@ -29,7 +29,7 @@ export const ChatPreview: FC<ChatPreviewProps> = ({ chat, onSelectChat, selected
                         {chat.lastMessage}
                     </p>
                     {chat.unreadCount > 0 && (
-                        <div className="shrink-0 w-5 h-5 rounded-full bg-primary text-primary-foreground text-xs font-mono flex items-center justify-center">
+                        <div className="shrink-0 w-5 h-5 rounded-full bg-primary text-primary-foreground text-xs font-mono font-bold flex items-center justify-center">
                             {chat.unreadCount}
                         </div>
                     )}

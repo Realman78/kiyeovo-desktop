@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useDispatch } from "react-redux";
 import { Button } from "../../ui/Button";
 import { addChat, removeContactAttempt, setActiveChat, type Chat } from "../../../state/slices/chatSlice";
+import { useToast } from "../../ui/use-toast";
 
 type InvitationManagerProps = {
     peerId: string;
@@ -11,6 +12,8 @@ export const InvitationManager = ({peerId}: InvitationManagerProps) => {
     const dispatch = useDispatch();
     const [error, setError] = useState<string | undefined>(undefined);
     const [isAccepting, setIsAccepting] = useState(false);
+    const [isRejecting, setIsRejecting] = useState(false);
+    const { toast } = useToast();
 
     useEffect(() => {
         const cleanup = window.kiyeovoAPI.onChatCreated((data) => {
@@ -49,6 +52,8 @@ export const InvitationManager = ({peerId}: InvitationManagerProps) => {
             if (!result.success) {
                 setError(result.error || 'Failed to accept contact request');
                 setIsAccepting(false);
+            } else {
+                toast.success('Contact request accepted');
             }
             // If successful, we wait for the chat-created event
         } catch (err) {
@@ -57,18 +62,40 @@ export const InvitationManager = ({peerId}: InvitationManagerProps) => {
             setIsAccepting(false);
         }
     }
+
+    const handleReject = async (block: boolean) => {
+        setError(undefined);
+        setIsRejecting(true);
+
+        try {
+            const result = await window.kiyeovoAPI.rejectContactRequest(peerId, block);
+
+            if (result.success) {
+                dispatch(removeContactAttempt(peerId));
+                toast.success(`Contact request rejected${block ? ' and blocked' : ''}`);
+            } else {
+                toast.error(result.error || 'Failed to reject contact request');
+            }
+            setIsRejecting(false);
+        }
+        catch (err) {
+            console.error('Failed to reject contact request:', err);
+            setError(err instanceof Error ? err.message : 'Unexpected error occurred');
+            setIsRejecting(false);
+        }
+    }
     return <div className={`h-20 px-4 flex flex-col justify-center border-t border-border`}>
         <div className="flex items-center justify-evenly">
-            <Button variant="outline" onClick={handleAccept} disabled={isAccepting}>
+            <Button variant="outline" onClick={handleAccept} disabled={isAccepting || isRejecting}>
                 {isAccepting ? 'Accepting...' : 'Accept'}
             </Button>
 
             <div className="flex items-center gap-4">
-                <Button variant="destructive" className="bg-transparent border border-destructive/50 text-destructive hover:bg-destructive/50!" disabled={isAccepting}>
-                    Reject
+                <Button onClick={() => handleReject(false)} variant="destructive" className="bg-transparent border border-destructive/50 text-destructive hover:bg-destructive/50!" disabled={isAccepting || isRejecting}>
+                    {isRejecting ? 'Rejecting...' : 'Reject'}
                 </Button>
-                <Button variant="destructive" className="bg-transparent border border-destructive/50 text-destructive" disabled={isAccepting}>
-                    Reject & Block
+                <Button onClick={() => handleReject(true)} variant="destructive" className="bg-transparent border border-destructive/50 text-destructive" disabled={isAccepting || isRejecting}>
+                    {isRejecting ? 'Rejecting & Blocking...' : 'Reject & Block'}
                 </Button>
             </div>
         </div>

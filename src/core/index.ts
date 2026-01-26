@@ -29,6 +29,7 @@ export interface P2PCoreConfig {
   onKeyExchangeFailed: (data: KeyExchangeFailedEvent) => void;
   onMessageReceived: (data: MessageReceivedEvent) => void;
   onBootstrapNodes: (nodes: string[]) => void;
+  onRestoreUsername: (username: string) => void;
 }
 
 /**
@@ -36,7 +37,7 @@ export interface P2PCoreConfig {
  * This is the main entry point for the Kiyeovo P2P functionality
  */
 export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore> {
-  const { onStatus, onDHTConnectionStatus, onKeyExchangeSent, onContactRequestReceived, onChatCreated, onKeyExchangeFailed, onMessageReceived } = config;
+  const { onStatus, onDHTConnectionStatus, onKeyExchangeSent, onContactRequestReceived, onChatCreated, onKeyExchangeFailed, onMessageReceived, onRestoreUsername } = config;
   const sendStatus = (message: string, stage: any) => {
     console.log(`[P2P Core] ${message}`);
     onStatus(message, stage);
@@ -65,6 +66,11 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
   const sendMessageReceived = (data: MessageReceivedEvent) => {
     console.log(`[P2P Core] Message received in chat ${data.chatId} from ${data.senderUsername}`);
     onMessageReceived(data);
+  };
+
+  const sendRestoreUsername = (username: string) => {
+    console.log(`[P2P Core] Restore username: ${username}`);
+    onRestoreUsername(username);
   };
 
   sendStatus(`Starting Kiyeovo P2P node on port ${config.port}...`, 'database');
@@ -137,7 +143,7 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
   // Initialize username registry
   sendStatus('Initializing username registry...', 'registry');
   const usernameRegistry = new UsernameRegistry(node, database);
-  await usernameRegistry.initialize(userIdentity);
+  await usernameRegistry.initialize(userIdentity, sendRestoreUsername);
 
   // Initialize message handler
   sendStatus('Initializing message handler...', 'messaging');

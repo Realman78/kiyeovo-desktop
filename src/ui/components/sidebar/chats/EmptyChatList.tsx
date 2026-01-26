@@ -2,7 +2,7 @@ import { MessageSquare } from "lucide-react";
 
 export const EmptyChatList = () => {
   return (
-    <div className="flex flex-col items-center justify-center h-full p-8 text-center">
+    <div className="flex flex-col items-center justify-center h-full p-8 border-t border-sidebar-border text-center">
       <div className="w-16 h-16 rounded-full bg-muted/20 flex items-center justify-center mb-4">
         <MessageSquare className="w-8 h-8 text-muted-foreground" />
       </div>

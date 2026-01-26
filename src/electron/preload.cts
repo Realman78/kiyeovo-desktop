@@ -38,8 +38,14 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     },
 
     // Register
-    register: async (username: string): Promise<{ success: boolean; error?: string }> => {
-        return ipcRenderer.invoke(IPC_CHANNELS.REGISTER_REQUEST, username);
+    register: async (username: string, rememberMe: boolean): Promise<{ success: boolean; error?: string }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.REGISTER_REQUEST, username, rememberMe);
+    },
+
+    onRestoreUsername: (callback: (username: string) => void) => {
+        const listener = (_event: any, username: string) => callback(username);
+        ipcRenderer.on(IPC_CHANNELS.RESTORE_USERNAME, listener);
+        return () => ipcRenderer.removeListener(IPC_CHANNELS.RESTORE_USERNAME, listener);
     },
 
     // Send message
@@ -115,5 +121,10 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     // Messages
     getMessages: async (chatId: number): Promise<{ success: boolean; messages: Array<Message>; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.GET_MESSAGES, chatId);
+    },
+
+    // Pending key exchange events
+    cancelPendingKeyExchange: async (peerId: string): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.CANCEL_PENDING_KEY_EXCHANGE, peerId);
     },
 });

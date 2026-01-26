@@ -29,6 +29,9 @@ export function setupIPCHandlers(
 
   // Message handlers
   setupMessageHandlers(ipcMain, getP2PCore);
+
+  // Pending key exchange handlers
+  setupPendingKeyExchangeHandlers(ipcMain, getP2PCore);
 }
 
 /**
@@ -38,15 +41,16 @@ function setupRegistrationHandlers(
   ipcMain: IpcMain,
   getP2PCore: () => P2PCore | null
 ): void {
-  ipcMain.handle(IPC_CHANNELS.REGISTER_REQUEST, async (_event, username: string) => {
+  ipcMain.handle(IPC_CHANNELS.REGISTER_REQUEST, async (_event, username: string, rememberMe: boolean) => {
     try {
+      console.log(`[IPC] Registering username: ${username} with rememberMe: ${rememberMe}`);
       const p2pCore = getP2PCore();
       if (!p2pCore) {
         return { success: false, error: 'P2P core not initialized' };
       }
 
       console.log(`[IPC] Registering username: ${username}`);
-      const success = await p2pCore.usernameRegistry.register(username);
+      const success = await p2pCore.usernameRegistry.register(username, false, rememberMe);
 
       if (success) {
         console.log(`[IPC] Successfully registered username: ${username}`);
@@ -125,7 +129,7 @@ function setupContactRequestHandlers(
   });
 
   // Reject contact request
-  ipcMain.handle(IPC_CHANNELS.REJECT_CONTACT_REQUEST, async (_event, peerId: string) => {
+  ipcMain.handle(IPC_CHANNELS.REJECT_CONTACT_REQUEST, async (_event, peerId: string, block: boolean) => {
     try {
       const p2pCore = getP2PCore();
       if (!p2pCore) {
@@ -133,7 +137,22 @@ function setupContactRequestHandlers(
       }
 
       console.log(`[IPC] Rejecting contact request from peer: ${peerId}`);
-      p2pCore.messageHandler.getKeyExchange().rejectPendingContact(peerId);
+      const pending = p2pCore.messageHandler.getKeyExchange().getPendingAcceptanceByPeerId(peerId);
+
+      if (!pending || !pending.peerId) {
+        console.log(`No pending contact request from ${peerId}`);
+        return { success: false, error: 'No pending contact request found' };
+      }
+
+      p2pCore.messageHandler.getKeyExchange().rejectPendingContact(pending.peerId);
+      p2pCore.messageHandler.getKeyExchange().deletePendingAcceptanceByPeerId(pending.peerId);
+
+      if (block) {
+        p2pCore.database.blockPeer(pending.peerId, pending.username, 'Rejected contact request');
+        console.log(`Rejected and blocked ${pending.username}`);
+      } else {
+        console.log(`Rejected contact request from ${pending.username}`);
+      }
 
       return { success: true, error: null };
     } catch (error) {
@@ -239,25 +258,26 @@ function setupContactAttemptHandlers(
         return { success: false, contactAttempts: [], error: 'P2P core not initialized' };
       }
 
-    console.log('[IPC] Fetching contact attempts from database...');
-    const pendingAcceptances = p2pCore.messageHandler.getKeyExchange().getPendingAcceptances();
-    
-    const contactAttempts = pendingAcceptances.map(attempt => ({
-      peerId: attempt.peerId,
-      username: attempt.username,
-      message: "Contact request",
-      messageBody: attempt.messageBody,
-      receivedAt: attempt.timestamp,
-      expiresAt: attempt.timestamp + PENDING_KEY_EXCHANGE_EXPIRATION
-    }));
+      console.log('[IPC] Fetching contact attempts from database...');
+      const pendingAcceptances = p2pCore.messageHandler.getKeyExchange().getPendingAcceptances();
 
-    console.log(`[IPC] Found ${contactAttempts.length} contact attempts`);
+      const contactAttempts = pendingAcceptances.map(attempt => ({
+        peerId: attempt.peerId,
+        username: attempt.username,
+        message: "Contact request",
+        messageBody: attempt.messageBody,
+        receivedAt: attempt.timestamp,
+        expiresAt: attempt.timestamp + PENDING_KEY_EXCHANGE_EXPIRATION
+      }));
 
-    return { success: true, contactAttempts, error: null };
-  } catch (error) {
-    console.error('[IPC] Failed to get contact attempts:', error);
-    return { success: false, contactAttempts: [], error: error instanceof Error ? error.message : 'Failed to get contact attempts' };
-  }});
+      console.log(`[IPC] Found ${contactAttempts.length} contact attempts`);
+
+      return { success: true, contactAttempts, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to get contact attempts:', error);
+      return { success: false, contactAttempts: [], error: error instanceof Error ? error.message : 'Failed to get contact attempts' };
+    }
+  });
 }
 
 /**
@@ -309,6 +329,34 @@ function setupMessageHandlers(
     } catch (error) {
       console.error('[IPC] Failed to get messages:', error);
       return { success: false, messages: [], error: error instanceof Error ? error.message : 'Failed to get messages' };
+    }
+  });
+}
+
+/**
+ * Pending key exchange handlers
+ */
+function setupPendingKeyExchangeHandlers(
+  ipcMain: IpcMain,
+  getP2PCore: () => P2PCore | null
+): void {
+  ipcMain.handle(IPC_CHANNELS.CANCEL_PENDING_KEY_EXCHANGE, async (_event, peerId: string) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+
+      console.log(`[IPC] Cancelling pending key exchange for peer: ${peerId}`);
+      if (!p2pCore.messageHandler.getSessionManager().getPendingKeyExchange(peerId)) {
+        return { success: false, error: 'No pending key exchange found' };
+      }
+      p2pCore.messageHandler.getSessionManager().removePendingKeyExchange(peerId);
+
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to cancel pending key exchange:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to cancel pending key exchange' };
     }
   });
 }

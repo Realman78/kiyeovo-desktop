@@ -1,9 +1,9 @@
 import { useEffect } from "react";
 import { UserPlus } from "lucide-react";
 import { useDispatch, useSelector } from "react-redux";
-import { setActiveContactAttempt } from "../../state/slices/chatSlice";
-import type { RootState } from "../../state/store";
-import { useExpirationTimer } from "../../hooks/useExpirationTimer";
+import { setActiveContactAttempt } from "../../../state/slices/chatSlice";
+import type { RootState } from "../../../state/store";
+import { useExpirationTimer } from "../../../hooks/useExpirationTimer";
 
 export interface ContactAttempt {
   peerId: string;

@@ -32,7 +32,7 @@ export class MessageHandler {
     onContactRequestReceived: (data: ContactRequestEvent) => void,
     onChatCreated: (data: ChatCreatedEvent) => void,
     onKeyExchangeFailed: (data: KeyExchangeFailedEvent) => void,
-    onMessageReceived: (data: MessageReceivedEvent) => void
+    onMessageReceived: (data: MessageReceivedEvent) => void,
   ) {
     this.node = node;
     this.usernameRegistry = usernameRegistry;

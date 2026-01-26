@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { ChatHeader } from "./header/ChatHeader";
 import { useSelector } from "react-redux";
 import type { RootState } from "../../state/store";
@@ -7,6 +7,7 @@ import { createPendingMessage } from "../../utils/general";
 import { ChatInput } from "./input/ChatInput";
 import { InvitationManager } from "./input/InvitationManager";
 import { EmptyState } from "./messages/EmptyState";
+import { PendingKxManager } from "./input/PendingKxManager";
 
 interface Message {
   id: string;
@@ -29,6 +30,7 @@ const ChatWrapper = ({
   const [inputValue, setInputValue] = useState("");
   const activeChat = useSelector((state: RootState) => state.chat.activeChat);
   const activeContactAttempt = useSelector((state: RootState) => state.chat.activeContactAttempt);
+  const activePendingKeyExchange = useSelector((state: RootState) => state.chat.activePendingKeyExchange);
   const messages = useSelector((state: RootState) => state.chat.messages);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -46,26 +48,46 @@ const ChatWrapper = ({
 
   useEffect(() => {
     console.log("activeChat :>> ", activeChat);
+    console.log("activeContactAttempt :>> ", activeContactAttempt);
+    console.log("activePendingKeyExchange :>> ", activePendingKeyExchange);
     console.log("messages :>> ", messages);
-  }, [activeChat, messages]);
+  }, [activeChat, activeContactAttempt, activePendingKeyExchange, messages]);
+
+  const messagesToDisplay = useMemo(() => {
+    if (activeContactAttempt) {
+      return [createPendingMessage(activeContactAttempt.messageBody ?? activeContactAttempt.message, -78, activeContactAttempt.peerId, activeContactAttempt.username)]
+    }
+    if (activePendingKeyExchange) {
+      return [createPendingMessage(activePendingKeyExchange.messageContent ?? "Message not found.", -78, activePendingKeyExchange.peerId, activePendingKeyExchange.username)]
+    }
+    return messages.filter((m) => m.chatId === activeChat?.id) ?? [];
+  }, [activePendingKeyExchange, activeContactAttempt, activeChat, messages]);
+
+  const FooterToDisplay = useMemo(() => {
+    if (activeContactAttempt) {
+      return <InvitationManager peerId={activeContactAttempt.peerId} />
+    }
+    if (activePendingKeyExchange) {
+      return <PendingKxManager peerId={activePendingKeyExchange.peerId} />
+    }
+    if (activeChat) {
+      return <ChatInput />;
+    }
+    return null;
+  }, [activePendingKeyExchange, activeContactAttempt, activeChat]);
 
   return (
     <div className="flex-1 flex flex-col h-full bg-background">
-      {!activeChat && !activeContactAttempt ? (
+      {!activeChat && !activeContactAttempt && !activePendingKeyExchange ? (
         <EmptyState />
       ) : (
         <>
-          <ChatHeader username={activeChat?.name ?? activeContactAttempt?.username ?? ''} peerId={activeChat?.peerId ?? activeContactAttempt?.peerId ?? ''} />
+          <ChatHeader username={activeChat?.name ?? activeContactAttempt?.username ?? activePendingKeyExchange?.username ?? ''} peerId={activeChat?.peerId ?? activeContactAttempt?.peerId ?? activePendingKeyExchange?.peerId ?? ''} />
           <MessagesContainer
-            messages={!!activeContactAttempt ?
-              [createPendingMessage(activeContactAttempt.messageBody ?? activeContactAttempt.message, -78, activeContactAttempt.peerId, activeContactAttempt.username)]
-              : messages.filter((m) => m.chatId === activeChat?.id) ?? []}
-            isPending={!!activeContactAttempt}
+            messages={messagesToDisplay}
+            isPending={!!activeContactAttempt || !!activePendingKeyExchange}
           />
-          {!!activeContactAttempt ? (
-            <InvitationManager peerId={activeContactAttempt.peerId} />
-          ) : <ChatInput />
-          }
+          {FooterToDisplay}
         </>
       )}
     </div>

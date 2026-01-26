@@ -1,4 +1,4 @@
-import type { ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, InitStatus, PasswordRequest, MessageReceivedEvent } from './src/core/types';
+import type { ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, InitStatus, PasswordRequest, MessageReceivedEvent, KeyExchangeEvent } from './src/core/types';
 import type { Chat, Message } from './src/core/lib/db/database';
 
 declare global {
@@ -17,19 +17,20 @@ declare global {
             onDHTConnectionStatus: (callback: (status: { connected: boolean }) => void) => () => void;
 
             // Register
-            register: (username: string) => Promise<{ success: boolean; error?: string }>;
+            register: (username: string, rememberMe: boolean) => Promise<{ success: boolean; error?: string }>;
+            onRestoreUsername: (callback: (username: string) => void) => () => void;
 
             // Send message
             sendMessage: (identifier: string, message: string) => Promise<{ success: boolean; messageSentStatus: 'online' | 'offline' | null; error: string | null }>;
 
             // Key exchange events
-            onKeyExchangeSent: (callback: (data: { username: string; peerId: string }) => void) => () => void;
+            onKeyExchangeSent: (callback: (data: KeyExchangeEvent) => void) => () => void;
             onKeyExchangeFailed: (callback: (data: KeyExchangeFailedEvent) => void) => () => void;
 
             // Contact request events
             onContactRequestReceived: (callback: (data: ContactRequestEvent) => void) => () => void;
             acceptContactRequest: (peerId: string) => Promise<{ success: boolean; error: string | null }>;
-            rejectContactRequest: (peerId: string) => Promise<{ success: boolean; error: string | null }>;
+            rejectContactRequest: (peerId: string, block: boolean) => Promise<{ success: boolean; error: string | null }>;
 
             // Bootstrap nodes
             getBootstrapNodes: () => Promise<{ success: boolean; nodes: Array<{ address: string; connected: boolean }>; error: string | null }>;
@@ -47,6 +48,9 @@ declare global {
             // Message events
             getMessages: (chatId: number) => Promise<{ success: boolean; messages: Array<Message & { sender_username?: string }>; error: string | null }>;
             onMessageReceived: (callback: (data: MessageReceivedEvent) => void) => () => void;
+
+            // Pending key exchange events
+            cancelPendingKeyExchange: (peerId: string) => Promise<{ success: boolean; error: string | null }>;
         };
     }
 }

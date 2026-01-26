@@ -298,6 +298,7 @@ export class KeyExchange {
       username: targetUsername,
       peerId: targetPeerId.toString(),
       messageContent: message,
+      expiresAt: timestamp + PENDING_KEY_EXCHANGE_EXPIRATION
     });
 
     try {
@@ -872,6 +873,10 @@ export class KeyExchange {
 
     try {
       message = await StreamHandler.readMessageFromStream<AuthenticatedEncryptedMessage>(stream);
+      if (!this.sessionManager.getPendingKeyExchange(peerId)) {
+        // this means that it was removed by the user in the UI
+        throw new Error('Pending key exchange was cancelled by the user');
+      }
     } catch (streamError: unknown) {
       // Stream died - cleanup and propagate error
       this.sessionManager.removePendingKeyExchange(peerId);

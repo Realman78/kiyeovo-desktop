@@ -95,6 +95,13 @@ function sendMessageReceived(data: MessageReceivedEvent) {
   }
 }
 
+function sendRestoreUsername(username: string) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    console.log(`[Electron] Restore username: ${username}`);
+    mainWindow.webContents.send(IPC_CHANNELS.RESTORE_USERNAME, username);
+  }
+}
+
 async function initializeP2PAfterWindow() {
   try {
     if (!mainWindow) {
@@ -143,6 +150,9 @@ async function initializeP2PAfterWindow() {
       },
       onMessageReceived: (data: MessageReceivedEvent) => {
         sendMessageReceived(data);
+      },
+      onRestoreUsername: (username: string) => {
+        sendRestoreUsername(username);
       }
     });
 

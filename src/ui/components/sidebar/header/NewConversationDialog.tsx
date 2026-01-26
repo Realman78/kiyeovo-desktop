@@ -91,6 +91,8 @@ const NewConversationDialog = ({ open, onOpenChange, onNewConversation, backendE
       setPeerIdOrUsername("");
       setUsernameValidationError("");
       setMessageValidationError("");
+      setMessage("");
+      setIsSending(false);
     }
   }, [open]);
 

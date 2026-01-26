@@ -446,6 +446,9 @@ export const IPC_CHANNELS = {
   // Register
   REGISTER_REQUEST: 'register:request',
 
+  // Restore username
+  RESTORE_USERNAME: 'restoreUsername:request',
+
   // Send message
   SEND_MESSAGE_REQUEST: 'sendMessage:request',
 
@@ -477,6 +480,9 @@ export const IPC_CHANNELS = {
   
   // Messages
   GET_MESSAGES: 'messages:get',
+
+  // Pending key exchange events
+  CANCEL_PENDING_KEY_EXCHANGE: 'pendingKeyExchange:cancel',
 } as const;
 
 export interface PasswordRequest {
@@ -505,6 +511,7 @@ export interface KeyExchangeEvent {
   username: string;
   peerId: string;
   messageContent?: string;
+  expiresAt: number;
 }
 
 export interface ContactRequestEvent {

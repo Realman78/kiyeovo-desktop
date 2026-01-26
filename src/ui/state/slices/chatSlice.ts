@@ -1,6 +1,14 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
-import type { ContactAttempt } from '../../components/sidebar/ContactAttemptItem';
+import type { ContactAttempt } from '../../components/sidebar/contact-attempts/ContactAttemptItem';
 
+// PendingKeyExchange is used for showing messages on the UI (Key Exchange) 
+// that are sent, but not accepted by the recipient
+export interface PendingKeyExchange {
+  username: string;
+  peerId: string;
+  messageContent?: string;
+  expiresAt: number;
+}
 export interface ChatMessage {
   id: string;
   chatId: number;
@@ -28,84 +36,20 @@ interface ChatState {
   contactAttempts: ContactAttempt[];
   activeChat: Chat | null;
   activeContactAttempt: ContactAttempt | null;
+  activePendingKeyExchange: PendingKeyExchange | null;
+  pendingKeyExchanges: PendingKeyExchange[];
   messages: ChatMessage[];
   loading: boolean;
 }
 
 const initialState: ChatState = {
-  chats: [
-    // {
-    //   id: 1,
-    //   type: 'direct',
-    //   name: 'Alice',
-    //   lastMessage: 'Hey, how are you?',
-    //   lastMessageTimestamp: Date.now() - 3600000,
-    //   unreadCount: 2,
-    //   status: 'active',
-    //   peerId: 'alice-peer-id',
-    // },
-    // {
-    //   id: 2,
-    //   type: 'direct',
-    //   name: 'Bob',
-    //   lastMessage: 'See you tomorrow!',
-    //   lastMessageTimestamp: Date.now() - 7200000,
-    //   unreadCount: 0,
-    //   status: 'active',
-    //   peerId: 'bob-peer-id',
-    // },
-    // {
-    //   id: 3,
-    //   type: 'group',
-    //   name: 'Team Chat',
-    //   lastMessage: 'Meeting at 3pm',
-    //   lastMessageTimestamp: Date.now() - 1800000,
-    //   unreadCount: 5,
-    //   status: 'active',
-    //   peerId: 'team-chat-peer-id',
-    // },
-  ],
+  chats: [],
   contactAttempts: [],
   activeChat: null,
   activeContactAttempt: null,
-  messages: [
-      // {
-      //   id: 'msg-1',
-      //   chatId: 1,
-      //   senderPeerId: 'alice-peer-id',
-      //   senderUsername: 'Alice',
-      //   content: 'Hey, how are you?',
-      //   timestamp: Date.now() - 3600000,
-      //   messageType: 'text',
-      // },
-      // {
-      //   id: 'msg-2',
-      //   chatId: 1,
-      //   senderPeerId: 'alice-peer-id',
-      //   senderUsername: 'Alice',
-      //   content: 'Are you free later?',
-      //   timestamp: Date.now() - 3500000,
-      //   messageType: 'text',
-      // },
-      // {
-      //   id: 'msg-3',
-      //   chatId: 2,
-      //   senderPeerId: 'bob-peer-id',
-      //   senderUsername: 'Bob',
-      //   content: 'See you tomorrow!',
-      //   timestamp: Date.now() - 7200000,
-      //   messageType: 'text',
-      // },
-      // {
-      //   id: 'msg-4',
-      //   chatId: 3,
-      //   senderPeerId: 'charlie-peer-id',
-      //   senderUsername: 'Charlie',
-      //   content: 'Meeting at 3pm',
-      //   timestamp: Date.now() - 1800000,
-      //   messageType: 'text',
-      // },
-    ],
+  activePendingKeyExchange: null,
+  pendingKeyExchanges: [],
+  messages: [],
   loading: false,
 };
 
@@ -122,6 +66,7 @@ const chatSlice = createSlice({
       if (chat) {
         chat.unreadCount = 0;
         state.activeContactAttempt = null;
+        state.activePendingKeyExchange = null;
         state.activeChat = chat;
       }
     },
@@ -134,7 +79,20 @@ const chatSlice = createSlice({
       const contactAttempt = state.contactAttempts.find((ca) => ca.peerId === action.payload);
       if (contactAttempt) {
         state.activeChat = null;
+        state.activePendingKeyExchange = null;
         state.activeContactAttempt = contactAttempt;
+      }
+    },
+    setActivePendingKeyExchange: (state, action: PayloadAction<string | null>) => {
+      if (action.payload === null) {
+        state.activePendingKeyExchange = null
+        return
+      }
+      const pendingKeyExchange = state.pendingKeyExchanges.find((pk) => pk.peerId === action.payload);
+      if (pendingKeyExchange) {
+        state.activeChat = null;
+        state.activeContactAttempt = null;
+        state.activePendingKeyExchange = pendingKeyExchange;
       }
     },
     addMessage: (state, action: PayloadAction<ChatMessage>) => {
@@ -200,12 +158,22 @@ const chatSlice = createSlice({
     setMessages: (state, action: PayloadAction<ChatMessage[]>) => {
       state.messages = action.payload;
     },
+    setPendingKeyExchanges: (state, action: PayloadAction<PendingKeyExchange[]>) => {
+      state.pendingKeyExchanges = action.payload;
+    },
+    addPendingKeyExchange: (state, action: PayloadAction<PendingKeyExchange>) => {
+      state.pendingKeyExchanges.push(action.payload);
+    },
+    removePendingKeyExchange: (state, action: PayloadAction<string>) => {
+      state.pendingKeyExchanges = state.pendingKeyExchanges.filter((pk) => pk.peerId !== action.payload);
+    },
   },
 });
 
 export const {
   setActiveChat,
   setActiveContactAttempt,
+  setActivePendingKeyExchange,
   addMessage,
   setChats,
   addChat,
@@ -215,7 +183,10 @@ export const {
   setContactAttempts,
   addContactAttempt,
   removeContactAttempt,
-  setMessages
+  setMessages,
+  setPendingKeyExchanges,
+  addPendingKeyExchange,
+  removePendingKeyExchange
 } = chatSlice.actions;
 
 export default chatSlice.reducer;

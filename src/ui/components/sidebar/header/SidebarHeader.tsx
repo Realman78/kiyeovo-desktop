@@ -7,6 +7,7 @@ import { KiyeovoDialog } from "./KiyeovoDialog";
 import { useDispatch } from "react-redux";
 import { setConnected } from "../../../state/slices/userSlice";
 import NewConversationDialog from "./NewConversationDialog";
+import { addPendingKeyExchange, setActivePendingKeyExchange } from "../../../state/slices/chatSlice";
 
 type SidebarHeaderProps = {};
 
@@ -27,9 +28,7 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
 
             if (result.success) {
                 setNewConversationDialogOpen(false);
-
-                console.log(`[UI] Message sent to ${peerIdOrUsername} (online)`);
-                console.log(result);
+                dispatch(setActivePendingKeyExchange(null));
             } else {
                 setError(result.error || 'Failed to send message');
             }
@@ -50,6 +49,7 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
         // Listen for key exchange sent event (to close dialog immediately)
         const unsubSent = window.kiyeovoAPI.onKeyExchangeSent((data) => {
             console.log(`[UI] Key exchange sent to ${data.username}, closing dialog...`);
+            dispatch(addPendingKeyExchange(data));
             setNewConversationDialogOpen(false);
         });
 

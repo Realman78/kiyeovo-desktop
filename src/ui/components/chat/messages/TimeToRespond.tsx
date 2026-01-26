@@ -5,8 +5,9 @@ import { useExpirationTimer } from "../../../hooks/useExpirationTimer";
 
 type TimeToRespondProps = {
     expiresAt: number;
+    type: 'contactAttempt' | 'pendingKeyExchange';
 }
-export const TimeToRespond = ({ expiresAt }: TimeToRespondProps) => {
+export const TimeToRespond = ({ expiresAt, type }: TimeToRespondProps) => {
     const dispatch = useDispatch();
     const { minutes, seconds, timeLeft } = useExpirationTimer(expiresAt);
 
@@ -16,7 +17,7 @@ export const TimeToRespond = ({ expiresAt }: TimeToRespondProps) => {
         }
     }, [timeLeft, expiresAt, dispatch]);
     return <div className="w-full flex justify-center">
-        <div className="text-foreground relative text-center w-1/2 border p-4 rounded-lg border-warning/50 bg-warning/20" style={{ wordBreak: "break-word" }}>
+        <div className={`text-foreground relative text-center w-1/2 border p-4 rounded-lg ${type === 'contactAttempt' ? 'border-warning/50 bg-warning/20' : 'border-primary/50 bg-primary/20'}`} style={{ wordBreak: "break-word" }}>
             Time left to respond: {minutes}:{seconds.toString().padStart(2, '0')}
         </div>
     </div>

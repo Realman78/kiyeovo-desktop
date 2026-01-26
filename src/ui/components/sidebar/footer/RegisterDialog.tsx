@@ -18,7 +18,7 @@ import type { RootState } from "../../../state/store";
 interface RegisterDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onRegister: (username: string) => Promise<void>;
+  onRegister: (username: string, rememberMe: boolean) => Promise<void>;
   backendError?: string;
   isRegistering?: boolean;
 }
@@ -27,7 +27,7 @@ const RegisterDialog = ({ open, onOpenChange, onRegister, backendError, isRegist
   const [username, setUsername] = useState("");
   const [validationError, setValidationError] = useState("");
   const [isCopied, setIsCopied] = useState(false);
-
+  const [rememberMe, setRememberMe] = useState(false);
   const peerId = useSelector((state: RootState) => state.user.peerId);
   const isConnected = useSelector((state: RootState) => state.user.connected);
 
@@ -41,6 +41,9 @@ const RegisterDialog = ({ open, onOpenChange, onRegister, backendError, isRegist
     if (!/^[a-zA-Z0-9_]+$/.test(value)) {
       return "Only letters, numbers, and underscores allowed";
     }
+    if (value === peerId) {
+      return "Username cannot be the same as your peer ID";
+    }
     return "";
   };
 
@@ -51,7 +54,7 @@ const RegisterDialog = ({ open, onOpenChange, onRegister, backendError, isRegist
       setValidationError(error);
       return;
     }
-    await onRegister(username);
+    await onRegister(username, rememberMe);
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -121,6 +124,18 @@ const RegisterDialog = ({ open, onOpenChange, onRegister, backendError, isRegist
                 disabled={!isConnected}
                 spellCheck={false}
               />
+              <label className="flex items-start gap-2 cursor-pointer group mt-3">
+                <input
+                  type="checkbox"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                  disabled={!isConnected || isRegistering}
+                  className="mt-0.5 h-4 w-4 cursor-pointer rounded border-border bg-input text-primary transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                />
+                <span className="text-xs text-muted-foreground group-hover:text-foreground transition-colors leading-relaxed">
+                  Register on startup {username.length > 0 ? '(if username not taken)' : ''}
+                </span>
+              </label>
               {displayError && (
                 <div className="flex items-center gap-2 mt-2 text-destructive text-sm">
                   <AlertCircle className="w-4 h-4" />

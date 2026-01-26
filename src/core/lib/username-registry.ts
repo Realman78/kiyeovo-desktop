@@ -24,7 +24,7 @@ export class UsernameRegistry {
     this.database = database;
   }
 
-  async initialize(userIdentity: EncryptedUserIdentity): Promise<void> {
+  async initialize(userIdentity: EncryptedUserIdentity, onRestoreUsername: (username: string) => void): Promise<void> {
     this.userIdentity = userIdentity;
 
     const autoRegister = this.database.getSetting('auto_register');
@@ -36,43 +36,18 @@ export class UsernameRegistry {
     const userDb = this.database.getUserByPeerId(this.node.peerId.toString());
     const lastUsername = this.database.getLastUsername(this.node.peerId.toString());
 
-    if (lastUsername && userDb) {
-      if (autoRegister === 'true') {
-        // Auto-register without prompting
-        console.log(`Auto-registering as '${lastUsername}'...`);
-        try {
-          await this.tryRestoreLastUsername(userDb);
-        } catch (error: unknown) {
-          generalErrorHandler(error);
-        }
-      } else {
-        // const answer = await this.#promptRegistration(lastUsername);
-
-        // if (answer === 'never') {
-        //   this.database.setSetting('auto_register', 'never');
-        //   console.log('Disabled auto-registration. Use "register <username>" to register a username.');
-        //   return;
-        // }
-        // if (answer === "no") {
-        //   console.log(`Skipped registration. Use 'register ${lastUsername}' to register later.`);
-        //   return;
-        // }
-
-        // if (answer === "always") {
-        //   this.database.setSetting("auto_register", "true");
-        //   console.log(`Registering as '${lastUsername}' (will auto-register in future)...`);
-        // } else console.log(`Registering as '${lastUsername}'...`);
-
-        // try {
-        //   await this.tryRestoreLastUsername(userDb);
-        // } catch (error: unknown) {
-        //   generalErrorHandler(error);
-        // }
+    if (lastUsername && userDb && autoRegister === 'true') {
+      console.log(`Auto-registering as '${lastUsername}'...`);
+      try {
+        await this.tryRestoreLastUsername(userDb, onRestoreUsername);
+      } catch (error: unknown) {
+        generalErrorHandler(error);
       }
     }
   }
 
-  async register(username: string, isRenewal: boolean = false): Promise<boolean> {
+  async register(username: string, isRenewal: boolean = false, rememberMe: boolean = false): Promise<boolean> {
+    console.log(`Registering username: ${username} with rememberMe: ${rememberMe}`);
     if (!this.userIdentity) {
       throw new Error('User identity not initialized');
     }
@@ -217,6 +192,11 @@ export class UsernameRegistry {
       // The DHT registration is the primary storage
     }
 
+    if (rememberMe) {
+      this.database.setSetting('auto_register', 'true');
+      console.log(`Registered username: ${username} and will auto-register on startup`);
+    }
+
     // Start re-registration with new username
     this.startReregistration();
 
@@ -344,7 +324,7 @@ export class UsernameRegistry {
     }
   }
 
-  private async tryRestoreLastUsername(userDb?: User): Promise<void> {
+  private async tryRestoreLastUsername(userDb?: User, onRestoreUsername?: (username: string) => void): Promise<void> {
     if (!userDb?.username || !userDb.peer_id || userDb.peer_id !== this.node.peerId.toString()) {
       return;
     }
@@ -353,8 +333,9 @@ export class UsernameRegistry {
     console.log(`Attempting to restore username: ${username}`);
 
     try {
-      await this.register(username);
+      await this.register(username, true);
       console.log(`Successfully restored username: ${username}`);
+      onRestoreUsername?.(username);
     } catch (err: unknown) {
       if (err instanceof Error && err.message.includes('already taken')) {
         console.log(`Username '${username}' is now taken by someone else`);

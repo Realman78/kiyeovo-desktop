@@ -2,10 +2,13 @@ import { type FC, useState, useEffect, useCallback } from 'react'
 import { SidebarHeader } from './header/SidebarHeader'
 import { ChatList } from './chats/ChatList'
 import { SidebarFooter } from './footer/SidebarFooter'
-import { ContactAttemptItem, type ContactAttempt } from './ContactAttemptItem'
+import { type ContactAttempt } from './contact-attempts/ContactAttemptItem'
 import { useDispatch, useSelector } from 'react-redux';
 import { addContactAttempt, removeContactAttempt, setContactAttempts } from '../../state/slices/chatSlice'
 import type { RootState } from '../../state/store'
+import { ContactAttemptList } from './contact-attempts/ContactAttemptList'
+import { PendingKeyExchangeList } from './pending-key-exchange/PendingKeyExchangeList'
+import { setConnected, setRegistered, setUsername } from '../../state/slices/userSlice'
 
 export const Sidebar: FC = () => {
   const [isLoadingContactAttempts, setIsLoadingContactAttempts] = useState(true);
@@ -45,35 +48,25 @@ export const Sidebar: FC = () => {
       dispatch(addContactAttempt(data))
     });
 
-    return () => unsubscribe();
+    const restoreUnsubscribe = window.kiyeovoAPI.onRestoreUsername((username) => {
+      console.log('[UI] Restore username:', username);
+      dispatch(setUsername(username));
+      dispatch(setRegistered(true));
+      dispatch(setConnected(true));
+    });
+
+    return () => {
+      unsubscribe();
+      restoreUnsubscribe();
+    };
   }, []);
 
   return (
     <div className='w-96 h-full bg-sidebar border-r border-sidebar-border flex flex-col'>
       <SidebarHeader />
 
-      {/* Contact Attempts Section */}
-      {contactAttempts.length > 0 && (
-        <div className="border-b border-sidebar-border mb-4">
-          <div className="text-xs text-muted-foreground px-4 py-2 font-medium uppercase tracking-wider">
-            Contact Requests
-          </div>
-          {isLoadingContactAttempts ? (
-            <div className="text-center text-muted-foreground">Loading contact attempts...</div>
-          ) : contactAttemptsError ? (
-            <div className="text-center text-red-500">{contactAttemptsError}</div>
-          ) : (
-            contactAttempts.map(attempt => (
-              <ContactAttemptItem
-                key={attempt.peerId}
-                attempt={attempt}
-                onExpired={handleContactAttemptExpired}
-              />
-            ))
-          )}
-        </div>
-      )}
-
+      {contactAttempts.length > 0 && <ContactAttemptList isLoadingContactAttempts={isLoadingContactAttempts} contactAttemptsError={contactAttemptsError} handleContactAttemptExpired={handleContactAttemptExpired} />}
+      <PendingKeyExchangeList />
       <ChatList />
       <SidebarFooter />
     </div>

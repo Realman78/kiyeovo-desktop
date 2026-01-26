@@ -31,7 +31,7 @@ export const SidebarFooter: FC = () => {
     setError(undefined);
 
     try {
-        const result = await window.kiyeovoAPI.register(username);
+        const result = await window.kiyeovoAPI.register(username, false);
         if (result.success) {
             console.log(`Successfully registered username: ${username}`);
             setUserDialogOpen(false);

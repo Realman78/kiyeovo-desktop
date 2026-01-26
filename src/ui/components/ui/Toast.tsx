@@ -64,10 +64,10 @@ const Toast = React.forwardRef<
       {...props}
     >
       {/* Decorative corner accents - same as Dialog */}
-      <div className="absolute -top-px -left-px w-3 h-3 border-t-2 border-l-2 border-primary rounded-tl-lg" />
+      {/* <div className="absolute -top-px -left-px w-3 h-3 border-t-2 border-l-2 border-primary rounded-tl-lg" />
       <div className="absolute -top-px -right-px w-3 h-3 border-t-2 border-r-2 border-primary rounded-tr-lg" />
       <div className="absolute -bottom-px -left-px w-3 h-3 border-b-2 border-l-2 border-primary rounded-bl-lg" />
-      <div className="absolute -bottom-px -right-px w-3 h-3 border-b-2 border-r-2 border-primary rounded-br-lg" />
+      <div className="absolute -bottom-px -right-px w-3 h-3 border-b-2 border-r-2 border-primary rounded-br-lg" /> */}
 
       <div className="flex items-center gap-3 flex-1">
         {variantIcons[variant]}

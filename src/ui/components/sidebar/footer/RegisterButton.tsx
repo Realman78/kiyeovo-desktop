@@ -1,8 +1,7 @@
-import { Settings, UserPlus } from "lucide-react";
+import { UserPlus } from "lucide-react";
 import type { FC } from "react";
 import { useState } from "react";
 import RegisterDialog from "./RegisterDialog";
-import { Button } from "../../ui/Button";
 import { useDispatch } from "react-redux";
 import { setRegistered, setUsername } from "../../../state/slices/userSlice";
 
@@ -17,12 +16,12 @@ export const RegisterButton: FC = () => {
         setError(undefined); // Clear previous errors when opening dialog
     }
 
-    const handleRegister = async (username: string) => {
+    const handleRegister = async (username: string, rememberMe: boolean) => {
         setIsRegistering(true);
         setError(undefined);
 
         try {
-            const result = await window.kiyeovoAPI.register(username);
+            const result = await window.kiyeovoAPI.register(username, rememberMe);
             if (result.success) {
                 console.log(`Successfully registered username: ${username}`);
                 setShowDialog(false);
@@ -38,10 +37,6 @@ export const RegisterButton: FC = () => {
         } finally {
             setIsRegistering(false);
         }
-    }
-
-    const handleSettings = () => {
-        console.log("settings");
     }
 
     return <>
