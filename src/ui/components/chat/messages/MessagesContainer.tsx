@@ -43,7 +43,6 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
     fetchMessages();
   }, [activeChat]);
 
-  // Check if we should show loading state for newly created chat
   const showLoadingState = !isPending && activeChat?.justCreated && messages.length === 0;
 
   return <div className={`flex-1 overflow-y-auto p-6 space-y-4`}>

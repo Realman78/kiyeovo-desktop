@@ -12,7 +12,13 @@ export const Main = () => {
 
   useEffect(() => {
     const unsubKeyExchangeFailed = window.kiyeovoAPI.onKeyExchangeFailed((data) => {
-      toast.error(`Key exchange with ${data.username} failed or timed out`);
+      if (data.error.includes("ended pushable")) {
+        toast.error(`${data.username} went offline`);
+      } else if (data.error.includes("No pending acceptance found")) {
+        toast.error(data.error);
+      } else {
+        toast.error(`Key exchange with ${data.username} failed or timed out`);
+      }
       dispatch(removeContactAttempt(data.peerId));
       dispatch(setActiveContactAttempt(null));
     });

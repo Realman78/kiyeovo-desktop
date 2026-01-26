@@ -57,6 +57,12 @@ export class KeyExchange {
     if (promise) {
       promise.resolve(true);
       this.pendingAcceptances.delete(senderPeerId);
+    } else {
+      this.onKeyExchangeFailed({
+        username: "UNKNOWN",
+        peerId: senderPeerId,
+        error: 'No pending acceptance found. Something went wrong.',
+      });
     }
   }
 
@@ -65,6 +71,12 @@ export class KeyExchange {
     if (promise) {
       promise.resolve(false);
       this.pendingAcceptances.delete(senderPeerId);
+    } else {
+      this.onKeyExchangeFailed({
+        username: "UNKNOWN",
+        peerId: senderPeerId,
+        error: 'No pending acceptance found. Something went wrong.',
+      });
     }
   }
 
@@ -496,14 +508,19 @@ export class KeyExchange {
       this.pendingAcceptances.set(remoteId, { resolve, reject, timestamp: Date.now(), username: senderUsername, messageBody: message.messageBody || '' });
     });
 
+    let timeoutId: NodeJS.Timeout | undefined;
     const timeoutPromise = new Promise<null>((resolve) => {
-      setTimeout(() => {
+      timeoutId = setTimeout(() => {
         this.pendingAcceptances.delete(remoteId);
         resolve(null);
       }, PENDING_KEY_EXCHANGE_EXPIRATION);
     });
 
     const result = await Promise.race([acceptancePromise, timeoutPromise]);
+
+    if (result !== null && timeoutId) {
+      clearTimeout(timeoutId);
+    }
 
     this.pendingAcceptances.delete(remoteId);
     this.database.deleteContactAttempt(contactAttemptId);
@@ -1389,6 +1406,7 @@ export class KeyExchange {
     }
   }
 
+  // TODO dont forget to use this once testing is finished
   private isKeyExchangeRateLimitExceeded(): boolean {
     let keyExchangeRateLimit = this.database.getSetting('key_exchange_rate_limit') ?? KEY_EXCHANGE_RATE_LIMIT_DEFAULT;
     if (isNaN(Number(keyExchangeRateLimit)) || Number(keyExchangeRateLimit) < 1 || Number(keyExchangeRateLimit) > 100) {

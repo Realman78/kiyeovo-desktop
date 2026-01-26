@@ -52,12 +52,10 @@ export const InvitationManager = ({peerId}: InvitationManagerProps) => {
             if (!result.success) {
                 setError(result.error || 'Failed to accept contact request');
                 setIsAccepting(false);
-            } else {
-                toast.success('Contact request accepted');
             }
             // If successful, we wait for the chat-created event
         } catch (err) {
-            console.error('Failed to accept contact request:', err);
+            toast.error(err instanceof Error ? err.message : 'Unexpected error occurred');
             setError(err instanceof Error ? err.message : 'Unexpected error occurred');
             setIsAccepting(false);
         }
