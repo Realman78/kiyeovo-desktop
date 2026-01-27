@@ -59,7 +59,7 @@ export const Main = () => {
             type: dbChat.type,
             name: dbChat.username || dbChat.name,
             peerId: dbChat.name,
-            lastMessage: dbChat.last_message_content || 'No messages yet',
+            lastMessage: dbChat.last_message_content || 'SYSTEM: No messages yet',
             lastMessageTimestamp: dbChat.last_message_timestamp 
               ? new Date(dbChat.last_message_timestamp).getTime() 
               : new Date(dbChat.updated_at).getTime(),

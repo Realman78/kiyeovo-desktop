@@ -129,6 +129,15 @@ const chatSlice = createSlice({
     addChat: (state, action: PayloadAction<Chat>) => {
       state.chats.push(action.payload);
     },
+    updateChat: (state, action: PayloadAction<{ id: number; updates: Partial<Chat> }>) => {
+      const chat = state.chats.find((c) => c.id === action.payload.id);
+      if (chat) {
+        Object.assign(chat, action.payload.updates);
+        if (state.activeChat?.id === action.payload.id) {
+          Object.assign(state.activeChat, action.payload.updates);
+        }
+      }
+    },
     removeChat: (state, action: PayloadAction<number>) => {
       state.chats = state.chats.filter((chat) => chat.id !== action.payload);
       delete state.messages[action.payload];
@@ -177,6 +186,7 @@ export const {
   addMessage,
   setChats,
   addChat,
+  updateChat,
   removeChat,
   clearMessages,
   setLoading,

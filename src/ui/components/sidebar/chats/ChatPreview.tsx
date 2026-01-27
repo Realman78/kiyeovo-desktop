@@ -26,7 +26,7 @@ export const ChatPreview: FC<ChatPreviewProps> = ({ chat, onSelectChat, selected
                 <div className="flex items-center justify-between">
 
                     <p className="text-xs text-muted-foreground truncate w-[90%]">
-                        {chat.lastMessage}
+                        {chat.lastMessage || "SYSTEM: No messages yet"}
                     </p>
                     {chat.unreadCount > 0 && (
                         <div className="shrink-0 w-5 h-5 rounded-full bg-primary text-primary-foreground text-xs font-mono font-bold flex items-center justify-center">

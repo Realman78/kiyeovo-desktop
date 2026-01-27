@@ -206,16 +206,16 @@ function setupContactRequestHandlers(
       console.log(`[IPC] Rejecting contact request from peer: ${peerId}`);
       const pending = p2pCore.messageHandler.getKeyExchange().getPendingAcceptanceByPeerId(peerId);
 
-      if (!pending || !pending.peerId) {
+      if (!pending) {
         console.log(`No pending contact request from ${peerId}`);
         return { success: false, error: 'No pending contact request found' };
       }
 
-      p2pCore.messageHandler.getKeyExchange().rejectPendingContact(pending.peerId);
-      p2pCore.messageHandler.getKeyExchange().deletePendingAcceptanceByPeerId(pending.peerId);
+      p2pCore.messageHandler.getKeyExchange().rejectPendingContact(peerId);
+      p2pCore.messageHandler.getKeyExchange().deletePendingAcceptanceByPeerId(peerId);
 
       if (block) {
-        p2pCore.database.blockPeer(pending.peerId, pending.username, 'Rejected contact request');
+        p2pCore.database.blockPeer(peerId, pending.username, 'Rejected contact request');
         console.log(`Rejected and blocked ${pending.username}`);
       } else {
         console.log(`Rejected contact request from ${pending.username}`);

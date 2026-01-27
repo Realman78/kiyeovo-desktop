@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { setMessages, type ChatMessage } from "../../../state/slices/chatSlice";
+import { setMessages, updateChat, type ChatMessage } from "../../../state/slices/chatSlice";
 import type { RootState } from "../../../state/store";
 import { useDispatch, useSelector } from "react-redux";
 import { formatTimestampToHourMinute } from "../../../utils/dateUtils";
@@ -43,13 +43,29 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
     fetchMessages();
   }, [activeChat]);
 
-  const showLoadingState = !isPending && activeChat?.justCreated && messages.length === 0;
+  useEffect(() => {
+    if (activeChat?.justCreated && messages.length === 0) {
+      const timeout = setTimeout(() => {
+        if (messages.length === 0) {
+          console.log(`[MessagesContainer] Clearing justCreated flag for chat ${activeChat.id} after timeout`);
+          dispatch(updateChat({ 
+            id: activeChat.id, 
+            updates: { justCreated: false } 
+          }));
+        }
+      }, 10000);
+
+      return () => clearTimeout(timeout);
+    }
+  }, [activeChat?.justCreated, activeChat?.id, messages.length, dispatch]);
+
+  const showEmptyState = !isPending && messages.length === 0;
 
   return <div className={`flex-1 overflow-y-auto p-6 space-y-4`}>
-    {showLoadingState && (
+    {showEmptyState && (
       <div className="w-full flex justify-center items-center h-full">
         <div className="text-muted-foreground text-sm">
-          Loading messages...
+          No messages yet. Say hi! 👋
         </div>
       </div>
     )}
@@ -73,7 +89,7 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
           <div
             className={`max-w-[70%] rounded-lg px-4 py-2.5 ${message.senderPeerId === myPeerId ? "bg-message-sent text-message-sent-foreground rounded-br-sm" : "bg-message-received text-message-received-foreground rounded-bl-sm"}`}
           >
-            <p className="text-sm leading-relaxed">{message.content}</p>
+            <p className="text-sm text-left leading-relaxed">{message.content}</p>
           </div>
           {showTimestamp && (
             <span className="text-xs text-muted-foreground mt-1 font-mono">
