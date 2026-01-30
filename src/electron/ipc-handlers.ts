@@ -415,10 +415,11 @@ function setupPendingKeyExchangeHandlers(
       }
 
       console.log(`[IPC] Cancelling pending key exchange for peer: ${peerId}`);
-      if (!p2pCore.messageHandler.getSessionManager().getPendingKeyExchange(peerId)) {
+      const cancelled = p2pCore.messageHandler.getKeyExchange().cancelPendingKeyExchange(peerId);
+      
+      if (!cancelled) {
         return { success: false, error: 'No pending key exchange found' };
       }
-      p2pCore.messageHandler.getSessionManager().removePendingKeyExchange(peerId);
 
       return { success: true, error: null };
     } catch (error) {

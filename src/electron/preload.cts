@@ -87,8 +87,8 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     acceptContactRequest: async (peerId: string): Promise<{ success: boolean; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.ACCEPT_CONTACT_REQUEST, peerId);
     },
-    rejectContactRequest: async (peerId: string): Promise<{ success: boolean; error: string | null }> => {
-        return ipcRenderer.invoke(IPC_CHANNELS.REJECT_CONTACT_REQUEST, peerId);
+    rejectContactRequest: async (peerId: string, shouldBlock: boolean): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.REJECT_CONTACT_REQUEST, peerId, shouldBlock);
     },
 
     // Bootstrap nodes

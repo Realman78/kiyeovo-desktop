@@ -2,8 +2,8 @@ import { useEffect } from 'react';
 import { useDispatch } from 'react-redux';
 import Sidebar from '../components/sidebar/Sidebar';
 import ChatWrapper from '../components/chat/ChatWrapper';
-import { setChats } from '../state/slices/chatSlice';
-import { removeContactAttempt, setActiveContactAttempt, addMessage } from '../state/slices/chatSlice';
+import { setChats, addChat, removePendingKeyExchange, setActiveChat } from '../state/slices/chatSlice';
+import { removeContactAttempt, setActiveContactAttempt, addMessage, type Chat } from '../state/slices/chatSlice';
 import { useToast } from '../components/ui/use-toast';
 
 export const Main = () => {
@@ -37,9 +37,32 @@ export const Main = () => {
       }));
     });
 
+    // Global listener for chat creation - always active regardless of UI state
+    const unsubChatCreated = window.kiyeovoAPI.onChatCreated((data) => {
+      console.log(`[UI] Chat created: ${data.chatId} for ${data.username} (peerId: ${data.peerId})`);
+      
+      const newChat: Chat = {
+        id: data.chatId,
+        type: 'direct',
+        name: data.username,
+        peerId: data.peerId,
+        lastMessage: '',
+        lastMessageTimestamp: Date.now(),
+        unreadCount: 0,
+        status: 'active',
+        justCreated: true,
+      };
+
+      dispatch(addChat(newChat));
+      dispatch(removeContactAttempt(data.peerId));
+      dispatch(removePendingKeyExchange(data.peerId)); // Remove from pending key exchanges
+      dispatch(setActiveChat(data.chatId));
+    });
+
     return () => {
       unsubKeyExchangeFailed();
       unsubMessageReceived();
+      unsubChatCreated();
     };
   }, [])
 

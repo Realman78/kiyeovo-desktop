@@ -13,6 +13,8 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const myPeerId = useSelector((state: RootState) => state.user.peerId);
   const activeChat = useSelector((state: RootState) => state.chat.activeChat);
+  const activePendingKeyExchange = useSelector((state: RootState) => state.chat.activePendingKeyExchange);
+
   const dispatch = useDispatch();
 
   const [error, setError] = useState<string | null>(null);
@@ -84,10 +86,10 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
       return (
         <div
           key={message.id}
-          className={`flex flex-col animate-fade-in ${message.senderPeerId === myPeerId ? "items-end" : "items-start"}`}
+          className={`flex flex-col animate-fade-in ${message.senderPeerId === myPeerId || !!activePendingKeyExchange ? "items-end" : "items-start"}`}
         >
           <div
-            className={`max-w-[70%] rounded-lg px-4 py-2.5 ${message.senderPeerId === myPeerId ? "bg-message-sent text-message-sent-foreground rounded-br-sm" : "bg-message-received text-message-received-foreground rounded-bl-sm"}`}
+            className={`max-w-[70%] rounded-lg px-4 py-2.5 ${message.senderPeerId === myPeerId || !!activePendingKeyExchange ? "bg-message-sent text-message-sent-foreground rounded-br-sm" : "bg-message-received text-message-received-foreground rounded-bl-sm"}`}
           >
             <p className="text-sm text-left leading-relaxed">{message.content}</p>
           </div>

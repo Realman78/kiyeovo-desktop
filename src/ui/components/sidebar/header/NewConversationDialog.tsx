@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { AtSign, AlertCircle, Plus, Hash, Info } from "lucide-react";
+import { AtSign, AlertCircle, Plus, Info, Mail } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -20,9 +20,10 @@ interface NewConversationDialogProps {
   onOpenChange: (open: boolean) => void;
   onNewConversation: (identifier: string, message: string) => Promise<void>;
   backendError?: string;
+  setError: React.Dispatch<React.SetStateAction<string | undefined>>;
 }
 
-const NewConversationDialog = ({ open, onOpenChange, onNewConversation, backendError }: NewConversationDialogProps) => {
+const NewConversationDialog = ({ open, onOpenChange, onNewConversation, backendError, setError }: NewConversationDialogProps) => {
   const [peerIdOrUsername, setPeerIdOrUsername] = useState("");
   const [message, setMessage] = useState("");
   const [usernameValidationError, setUsernameValidationError] = useState("");
@@ -93,6 +94,7 @@ const NewConversationDialog = ({ open, onOpenChange, onNewConversation, backendE
       setMessageValidationError("");
       setMessage("");
       setIsSending(false);
+      setError(undefined)
     }
   }, [open]);
 
@@ -117,13 +119,13 @@ const NewConversationDialog = ({ open, onOpenChange, onNewConversation, backendE
           <DialogBody className="space-y-4">
             <div>
               <label className="block text-sm font-bold text-foreground mb-2">
-                Peer ID
+                Peer ID or Username
               </label>
               <Input
                 placeholder="Enter peer ID or username..."
                 value={peerIdOrUsername}
                 onChange={handleChange}
-                icon={<Hash className="w-4 h-4" />}
+                icon={<AtSign className="w-4 h-4" />}
                 autoFocus
                 disabled={!isConnected}
                 spellCheck={false}
@@ -149,7 +151,7 @@ const NewConversationDialog = ({ open, onOpenChange, onNewConversation, backendE
                 placeholder="Compose an inital greeting..."
                 value={message}
                 onChange={handleMessageChange}
-                icon={<AtSign className="w-4 h-4" />}
+                icon={<Mail className="w-4 h-4" />}
                 disabled={!isConnected}
                 spellCheck={false}
               />
@@ -169,7 +171,9 @@ const NewConversationDialog = ({ open, onOpenChange, onNewConversation, backendE
 
             <div className="p-3 rounded-md bg-secondary/50 border border-border">
               <div className="flex items-start gap-2">
-                <Info size={55} className="text-primary h-fit mt-0.5" />
+              <div className="w-5">
+              <Info size={70} className="text-primary h-5 w-fit mt-0.5" />
+                </div>
                 <div className="text-s text-muted-foreground">
                   <p className="font-medium text-foreground mb-1">About invitations</p>
                   <p className="text-sm">
@@ -177,6 +181,19 @@ const NewConversationDialog = ({ open, onOpenChange, onNewConversation, backendE
                     If they accept, you will be able to chat with them.
                     If they reject, you will not be able to chat with them.
                     If they do not respond, the invitation will expire after 2 minutes and you can send a new one after 5 minutes.
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="p-3 rounded-md bg-secondary/50 border border-border">
+              <div className="flex items-start gap-2">
+                <div className="w-5">
+                  <Info size={70} className="text-primary h-5 w-fit mt-0.5" />
+                </div>
+                <div className="text-s text-muted-foreground">
+                  <p className="font-medium text-foreground mb-1">Note</p>
+                  <p className="text-sm">
+                    If you are trying to send a message to a new user who has the same username as one of your contacts, please use the Peer ID.
                   </p>
                 </div>
               </div>

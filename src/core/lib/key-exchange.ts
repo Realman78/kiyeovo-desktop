@@ -25,6 +25,7 @@ export class KeyExchange {
   private readonly KEY_ROTATION_THRESHOLD = 15; // Rotate keys every 15 messages
   private rotationPromises = new Map<string, { resolve: (value: boolean) => void; reject: (error: Error) => void }>();
   private rotationTimeouts = new Map<string, NodeJS.Timeout>();
+  private keyExchangeAbortControllers = new Map<string, () => void>();
   private database: ChatDatabase;
   private pendingAcceptances = new Map<string, PendingAcceptance>();
   private onKeyExchangeSent: (data: KeyExchangeEvent) => void;
@@ -260,11 +261,12 @@ export class KeyExchange {
       throw new Error('No current username available');
     }
 
+    // TODO reenable once testing is over
     // Check for recent failed attempts (sender-side rate limiting)
-    const recentFailure = this.database.getRecentFailedKeyExchange(targetPeerId.toString(), 5);
-    if (recentFailure || this.sessionManager.getPendingKeyExchange(targetPeerId.toString())) {
-      throw new Error(`Rate limit: You must wait before contacting ${targetUsername} again`);
-    }
+    // const recentFailure = this.database.getRecentFailedKeyExchange(targetPeerId.toString(), 5);
+    // if (recentFailure || this.sessionManager.getPendingKeyExchange(targetPeerId.toString())) {
+    //   throw new Error(`Rate limit: You must wait before contacting ${targetUsername} again`);
+    // }
 
     const ephemeralPrivateKey = x25519.utils.randomSecretKey();
     const ephemeralPublicKey = x25519.getPublicKey(ephemeralPrivateKey);
@@ -275,9 +277,10 @@ export class KeyExchange {
       content: 'key_exchange_init' as const,
       ephemeralPublicKey: Buffer.from(ephemeralPublicKey).toString('base64'),
       senderUsername: currentUsername,
-      messageBody: message,
       timestamp,
+      messageBody: message,
     };
+
     const stringifiedSignFields = JSON.stringify(signFields);
 
     const signature = userIdentity.sign(stringifiedSignFields);
@@ -305,6 +308,13 @@ export class KeyExchange {
       setTimeout(() => { reject(new Error('Key exchange timeout')); }, PENDING_KEY_EXCHANGE_EXPIRATION)
     );
 
+    // Create cancellable promise for key exchange
+    const cancelPromise = new Promise<never>((_, reject) => {
+      this.keyExchangeAbortControllers.set(targetPeerId.toString(), () => {
+        reject(new Error('KEY_EXCHANGE_CANCELLED'));
+      });
+    });
+
     // Key exchange request successfully sent - notify frontend (dialog can close now)
     this.onKeyExchangeSent({
       username: targetUsername,
@@ -316,14 +326,25 @@ export class KeyExchange {
     try {
       const user = await Promise.race([
         this.waitForKeyExchangeResponse(targetPeerId.toString(), stream),
-        timeoutPromise.then(() => null)
+        timeoutPromise.then(() => null),
+        cancelPromise
       ]);
+      console.log("user after waitForKeyExchangeResponse :>> ", user);
       if (!user) {
         throw new Error('Key exchange timed out or failed');
       }
       console.log(`Authenticated key exchange completed with ${targetPeerId.toString().slice(0, 8)}`);
+      this.keyExchangeAbortControllers.delete(targetPeerId.toString());
       return user;
     } catch (error: unknown) {
+      this.keyExchangeAbortControllers.delete(targetPeerId.toString());
+      
+      // Re-throw cancellation errors so they can be handled upstream
+      if (error instanceof Error && error.message === 'KEY_EXCHANGE_CANCELLED') {
+        console.log(`Key exchange with ${targetUsername} was cancelled by user`);
+        throw error; // Propagate to message handler
+      }
+
       generalErrorHandler(error);
       this.sessionManager.removePendingKeyExchange(targetPeerId.toString());
 
@@ -487,23 +508,8 @@ export class KeyExchange {
       expiresAt
     });
 
-    // export interface ContactAttempt {
-    //   peerId: string;
-    //   username: string;
-    //   message: string;
-    //   messageBody?: string;
-    //   receivedAt: number;
-    //   expiresAt: number;
-    // }
+    console.log(`Contact Request from ${senderUsername}`);
 
-    // Show prompt to user
-    console.log(`\n Contact Request from ${senderUsername}`);
-    console.log(`   Message: "${message.content || 'wants to contact you'}"`);
-    console.log(`   Expires in 2 minutes`);
-    console.log(`   To accept: accept-user ${senderUsername}`);
-    console.log(`   To reject: reject-user ${senderUsername} [block]\n`);
-
-    // Wait for user decision with timeout
     const acceptancePromise = new Promise<boolean>((resolve, reject) => {
       this.pendingAcceptances.set(remoteId, { resolve, reject, timestamp: Date.now(), username: senderUsername, messageBody: message.messageBody || '' });
     });
@@ -550,7 +556,7 @@ export class KeyExchange {
 
     // Need to fetch from DHT
     try {
-      const sender = await this.usernameRegistry.lookup(senderUsername);
+      const sender = await this.usernameRegistry.lookupByPeerId(remoteId);
       if (sender.peerID !== remoteId) {
         throw new Error(`Username/peer mismatch for ${senderUsername}`);
       }
@@ -610,7 +616,7 @@ export class KeyExchange {
     // If signature verification fails, refresh keys from DHT and retry
     if (!signatureValid) {
       try {
-        const refreshed = await this.usernameRegistry.lookup(message.senderUsername);
+        const refreshed = await this.usernameRegistry.lookupByPeerId(remoteId);
         if (refreshed.peerID === remoteId) {
           signingPublicKey = refreshed.signingPublicKey;
           offlinePublicKey = refreshed.offlinePublicKey;
@@ -802,6 +808,13 @@ export class KeyExchange {
         this.sessionManager.removePendingKeyExchange(remoteId);
       }
 
+      // Clean up any existing session - handles case where sender cancelled but we accepted
+      const existingSession = this.sessionManager.getSession(remoteId);
+      if (existingSession) {
+        console.log(`Cleaning up existing session with ${remoteId.slice(0, 8)}... - they initiated a new key exchange`);
+        this.sessionManager.clearSession(remoteId);
+      }
+
       // Validate input and check if sender is blocked
       this.validateKeyExchangeInit(message);
 
@@ -819,7 +832,7 @@ export class KeyExchange {
         console.error('Key exchange init signature verification failed');
         this.onKeyExchangeFailed({
           peerId: remoteId,
-          username: message.senderUsername,
+          username: sender.username,
           error: 'Signature verification failed'
         });
         return;
@@ -828,7 +841,7 @@ export class KeyExchange {
       // Ensure user exists in database with proper cryptographic keys
       await this.ensureUserExistsWithKeys(
         remoteId,
-        message.senderUsername,
+        sender.username,
         keys.signingPublicKey,
         keys.offlinePublicKey,
         keys.signature
@@ -853,7 +866,7 @@ export class KeyExchange {
       // Create chat record in database
       await this._createUserAndChat(
         remoteId,
-        message.senderUsername,
+        sender.username,
         offlineBucketSecret,
         notificationsBucketKey,
         keys.signingPublicKey,
@@ -897,6 +910,8 @@ export class KeyExchange {
     } catch (streamError: unknown) {
       // Stream died - cleanup and propagate error
       this.sessionManager.removePendingKeyExchange(peerId);
+      // NOTE: Don't clear session here! It might belong to a different key exchange attempt
+      // if user cancelled this one and started a new one. Session cleanup happens in initiateKeyExchange catch block.
       const errorMsg = streamError instanceof Error ? streamError.message : String(streamError);
       throw new Error(`Connection lost during key exchange: ${errorMsg}`);
     }
@@ -924,6 +939,7 @@ export class KeyExchange {
           peerId
         );
 
+        // TODO test
         if (!valid) {
           console.log('Rejection signature verification failed.');
           console.log('User may be compromised.');
@@ -981,6 +997,8 @@ export class KeyExchange {
         messageCount: 0,
         lastUsed: Date.now()
       };
+
+      console.log("storing session", session);
 
       this.sessionManager.storeSession(peerId, session);
       this.sessionManager.removePendingKeyExchange(peerId);
@@ -1384,6 +1402,7 @@ export class KeyExchange {
         throw new Error('Failed to create chat');
       }
 
+      console.log("calling onChatCreated", chatId, remoteId, username);
       this.onChatCreated({
         chatId,
         peerId: remoteId,
@@ -1461,5 +1480,18 @@ export class KeyExchange {
     const attempts = Array.from(this.pendingAcceptances.values())
       .filter(({ timestamp }) => timestamp > Date.now() - RECENT_KEY_EXCHANGE_ATTEMPTS_WINDOW);
     return attempts.length;
+  }
+
+  // Cancel a pending key exchange initiated by us
+  cancelPendingKeyExchange(peerId: string): boolean {
+    const abortController = this.keyExchangeAbortControllers.get(peerId);
+    if (abortController) {
+      abortController(); // Reject the promise
+      this.keyExchangeAbortControllers.delete(peerId);
+      this.sessionManager.removePendingKeyExchange(peerId);
+      console.log(`Cancelled pending key exchange with ${peerId.slice(0, 8)}...`);
+      return true;
+    }
+    return false;
   }
 } 

@@ -53,6 +53,7 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
             console.log(`[UI] Key exchange sent to ${data.username}, closing dialog...`);
             dispatch(addPendingKeyExchange(data));
             setNewConversationDialogOpen(false);
+            dispatch(setActivePendingKeyExchange(data.peerId));
         });
 
         return () => {
@@ -112,6 +113,7 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
             onOpenChange={setNewConversationDialogOpen}
             onNewConversation={handleNewConversation}
             backendError={error}
+            setError={setError}
         />
     </>
 };

@@ -195,14 +195,22 @@ export class MessageHandler {
     if (!session) {
       console.log(`No session found, initiating key exchange with ${targetUsernameOrPeerId}`);
 
-      const exchangedUser = await this.keyExchange.initiateKeyExchange(targetPeerId, targetUsernameOrPeerId, message);
-      if (!exchangedUser) {
-        throw new Error('Key exchange failed');
-      }
+      try {
+        const exchangedUser = await this.keyExchange.initiateKeyExchange(targetPeerId, targetUsernameOrPeerId, message);
+        if (!exchangedUser) {
+          throw new Error('Key exchange failed');
+        }
 
-      session = this.sessionManager.getSession(targetPeerId.toString());
-      if (!session) {
-        throw new Error('Key exchange succeeded but session not created');
+        session = this.sessionManager.getSession(targetPeerId.toString());
+        if (!session) {
+          throw new Error('Key exchange succeeded but session not created');
+        }
+      } catch (error: unknown) {
+        // Silently abort if user cancelled - don't show error
+        if (error instanceof Error && error.message === 'KEY_EXCHANGE_CANCELLED') {
+          throw error; // Propagate to sendMessage for silent handling
+        }
+        throw error; // Re-throw other errors normally
       }
     }
 
@@ -282,9 +290,16 @@ export class MessageHandler {
       }
       return { success: false, messageSentStatus: null, error: 'Failed to send message - timed out' };
     } catch (err: unknown) {
+      // Silently handle cancelled key exchanges - user intentionally cancelled
+      if (err instanceof Error && err.message === 'KEY_EXCHANGE_CANCELLED') {
+        console.log(`Message not sent - key exchange was cancelled by user`);
+        return { success: true, messageSentStatus: null, error: null }; // Return success to avoid showing error
+      }
+
       console.error(`Failed to send message to ${targetUsernameOrPeerId}: ${err instanceof Error ? err.message : String(err)}`);
       try {
         const errorText = String(err instanceof Error ? err.message : err).toLowerCase();
+        console.log("errorText :>> ", errorText);
         const shouldFallbackOffline = /econnrefused|user is offline|all multiaddr dials failed|message timeout|socks|tor transport|enetunreach|no valid addresses|ehostunreach|etimedout/.test(errorText);
         if (shouldFallbackOffline) {
           console.log(`Trying to send offline message to ${targetUsernameOrPeerId}`);
@@ -303,13 +318,15 @@ export class MessageHandler {
           await this.storeOfflineMessageDB(user, writeBucketKey, message);
           console.log(`Peer likely offline; stored message for ${targetUsernameOrPeerId} as offline.`);
           return { success: true, messageSentStatus: 'offline', error: null };
+        } else if (errorText.includes("username not found")) {
+          return { success: false, messageSentStatus: null, error: `User ${targetUsernameOrPeerId} not found`};
         }
 
         console.log(`Offline message fallback failed`);
         throw err;
       } catch (offlineErr: unknown) {
-        generalErrorHandler(offlineErr, `Failed to store offline message`);
-        return { success: false, messageSentStatus: null, error: 'Failed to store offline message: ' + (
+        generalErrorHandler(offlineErr, `Failed to send message`);
+        return { success: false, messageSentStatus: null, error: 'Failed to send message: ' + (
           offlineErr instanceof Error ? offlineErr.message : String(offlineErr)) };
       }
     }
@@ -372,15 +389,29 @@ export class MessageHandler {
       throw new Error('Chat not found');
     }
 
+    const timestamp = new Date();
     const messageId = await this.database.createMessage({
       id: crypto.randomUUID(),
       chat_id: chat.id,
       sender_peer_id: this.node.peerId.toString(),
       content: message,
       message_type: 'text',
-      timestamp: new Date()
+      timestamp
     });
     console.log(`Saved message with ID: ${messageId}`);
+
+    // Notify frontend so sender's UI updates
+    const currentUsername = this.usernameRegistry.getCurrentUsername();
+    if (currentUsername) {
+      this.onMessageReceived({
+        messageId,
+        chatId: chat.id,
+        senderPeerId: this.node.peerId.toString(),
+        senderUsername: currentUsername,
+        content: message,
+        timestamp: timestamp.getTime()
+      });
+    }
   }
 
   // Check offline messages (direct)

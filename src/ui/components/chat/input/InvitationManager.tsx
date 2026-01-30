@@ -1,7 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useDispatch } from "react-redux";
 import { Button } from "../../ui/Button";
-import { addChat, removeContactAttempt, setActiveChat, type Chat } from "../../../state/slices/chatSlice";
+import { removeContactAttempt } from "../../../state/slices/chatSlice";
 import { useToast } from "../../ui/use-toast";
 
 type InvitationManagerProps = {
@@ -14,33 +14,8 @@ export const InvitationManager = ({peerId}: InvitationManagerProps) => {
     const [isAccepting, setIsAccepting] = useState(false);
     const [isRejecting, setIsRejecting] = useState(false);
     const { toast } = useToast();
-
-    useEffect(() => {
-        const cleanup = window.kiyeovoAPI.onChatCreated((data) => {
-            // Only handle if it's for this peer
-            if (data.peerId === peerId) {
-                // Create chat object and add to Redux
-                const newChat: Chat = {
-                    id: data.chatId,
-                    type: 'direct',
-                    name: data.username,
-                    peerId: data.peerId,
-                    lastMessage: '',
-                    lastMessageTimestamp: Date.now(),
-                    unreadCount: 0,
-                    status: 'active',
-                    justCreated: true, // Mark as newly created
-                };
-
-                dispatch(addChat(newChat));
-                dispatch(removeContactAttempt(peerId));
-                dispatch(setActiveChat(data.chatId));
-                setIsAccepting(false);
-            }
-        });
-
-        return cleanup;
-    }, [peerId, dispatch]);
+    
+    // Note: onChatCreated listener moved to Main.tsx to avoid race conditions
 
     const handleAccept = async () => {
         setError(undefined);
@@ -70,7 +45,7 @@ export const InvitationManager = ({peerId}: InvitationManagerProps) => {
 
             if (result.success) {
                 dispatch(removeContactAttempt(peerId));
-                toast.success(`Contact request rejected${block ? ' and blocked' : ''}`);
+                toast.info(`Contact request rejected${block ? ' and blocked' : ''}`);
             } else {
                 toast.error(result.error || 'Failed to reject contact request');
             }
@@ -89,10 +64,10 @@ export const InvitationManager = ({peerId}: InvitationManagerProps) => {
             </Button>
 
             <div className="flex items-center gap-4">
-                <Button onClick={() => handleReject(false)} variant="destructive" className="bg-transparent border border-destructive/50 text-destructive hover:bg-destructive/50!" disabled={isAccepting || isRejecting}>
+                <Button onClick={async () => await handleReject(false)} variant="destructive" className="bg-transparent border border-destructive/50 text-destructive hover:bg-destructive/50!" disabled={isAccepting || isRejecting}>
                     {isRejecting ? 'Rejecting...' : 'Reject'}
                 </Button>
-                <Button onClick={() => handleReject(true)} variant="destructive" className="bg-transparent border border-destructive/50 text-destructive" disabled={isAccepting || isRejecting}>
+                <Button onClick={async () => await handleReject(true)} variant="destructive" className="bg-transparent border border-destructive/50 text-destructive" disabled={isAccepting || isRejecting}>
                     {isRejecting ? 'Rejecting & Blocking...' : 'Reject & Block'}
                 </Button>
             </div>
