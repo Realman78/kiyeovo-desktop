@@ -1,4 +1,4 @@
-import type { ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, InitStatus, PasswordRequest, MessageReceivedEvent, KeyExchangeEvent } from './src/core/types';
+import type { ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, InitStatus, PasswordRequest, MessageReceivedEvent, KeyExchangeEvent, SendMessageResponse } from './src/core/types';
 import type { Chat, Message } from './src/core/lib/db/database';
 
 declare global {
@@ -25,7 +25,7 @@ declare global {
             unregister: (username: string) => Promise<{ usernameUnregistered: boolean; peerIdUnregistered: boolean }>;
 
             // Send message
-            sendMessage: (identifier: string, message: string) => Promise<{ success: boolean; messageSentStatus: 'online' | 'offline' | null; error: string | null }>;
+            sendMessage: (identifier: string, message: string) => Promise<SendMessageResponse>;
 
             // Key exchange events
             onKeyExchangeSent: (callback: (data: KeyExchangeEvent) => void) => () => void;

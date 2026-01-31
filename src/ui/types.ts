@@ -8,3 +8,5 @@ export interface PasswordRequest {
     showRecoveryOption?: boolean; // Show recovery phrase option after failed attempt
     keychainAvailable?: boolean; // Whether OS keychain is available
   }
+
+export type MessageSentStatus = 'online' | 'offline' | null;

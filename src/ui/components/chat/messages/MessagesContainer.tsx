@@ -4,6 +4,7 @@ import type { RootState } from "../../../state/store";
 import { useDispatch, useSelector } from "react-redux";
 import { formatTimestampToHourMinute } from "../../../utils/dateUtils";
 import { PendingNotifications } from "./PendingNotifications";
+import type { MessageSentStatus } from "../../../types";
 
 type MessagesContainerProps = {
   messages: ChatMessage[];
@@ -34,6 +35,7 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
               content: msg.content,
               timestamp: msg.timestamp.getTime(),
               messageType: msg.message_type as 'text' | 'file' | 'image' | 'system',
+              messageSentStatus: 'online' as MessageSentStatus
             }
           });
           dispatch(setMessages(messages));
@@ -61,9 +63,17 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
     }
   }, [activeChat?.justCreated, activeChat?.id, messages.length, dispatch]);
 
+  useEffect(() => {
+    // TODO scroll to bottom on first open and when I send a new message,
+    // not when a new message is received
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messagesEndRef, messages]);
+
   const showEmptyState = !isPending && messages.length === 0;
 
-  return <div className={`flex-1 overflow-y-auto p-6 space-y-4`}>
+  return <div className={`flex-1 overflow-y-auto p-6 space-y-2`}>
     {showEmptyState && (
       <div className="w-full flex justify-center items-center h-full">
         <div className="text-muted-foreground text-sm">
@@ -96,7 +106,7 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
           {showTimestamp && (
             <span className="text-xs text-muted-foreground mt-1 font-mono">
               {formatTimestampToHourMinute(message.timestamp)}
-              {/* {message.sent && message.status === "read" && " • read"} */}
+              {message.messageSentStatus === 'offline' && " • offline"}
             </span>
           )}
         </div>

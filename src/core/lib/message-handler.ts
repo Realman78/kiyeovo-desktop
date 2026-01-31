@@ -1,5 +1,5 @@
 import { peerIdFromString } from '@libp2p/peer-id';
-import type { ChatNode, StreamHandlerContext, AuthenticatedEncryptedMessage, OfflineMessage, OfflineSenderInfo, ConversationSession, EncryptedMessage, ContactMode, KeyExchangeEvent, ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent } from '../types.js';
+import type { ChatNode, StreamHandlerContext, AuthenticatedEncryptedMessage, OfflineMessage, OfflineSenderInfo, ConversationSession, EncryptedMessage, ContactMode, KeyExchangeEvent, ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent, SendMessageResponse, StrippedMessage, MessageSentStatus } from '../types.js';
 import { CHAT_PROTOCOL, MESSAGE_TIMEOUT, SESSION_MANAGER_CLEANUP_INTERVAL } from '../constants.js';
 import { SessionManager } from './session-manager.js';
 import { MessageEncryption } from './message-encryption.js';
@@ -111,7 +111,8 @@ export class MessageHandler {
             content: decryptedContent,
             senderPeerId: remoteId,
             senderUsername: senderUsername,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            messageSentStatus: 'online'
           });
         } catch (error: unknown) {
           generalErrorHandler(error, `Error saving message to database`);
@@ -238,7 +239,7 @@ export class MessageHandler {
     return { user, session, peerId: targetPeerId };
   }
 
-  async sendMessage(targetUsernameOrPeerId: string, message: string): Promise<{ success: boolean, messageSentStatus: 'online' | 'offline' | null, error: string | null }> {
+  async sendMessage(targetUsernameOrPeerId: string, message: string): Promise<SendMessageResponse> {
     let user: User | null = null;
     try {
       const { user: resolvedUser, session, peerId: targetPeerId } = await this.ensureUserSession(targetUsernameOrPeerId, message);
@@ -280,13 +281,13 @@ export class MessageHandler {
 
       const res = await Promise.race([sendWithTimeout(), timeoutPromise]);
       if (res) {
-        await this.saveMessageToDatabase(targetPeerId.toString(), message);
+        const strippedMessage = await this.saveMessageToDatabase(targetPeerId.toString(), message, 'online');
         // Update ACK sent timestamp if we included an ACK
         if (shouldSendAck) {
           this.database.updateOfflineLastAckSentByPeerId(targetPeerId.toString(), lastReadTimestamp);
         }
         console.log(`Encrypted message sent to ${targetUsernameOrPeerId}`);
-        return { success: true, messageSentStatus: 'online', error: null };
+        return { success: true, messageSentStatus: 'online', error: null, message: strippedMessage };
       }
       return { success: false, messageSentStatus: null, error: 'Failed to send message - timed out' };
     } catch (err: unknown) {
@@ -315,9 +316,9 @@ export class MessageHandler {
           // Standard construction works for both ECDH-derived and random secrets
           const writeBucketKey = this.keyExchange.constructWriteBucketKey(bucketSecret);
 
-          await this.storeOfflineMessageDB(user, writeBucketKey, message);
+          const strippedMessage = await this.storeOfflineMessageDB(user, writeBucketKey, message);
           console.log(`Peer likely offline; stored message for ${targetUsernameOrPeerId} as offline.`);
-          return { success: true, messageSentStatus: 'offline', error: null };
+          return { success: true, messageSentStatus: 'offline', message: strippedMessage, error: null };
         } else if (errorText.includes("username not found")) {
           return { success: false, messageSentStatus: null, error: `User ${targetUsernameOrPeerId} not found`};
         }
@@ -332,7 +333,7 @@ export class MessageHandler {
     }
   }
 
-  private async storeOfflineMessageDB(user: User, writeBucketKey: string, message: string): Promise<void> {
+  private async storeOfflineMessageDB(user: User, writeBucketKey: string, message: string): Promise<StrippedMessage> {
     try {
       const currentUsername = this.usernameRegistry.getCurrentUsername() ?? 'unknown';
       const userIdentity = this.usernameRegistry.getUserIdentity();
@@ -371,8 +372,9 @@ export class MessageHandler {
         this.database.updateOfflineLastAckSentByPeerId(user.peer_id, lastReadTimestamp);
       }
 
-      await this.saveMessageToDatabase(user.peer_id, message);
+      const strippedMessage = await this.saveMessageToDatabase(user.peer_id, message, 'offline');
       console.log(`Saved offline message to sender's database`);
+      return strippedMessage;
     } catch (error: unknown) {
       generalErrorHandler(error);
       throw error;
@@ -381,8 +383,9 @@ export class MessageHandler {
 
   private async saveMessageToDatabase(
     peerId: string,
-    message: string
-  ): Promise<void> {
+    message: string,
+    messageSentStatus: MessageSentStatus
+  ): Promise<StrippedMessage> {
     const chat = this.database.getChatByPeerId(peerId);
     if (!chat) {
       console.log(`This should never happen!!!!`);
@@ -409,9 +412,11 @@ export class MessageHandler {
         senderPeerId: this.node.peerId.toString(),
         senderUsername: currentUsername,
         content: message,
-        timestamp: timestamp.getTime()
+        timestamp: timestamp.getTime(),
+        messageSentStatus
       });
     }
+    return {chatId: chat.id, messageId, content: message, timestamp: timestamp.getTime(), messageType: 'text'};
   }
 
   // Check offline messages (direct)

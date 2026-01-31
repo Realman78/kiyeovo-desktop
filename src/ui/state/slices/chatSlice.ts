@@ -1,5 +1,6 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import type { ContactAttempt } from '../../components/sidebar/contact-attempts/ContactAttemptItem';
+import type { MessageSentStatus } from '../../types';
 
 // PendingKeyExchange is used for showing messages on the UI (Key Exchange) 
 // that are sent, but not accepted by the recipient
@@ -17,6 +18,7 @@ export interface ChatMessage {
   content: string;
   timestamp: number;
   messageType: 'text' | 'file' | 'image' | 'system';
+  messageSentStatus: MessageSentStatus;
 }
 
 export interface Chat {

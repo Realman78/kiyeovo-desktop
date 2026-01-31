@@ -44,12 +44,14 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
     useEffect(() => {
         const unsubStatus = window.kiyeovoAPI.onDHTConnectionStatus((status: { connected: boolean }) => {
             console.log('DHT connection status:', status.connected);
-          setIsDHTConnected(status.connected);
-          dispatch(setConnected(status.connected));
+            setIsDHTConnected(status.connected);
+            dispatch(setConnected(status.connected));
         });
 
         // Listen for key exchange sent event (to close dialog immediately)
         const unsubSent = window.kiyeovoAPI.onKeyExchangeSent((data) => {
+            // this needs to be called only for new conversations, not for existing chats
+            if (!newConversationDialogOpen) return;
             console.log(`[UI] Key exchange sent to ${data.username}, closing dialog...`);
             dispatch(addPendingKeyExchange(data));
             setNewConversationDialogOpen(false);
@@ -57,17 +59,17 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
         });
 
         return () => {
-          unsubStatus();
-          unsubSent();
+            unsubStatus();
+            unsubSent();
         };
-      }, [dispatch]);
+    }, [dispatch]);
 
-      useEffect(() => {
+    useEffect(() => {
         if (isConnected) {
             setIsDHTConnected(true);
         }
-      }, [isConnected]);
-    
+    }, [isConnected]);
+
 
     const handleShowDhtDialog = () => {
         setDhtDialogOpen(true);

@@ -822,6 +822,7 @@ export class ChatDatabase {
 
     getAllChatsWithUsernameAndLastMsg(myPeerId: string): Array<Chat & { 
         username?: string | undefined;
+        other_peer_id?: string | undefined;
         last_message_content?: string | undefined;
         last_message_timestamp?: Date | undefined;
         last_message_sender?: string | undefined;
@@ -830,6 +831,7 @@ export class ChatDatabase {
             SELECT
                 c.*,
                 u.username,
+                cp.peer_id as other_peer_id,
                 last_msg.content as last_message_content,
                 last_msg.timestamp as last_message_timestamp,
                 last_msg.sender_peer_id as last_message_sender
@@ -850,6 +852,7 @@ export class ChatDatabase {
         return rows.map(row => ({
             ...this.mapChatRow(row),
             username: row.username || undefined,
+            other_peer_id: row.other_peer_id || undefined,
             last_message_content: row.last_message_content || undefined,
             last_message_timestamp: row.last_message_timestamp ? new Date(row.last_message_timestamp) : undefined,
             last_message_sender: row.last_message_sender || undefined

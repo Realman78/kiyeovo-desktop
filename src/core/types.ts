@@ -25,14 +25,27 @@ export interface ChatMessage {
   timestamp: number
 }
 
+export interface SendMessageResponse {
+  success: boolean;
+  message?: StrippedMessage | null;
+  messageSentStatus: 'online' | 'offline' | null;
+  error: string | null;
+}
+
+// We dont have to send sender info because we have it in the chat state
+export interface StrippedMessage {
+  chatId: number;
+  messageId: string;
+  content: string;
+  timestamp: number;
+  messageType: 'text' | 'file' | 'image' | 'system';
+}
+
 // Stream handler context
 export interface StreamContext {
   stream: Stream
   connection: Connection
 }
-
-// Command handler function type
-export type CommandHandler = (parts: string[]) => Promise<void> | void
 
 // Application error types
 export interface ChatError extends Error {
@@ -546,6 +559,7 @@ export interface MessageReceivedEvent {
   senderPeerId: string;
   senderUsername: string;
   timestamp: number;
+  messageSentStatus: MessageSentStatus;
 }
 
 export type MessageSentStatus = 'online' | 'offline' | null;

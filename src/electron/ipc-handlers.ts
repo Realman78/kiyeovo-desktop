@@ -1,6 +1,7 @@
 import type { IpcMain } from 'electron';
 import { IPC_CHANNELS, PENDING_KEY_EXCHANGE_EXPIRATION, type P2PCore } from '../core/index.js';
 import { validateMessageLength, validateUsername } from '../core/utils/validators.js';
+import { peerIdFromString } from '@libp2p/peer-id';
 
 /**
  * Setup all IPC handlers for communication between renderer and main process
@@ -147,8 +148,20 @@ function setupMessagingHandlers(
         return { success: false, messageSentStatus: null, error: 'P2P core not initialized' };
       }
 
-      if (!validateUsername(identifier)) {
-        return { success: false, messageSentStatus: null, error: 'Invalid username' };
+      console.log(`[IPC] Sending message to ${identifier}: ${message}`);
+
+      // Check if identifier is a valid peer ID or username
+      let isPeerId = false;
+      try {
+        peerIdFromString(identifier);
+        isPeerId = true;
+        console.log(`[IPC] Identifier is a peer ID`);
+      } catch {
+        // Not a peer ID, check if it's a valid username
+        if (!validateUsername(identifier)) {
+          return { success: false, messageSentStatus: null, error: 'Invalid username or peer ID' };
+        }
+        console.log(`[IPC] Identifier is a username`);
       }
 
       if (!validateMessageLength(message)) {
@@ -158,9 +171,10 @@ function setupMessagingHandlers(
       console.log(`[IPC] Sending message to ${identifier}: ${message}`);
 
       const response = await p2pCore.messageHandler.sendMessage(identifier, message);
+      console.log(`[IPC] Message sent response: ${JSON.stringify(response)}`);
 
       if (response.success) {
-        return { success: true, messageSentStatus: response.messageSentStatus, error: null };
+        return { success: true, messageSentStatus: response.messageSentStatus, error: null, message: response.message };
       }
       return { success: false, messageSentStatus: null, error: response.error ?? 'Failed to send message' };
     } catch (error) {

@@ -24,7 +24,8 @@ export const Main = () => {
     });
 
     const unsubMessageReceived = window.kiyeovoAPI.onMessageReceived((data) => {
-      console.log(`Message received in chat ${data.chatId} from ${data.senderUsername}`);
+      console.log(`Message received`);
+      console.log(data);
 
       dispatch(addMessage({
         id: data.messageId,
@@ -33,7 +34,8 @@ export const Main = () => {
         senderUsername: data.senderUsername,
         content: data.content,
         timestamp: data.timestamp,
-        messageType: 'text'
+        messageType: 'text',
+        messageSentStatus: data.messageSentStatus
       }));
     });
 
@@ -77,11 +79,11 @@ export const Main = () => {
         if (result.success) {
           console.log(`[UI] Loaded ${result.chats.length} chats`);
 
-          const mappedChats = result.chats.map((dbChat: any) => ({
+          const mappedChats = result.chats.filter((dbChat: any) => dbChat.other_peer_id !== undefined).map((dbChat: any) => ({
             id: dbChat.id,
             type: dbChat.type,
             name: dbChat.username || dbChat.name,
-            peerId: dbChat.name,
+            peerId: dbChat.other_peer_id,
             lastMessage: dbChat.last_message_content || 'SYSTEM: No messages yet',
             lastMessageTimestamp: dbChat.last_message_timestamp 
               ? new Date(dbChat.last_message_timestamp).getTime() 

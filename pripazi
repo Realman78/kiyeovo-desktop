@@ -38,3 +38,6 @@ Still “startup blocked” (by design) until the user submits; but at least it 
       timestamp,
     };
     ovo gori je redundantno. umjesto da content bude keyexchangeinit, neka to prijede u type i neka se samo type gleda pa ces moc maknut messagebody
+
+
+Should I save the information about a message being "offline" to show for later? its not hard, but im not sure how useful. maybe as last feature
