@@ -19,6 +19,7 @@ export interface ChatMessage {
   timestamp: number;
   messageType: 'text' | 'file' | 'image' | 'system';
   messageSentStatus: MessageSentStatus;
+  currentUserPeerId?: string; // For determining if message is from current user
 }
 
 export interface Chat {
@@ -31,6 +32,8 @@ export interface Chat {
   unreadCount: number;
   status: 'active' | 'pending' | 'awaiting_acceptance';
   justCreated?: boolean; // Flag for newly created chats waiting for first message
+  fetchedOffline?: boolean; // Whether offline messages have been checked for this chat
+  isFetchingOffline?: boolean; // Whether offline messages are currently being fetched
 }
 
 interface ChatState {
@@ -98,31 +101,44 @@ const chatSlice = createSlice({
       }
     },
     addMessage: (state, action: PayloadAction<ChatMessage>) => {
-      const { chatId } = action.payload;
-      state.messages.push(action.payload);
+      const { chatId, id } = action.payload;
 
+      // Check if message already exists (prevent duplicates)
+      const isDuplicate = state.messages.some(msg => msg.id === id);
+
+      if (isDuplicate) {
+        console.log(`[Redux] Message ${id} already exists, skipping duplicate but updating chat metadata`);
+      } else {
+        // Only add to array if not duplicate
+        state.messages.push(action.payload);
+      }
+
+      // ALWAYS update chat metadata (even for duplicates)
       const chatIndex = state.chats.findIndex((c) => c.id === chatId);
       if (chatIndex !== -1) {
         const chat = state.chats[chatIndex];
-        
+
         // Update chat properties
         chat.lastMessage = action.payload.content;
         chat.lastMessageTimestamp = action.payload.timestamp;
-        
+
         // Clear justCreated flag when first message arrives
         if (chat.justCreated) {
           chat.justCreated = false;
         }
-        
-        if (state.activeChat?.id !== chatId) {
+
+        // Only increment unread count if:
+        // - Not a duplicate (already counted)
+        // - Chat is not active
+        // - Message is not from current user
+        const isFromCurrentUser = action.payload.currentUserPeerId &&
+                                   action.payload.senderPeerId === action.payload.currentUserPeerId;
+        if (!isDuplicate && state.activeChat?.id !== chatId && !isFromCurrentUser) {
           chat.unreadCount += 1;
         }
-        
-        // Move to top only if not already there
-        if (chatIndex > 0) {
-          state.chats.splice(chatIndex, 1);
-          state.chats.unshift(chat);
-        }
+
+        // Sort chats by lastMessageTimestamp (most recent first)
+        state.chats.sort((a, b) => b.lastMessageTimestamp - a.lastMessageTimestamp);
       }
     },
     setChats: (state, action: PayloadAction<Chat[]>) => {
@@ -178,6 +194,22 @@ const chatSlice = createSlice({
     removePendingKeyExchange: (state, action: PayloadAction<string>) => {
       state.pendingKeyExchanges = state.pendingKeyExchanges.filter((pk) => pk.peerId !== action.payload);
     },
+    setOfflineFetchStatus: (state, action: PayloadAction<{ chatId: number; isFetching: boolean }>) => {
+      const chat = state.chats.find((c) => c.id === action.payload.chatId);
+      if (chat) {
+        chat.isFetchingOffline = action.payload.isFetching;
+      }
+    },
+    markOfflineFetched: (state, action: PayloadAction<number | number[]>) => {
+      const chatIds = Array.isArray(action.payload) ? action.payload : [action.payload];
+      chatIds.forEach(chatId => {
+        const chat = state.chats.find((c) => c.id === chatId);
+        if (chat) {
+          chat.fetchedOffline = true;
+          chat.isFetchingOffline = false;
+        }
+      });
+    },
   },
 });
 
@@ -198,7 +230,9 @@ export const {
   setMessages,
   setPendingKeyExchanges,
   addPendingKeyExchange,
-  removePendingKeyExchange
+  removePendingKeyExchange,
+  setOfflineFetchStatus,
+  markOfflineFetched
 } = chatSlice.actions;
 
 export default chatSlice.reducer;

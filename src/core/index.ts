@@ -155,9 +155,7 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
 
   const messageHandler = new MessageHandler(node, usernameRegistry, database, sendKeyExchangeSent, sendContactRequestReceived, sendChatCreated, sendKeyExchangeFailed, sendMessageReceived);
 
-  // Check offline messages once at startup
-  sendStatus('Checking for offline messages...', 'messaging');
-  await messageHandler.checkOfflineMessages();
+  // Offline messages will be checked from UI after chats load
 
   // Start periodic database cleanup
   const cleanupInterval = setInterval(() => {

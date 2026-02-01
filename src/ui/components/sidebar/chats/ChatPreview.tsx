@@ -23,16 +23,23 @@ export const ChatPreview: FC<ChatPreviewProps> = ({ chat, onSelectChat, selected
                         {formatTimestampToHourMinute(chat.lastMessageTimestamp)}
                     </span>
                 </div>
-                <div className="flex items-center justify-between">
-
-                    <p className="text-xs text-muted-foreground truncate w-[90%]">
+                <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs text-muted-foreground truncate flex-1">
                         {chat.lastMessage || "SYSTEM: No messages yet"}
                     </p>
-                    {chat.unreadCount > 0 && (
-                        <div className="shrink-0 w-5 h-5 rounded-full bg-primary text-primary-foreground text-xs font-mono font-bold flex items-center justify-center">
-                            {chat.unreadCount}
-                        </div>
-                    )}
+                    <div className="flex items-center gap-1 shrink-0">
+                        {chat.isFetchingOffline && (
+                            <div className="w-4 h-4 border-2 border-muted-foreground border-t-transparent rounded-full animate-spin" title="Checking for offline messages..." />
+                        )}
+                        {!chat.fetchedOffline && !chat.isFetchingOffline && (
+                            <div className="w-2 h-2 rounded-full bg-yellow-500" title="Offline messages not checked" />
+                        )}
+                        {chat.unreadCount > 0 && (
+                            <div className="w-5 h-5 rounded-full bg-primary text-primary-foreground text-xs font-mono font-bold flex items-center justify-center">
+                                {chat.unreadCount}
+                            </div>
+                        )}
+                    </div>
                 </div>
             </div>
         </button>

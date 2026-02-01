@@ -420,31 +420,51 @@ export class MessageHandler {
   }
 
   // Check offline messages (direct)
-  private async performOfflineMessageCheck(): Promise<void> {
-    console.log("Checking for offline direct messages...");
+  private async performOfflineMessageCheck(chatIds?: number[]): Promise<{checkedChatIds: number[], unreadFromChats: Map<number, number>}> {
+    console.log(chatIds
+      ? `Checking for offline messages in ${chatIds.length} chat${chatIds.length > 1 ? 's' : ''}...`
+      : "Checking for offline direct messages (top 10)...");
 
     // Get bucket info for reading: secret + peer's signing public key
-    const bucketInfoList = this.database.getOfflineReadBucketInfo(10);
+    const bucketInfoList = chatIds
+      ? this.database.getOfflineReadBucketInfoForChats(chatIds)
+      : this.database.getOfflineReadBucketInfo(10);
 
     if (bucketInfoList.length === 0) {
       console.log('No chats found for offline message check');
-      return;
+      return {checkedChatIds: [], unreadFromChats: new Map()};
     }
 
     // Construct read bucket keys (uses peer's pubkey to read their messages)
-    const readBuckets: Array<{ key: string; peerPubKey: string; peerId: string; lastReadTimestamp: number }> = [];
+    const readBuckets: Array<{ chatId?: number; key: string; peerPubKey: string; peerId: string; lastReadTimestamp: number }> = [];
+    const checkedChats: number[] = [];
+
     for (const info of bucketInfoList) {
       // Standard construction works for both ECDH-derived and random secrets
       const readBucketKey = this.keyExchange.constructReadBucketKey(
         info.offline_bucket_secret,
         info.signing_public_key
       );
-      readBuckets.push({
-        key: readBucketKey,
-        peerPubKey: info.signing_public_key,
-        peerId: info.peer_id,
-        lastReadTimestamp: info.offline_last_read_timestamp
-      });
+
+      const chatId = 'chat_id' in info ? (info as any).chat_id as number : undefined;
+
+      if (chatId !== undefined) {
+        readBuckets.push({
+          chatId,
+          key: readBucketKey,
+          peerPubKey: info.signing_public_key,
+          peerId: info.peer_id,
+          lastReadTimestamp: info.offline_last_read_timestamp
+        });
+        checkedChats.push(chatId);
+      } else {
+        readBuckets.push({
+          key: readBucketKey,
+          peerPubKey: info.signing_public_key,
+          peerId: info.peer_id,
+          lastReadTimestamp: info.offline_last_read_timestamp
+        });
+      }
     }
 
     const bucketKeys = readBuckets.map(b => b.key);
@@ -452,7 +472,7 @@ export class MessageHandler {
 
     if (store.messages.length === 0) {
       console.log('No offline direct messages found');
-      return;
+      return {checkedChatIds: checkedChats, unreadFromChats: new Map()};
     }
 
     console.log(`Found ${store.messages.length} offline direct message(s)`);
@@ -460,6 +480,8 @@ export class MessageHandler {
     // Track max timestamp per peer to update after processing
     const maxTimestampPerPeer: Map<string, number> = new Map();
     let processedCount = 0;
+
+    const unreadFromChats: Map<number, number> = new Map();
 
     for (const msg of store.messages) {
       if (!msg.bucket_key) continue;
@@ -512,7 +534,9 @@ export class MessageHandler {
         }
 
         // eslint-disable-next-line no-await-in-loop
-        await this.saveOfflineMessageToDatabase(msg, senderInfo);
+        const msgChatId = await this.saveOfflineMessageToDatabase(msg, senderInfo);
+        const unreadCount = unreadFromChats.get(msgChatId) ?? 0;
+        unreadFromChats.set(msgChatId, unreadCount + 1);
         processedCount++;
 
         // Track max timestamp for this peer
@@ -535,13 +559,16 @@ export class MessageHandler {
     if (processedCount > 0) {
       console.log(`Processed ${processedCount} new offline direct messages`);
     }
+
+    return {checkedChatIds: checkedChats, unreadFromChats: unreadFromChats};
   }
 
-  async checkOfflineMessages(): Promise<void> {
+  async checkOfflineMessages(chatIds?: number[]): Promise<{checkedChatIds: number[], unreadFromChats: Map<number, number>}> {
     try {
-      await this.performOfflineMessageCheck();
+      return await this.performOfflineMessageCheck(chatIds);
     } catch (error: unknown) {
       generalErrorHandler(error);
+      return {checkedChatIds: [], unreadFromChats: new Map()};
     }
   }
 
@@ -581,11 +608,16 @@ export class MessageHandler {
   /**
    * Save an offline message to the database.
    * Note: Signature verification is already done in performOfflineMessageCheck before calling this.
+   *
+   * TODO: Consider yielding offline messages as they're processed for real-time UI updates.
+   * Current approach: UI refreshes all chats after batch completes (simple but less efficient).
+   * Future optimization: Return message summaries per chat and emit batched events to avoid
+   * re-fetching all chats from database. See discussion in implementation notes.
    */
   private async saveOfflineMessageToDatabase(
     msg: OfflineMessage,
     senderInfo: OfflineSenderInfo,
-  ): Promise<void> {
+  ): Promise<number> {
     console.log(`Processing offline message from ${senderInfo.username} (${senderInfo.peer_id})`);
 
     const chat = this.database.getChatByPeerId(senderInfo.peer_id);
@@ -612,6 +644,19 @@ export class MessageHandler {
       timestamp: new Date(msg.timestamp)
     });
     console.log(`Saved offline message with ID: ${messageId}`);
+
+    // Fire message received event so UI updates
+    this.onMessageReceived({
+      chatId: chat.id,
+      messageId: messageId,
+      content: decryptedContent,
+      senderPeerId: senderInfo.peer_id,
+      senderUsername: senderInfo.username,
+      timestamp: msg.timestamp,
+      messageSentStatus: 'offline'
+    });
+
+    return chat.id;
   }
 
   cleanup(): void {

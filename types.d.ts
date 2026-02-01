@@ -53,6 +53,10 @@ declare global {
             getMessages: (chatId: number) => Promise<{ success: boolean; messages: Array<Message & { sender_username?: string }>; error: string | null }>;
             onMessageReceived: (callback: (data: MessageReceivedEvent) => void) => () => void;
 
+            // Offline message events
+            checkOfflineMessages: (chatIds?: number[]) => Promise<{ success: boolean; checkedChatIds: number[]; unreadFromChats: Map<number, number>; error: string | null }>;
+            checkOfflineMessagesForChat: (chatId: number) => Promise<{ success: boolean; checkedChatIds: number[]; unreadFromChats: Map<number, number>; error: string | null }>;
+
             // Pending key exchange events
             cancelPendingKeyExchange: (peerId: string) => Promise<{ success: boolean; error: string | null }>;
         };

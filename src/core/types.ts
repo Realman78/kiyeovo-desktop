@@ -498,6 +498,12 @@ export const IPC_CHANNELS = {
   // Messages
   GET_MESSAGES: 'messages:get',
 
+  // Offline messages
+  CHECK_OFFLINE_MESSAGES: 'offlineMessages:check',
+  CHECK_OFFLINE_MESSAGES_FOR_CHAT: 'offlineMessages:checkForChat',
+  OFFLINE_MESSAGES_FETCH_START: 'offlineMessages:fetchStart',
+  OFFLINE_MESSAGES_FETCH_COMPLETE: 'offlineMessages:fetchComplete',
+
   // Pending key exchange events
   CANCEL_PENDING_KEY_EXCHANGE: 'pendingKeyExchange:cancel',
 } as const;
@@ -563,3 +569,13 @@ export interface MessageReceivedEvent {
 }
 
 export type MessageSentStatus = 'online' | 'offline' | null;
+
+export interface OfflineCheckCacheEntry {
+  timestamp: number;
+  result: {
+    success: boolean;
+    checkedChatIds: number[];
+    unreadFromChats: Map<number, number>;
+    error: string | null;
+  };
+}

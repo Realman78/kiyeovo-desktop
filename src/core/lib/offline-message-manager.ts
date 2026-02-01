@@ -1,7 +1,7 @@
 import { randomUUID, publicEncrypt } from 'crypto';
 import { gzip, gunzip } from 'zlib';
 import { promisify } from 'util';
-import type { ChatNode, OfflineMessage, OfflineMessageStore, OfflineSenderInfo, OfflineSignedPayload, StoreSignedPayload } from '../types.js';
+import type { ChatNode, OfflineCheckCacheEntry, OfflineMessage, OfflineMessageStore, OfflineSenderInfo, OfflineSignedPayload, StoreSignedPayload } from '../types.js';
 import { ed25519 } from '@noble/curves/ed25519';
 import { sha256 } from '@noble/hashes/sha2';
 import { generalErrorHandler } from '../utils/general-error.js';
@@ -17,6 +17,9 @@ const gunzipAsync = promisify(gunzip);
  */
 // eslint-disable-next-line @typescript-eslint/no-extraneous-class
 export class OfflineMessageManager {
+    static offlineCheckCache: Map<string, OfflineCheckCacheEntry> = new Map<string, OfflineCheckCacheEntry>();
+    static inFlightOfflineChecks: Map<string, Promise<any>> = new Map<string, Promise<any>>();
+ 
     static async storeOfflineMessage(
         node: ChatNode,
         bucketKey: string,
@@ -61,12 +64,11 @@ export class OfflineMessageManager {
         bucketKeys: string[],
         appendBucketKey: boolean = true
     ): Promise<OfflineMessageStore> {
-        const keyBytes = bucketKeys.map(key => new TextEncoder().encode(key));
-        const messages: OfflineMessage[] = [];
-        for (let i = 0; i < keyBytes.length; i++) {
-            const key = keyBytes[i];
-            const bucketKey = bucketKeys[i];
-            if (!key || !bucketKey) throw new Error(`Invalid key or bucket key: ${key} or ${bucketKey}`);
+        // Fetch all buckets in parallel for better performance (especially over Tor)
+        const fetchPromises = bucketKeys.map(async (bucketKey) => {
+            const key = new TextEncoder().encode(bucketKey);
+            const bucketMessages: OfflineMessage[] = [];
+
             try {
                 let foundValue = false;
 
@@ -80,16 +82,16 @@ export class OfflineMessageManager {
                         const store = JSON.parse(decompressedBuffer.toString('utf8')) as unknown;
 
                         if (!store || typeof store !== 'object' || !('messages' in store) || !Array.isArray(store.messages) || store.messages.length === 0) continue;
-                        
+
                         const validMessages = store.messages.filter(
                             (msg: unknown) => OfflineMessageManager.isValidOfflineMessage(msg)
                         );
 
-                        if (appendBucketKey) 
-                            messages.push(...validMessages.map(msg => ({ ...msg, bucket_key: bucketKey })));
-                        else 
-                            messages.push(...validMessages);
-
+                        if (appendBucketKey) {
+                            bucketMessages.push(...validMessages.map(msg => ({ ...msg, bucket_key: bucketKey })));
+                        } else {
+                            bucketMessages.push(...validMessages);
+                        }
                     }
                 }
 
@@ -97,11 +99,17 @@ export class OfflineMessageManager {
                     console.log(`No value found in DHT for bucket key: ${bucketKey}`);
                 }
 
-
             } catch (error: unknown) {
-                generalErrorHandler(error);
+                generalErrorHandler(error, `Failed to fetch offline messages for bucket: ${bucketKey}`);
             }
-        }
+
+            return bucketMessages;
+        });
+
+        // Wait for all bucket fetches to complete in parallel
+        const results = await Promise.all(fetchPromises);
+        const messages = results.flat();
+
         // Return structure with placeholder signature fields
         // The caller must call signStore() before putting to DHT
         return {

@@ -36,7 +36,7 @@ export const MESSAGE_TIMEOUT = 10000;                  // 10 seconds
 export const MAX_KEY_EXCHANGE_AGE = 2 * 60 * 1000;     // 2 minutes
 export const ROTATION_COOLDOWN = 30 * 1000;            // 30 seconds - min time between rotations
 export const RECENT_KEY_EXCHANGE_ATTEMPTS_WINDOW = 5 * 60 * 1000; // 5 minutes
-
+export const OFFLINE_CHECK_CACHE_TTL = 20 * 1000; // 20 seconds
 /**
  * Other
  */

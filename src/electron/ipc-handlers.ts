@@ -1,7 +1,8 @@
 import type { IpcMain } from 'electron';
-import { IPC_CHANNELS, PENDING_KEY_EXCHANGE_EXPIRATION, type P2PCore } from '../core/index.js';
+import { IPC_CHANNELS, OFFLINE_CHECK_CACHE_TTL, PENDING_KEY_EXCHANGE_EXPIRATION, type P2PCore } from '../core/index.js';
 import { validateMessageLength, validateUsername } from '../core/utils/validators.js';
 import { peerIdFromString } from '@libp2p/peer-id';
+import { OfflineMessageManager } from '../core/lib/offline-message-manager.js';
 
 /**
  * Setup all IPC handlers for communication between renderer and main process
@@ -33,6 +34,9 @@ export function setupIPCHandlers(
 
   // Pending key exchange handlers
   setupPendingKeyExchangeHandlers(ipcMain, getP2PCore);
+
+  // Offline message handlers
+  setupOfflineMessageHandlers(ipcMain, getP2PCore);
 }
 
 /**
@@ -429,8 +433,8 @@ function setupPendingKeyExchangeHandlers(
       }
 
       console.log(`[IPC] Cancelling pending key exchange for peer: ${peerId}`);
-      const cancelled = p2pCore.messageHandler.getKeyExchange().cancelPendingKeyExchange(peerId);
-      
+      const cancelled = await p2pCore.messageHandler.getKeyExchange().cancelPendingKeyExchange(peerId);
+
       if (!cancelled) {
         return { success: false, error: 'No pending key exchange found' };
       }
@@ -439,6 +443,163 @@ function setupPendingKeyExchangeHandlers(
     } catch (error) {
       console.error('[IPC] Failed to cancel pending key exchange:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to cancel pending key exchange' };
+    }
+  });
+}
+
+/**
+ * Generate cache key from chat IDs (sorted for consistency)
+ */
+function getOfflineCheckCacheKey(chatIds?: number[]): string {
+  if (!chatIds || chatIds.length === 0) {
+    return '__TOP_10__'; // Sentinel value for "check top 10"
+  }
+  return chatIds.slice().sort((a, b) => a - b).join(',');
+}
+
+/**
+ * Clear expired entries from cache
+ */
+function cleanupOfflineCheckCache(): void {
+  const now = Date.now();
+  for (const [key, entry] of OfflineMessageManager.offlineCheckCache.entries()) {
+    if (now - entry.timestamp > OFFLINE_CHECK_CACHE_TTL) {
+      OfflineMessageManager.offlineCheckCache.delete(key);
+    }
+  }
+}
+
+/**
+ * Offline message handlers
+ */
+function setupOfflineMessageHandlers(
+  ipcMain: IpcMain,
+  getP2PCore: () => P2PCore | null
+): void {
+  // Check offline messages for specific chats (or top 10 if no IDs provided)
+  ipcMain.handle(IPC_CHANNELS.CHECK_OFFLINE_MESSAGES, async (_event, chatIds?: number[]) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, checkedChatIds: [], error: 'P2P core not initialized' };
+      }
+
+      const cacheKey = getOfflineCheckCacheKey(chatIds);
+
+      // Check if there's already an in-flight request for this key
+      const inFlightPromise = OfflineMessageManager.inFlightOfflineChecks.get(cacheKey);
+      if (inFlightPromise) {
+        console.log('[IPC] Request already in-flight, sharing promise');
+        return await inFlightPromise;
+      }
+
+      // Check cache
+      const cached = OfflineMessageManager.offlineCheckCache.get(cacheKey);
+      const now = Date.now();
+
+      if (cached && (now - cached.timestamp < OFFLINE_CHECK_CACHE_TTL)) {
+        console.log(`[IPC] Returning cached offline check result (${Math.round((now - cached.timestamp) / 1000)}s old)`);
+        return cached.result;
+      }
+
+      // Create and store the promise for this check
+      const checkPromise = (async () => {
+        try {
+          const logMsg = chatIds
+            ? `Checking offline messages for ${chatIds.length} specific chats...`
+            : 'Checking offline messages for top 10 recent chats...';
+          console.log(`[IPC] ${logMsg}`);
+
+          const {checkedChatIds, unreadFromChats} = await p2pCore.messageHandler.checkOfflineMessages(chatIds);
+          console.log(`[IPC] Offline message check complete - checked ${checkedChatIds.length} chats`);
+          console.log(unreadFromChats)
+
+          const result = { success: true, checkedChatIds, unreadFromChats, error: null };
+
+          // Cache the result
+          OfflineMessageManager.offlineCheckCache.set(cacheKey, {
+            timestamp: Date.now(),
+            result
+          });
+
+          // Cleanup expired cache entries
+          cleanupOfflineCheckCache();
+
+          return result;
+        } finally {
+          // Always clean up the in-flight promise when done
+          OfflineMessageManager.inFlightOfflineChecks.delete(cacheKey);
+        }
+      })();
+
+      // Store the promise before awaiting
+      OfflineMessageManager.inFlightOfflineChecks.set(cacheKey, checkPromise);
+
+      return await checkPromise;
+    } catch (error) {
+      console.error('[IPC] Failed to check offline messages:', error);
+      return { success: false, checkedChatIds: [], unreadFromChats: new Map(), error: error instanceof Error ? error.message : 'Failed to check offline messages' };
+    }
+  });
+
+  // Check offline messages for a specific chat
+  ipcMain.handle(IPC_CHANNELS.CHECK_OFFLINE_MESSAGES_FOR_CHAT, async (_event, chatId: number) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, checkedChatIds: [], error: 'P2P core not initialized' };
+      }
+
+      const cacheKey = getOfflineCheckCacheKey([chatId]);
+
+      // Check if there's already an in-flight request for this key
+      const inFlightPromise = OfflineMessageManager.inFlightOfflineChecks.get(cacheKey);
+      if (inFlightPromise) {
+        console.log(`[IPC] Request already in-flight for chat ${chatId}, sharing promise`);
+        return await inFlightPromise;
+      }
+
+      // Check cache
+      const cached = OfflineMessageManager.offlineCheckCache.get(cacheKey);
+      const now = Date.now();
+
+      if (cached && (now - cached.timestamp < OFFLINE_CHECK_CACHE_TTL)) {
+        console.log(`[IPC] Returning cached offline check result for chat ${chatId} (${Math.round((now - cached.timestamp) / 1000)}s old)`);
+        return cached.result;
+      }
+
+      // Create and store the promise for this check
+      const checkPromise = (async () => {
+        try {
+          console.log(`[IPC] Checking offline messages for chat: ${chatId}`);
+          const {checkedChatIds, unreadFromChats} = await p2pCore.messageHandler.checkOfflineMessages([chatId]);
+          console.log(`[IPC] Offline message check complete for chat: ${chatId}`);
+
+          const result = { success: true, checkedChatIds, unreadFromChats, error: null };
+
+          // Cache the result
+          OfflineMessageManager.offlineCheckCache.set(cacheKey, {
+            timestamp: Date.now(),
+            result
+          });
+
+          // Cleanup expired cache entries
+          cleanupOfflineCheckCache();
+
+          return result;
+        } finally {
+          // Always clean up the in-flight promise when done
+          OfflineMessageManager.inFlightOfflineChecks.delete(cacheKey);
+        }
+      })();
+
+      // Store the promise before awaiting
+      OfflineMessageManager.inFlightOfflineChecks.set(cacheKey, checkPromise);
+
+      return await checkPromise;
+    } catch (error) {
+      console.error(`[IPC] Failed to check offline messages for chat ${chatId}:`, error);
+      return { success: false, checkedChatIds: [], unreadFromChats: new Map(), error: error instanceof Error ? error.message : 'Failed to check offline messages' };
     }
   });
 }

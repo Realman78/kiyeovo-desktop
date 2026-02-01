@@ -1,14 +1,17 @@
 import { useEffect } from 'react';
-import { useDispatch } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 import Sidebar from '../components/sidebar/Sidebar';
 import ChatWrapper from '../components/chat/ChatWrapper';
-import { setChats, addChat, removePendingKeyExchange, setActiveChat } from '../state/slices/chatSlice';
+import { setChats, addChat, removePendingKeyExchange, setActiveChat, markOfflineFetched } from '../state/slices/chatSlice';
 import { removeContactAttempt, setActiveContactAttempt, addMessage, type Chat } from '../state/slices/chatSlice';
 import { useToast } from '../components/ui/use-toast';
+import type { RootState } from '../state/store';
+import { store } from '../state/store';
 
 export const Main = () => {
   const dispatch = useDispatch();
   const { toast } = useToast();
+  const myPeerId = useSelector((state: RootState) => state.user.peerId);
 
   useEffect(() => {
     const unsubKeyExchangeFailed = window.kiyeovoAPI.onKeyExchangeFailed((data) => {
@@ -35,14 +38,15 @@ export const Main = () => {
         content: data.content,
         timestamp: data.timestamp,
         messageType: 'text',
-        messageSentStatus: data.messageSentStatus
+        messageSentStatus: data.messageSentStatus,
+        currentUserPeerId: myPeerId
       }));
     });
 
     // Global listener for chat creation - always active regardless of UI state
     const unsubChatCreated = window.kiyeovoAPI.onChatCreated((data) => {
       console.log(`[UI] Chat created: ${data.chatId} for ${data.username} (peerId: ${data.peerId})`);
-      
+
       const newChat: Chat = {
         id: data.chatId,
         type: 'direct',
@@ -53,12 +57,19 @@ export const Main = () => {
         unreadCount: 0,
         status: 'active',
         justCreated: true,
+        fetchedOffline: true,
+        isFetchingOffline: false,
       };
 
       dispatch(addChat(newChat));
       dispatch(removeContactAttempt(data.peerId));
       dispatch(removePendingKeyExchange(data.peerId)); // Remove from pending key exchanges
-      dispatch(setActiveChat(data.chatId));
+
+      // Only auto-open chat if user was actively viewing this pending key exchange
+      const currentState = store.getState();
+      if (currentState.chat.activePendingKeyExchange?.peerId === data.peerId) {
+        dispatch(setActiveChat(data.chatId));
+      }
     });
 
     return () => {
@@ -85,14 +96,59 @@ export const Main = () => {
             name: dbChat.username || dbChat.name,
             peerId: dbChat.other_peer_id,
             lastMessage: dbChat.last_message_content || 'SYSTEM: No messages yet',
-            lastMessageTimestamp: dbChat.last_message_timestamp 
-              ? new Date(dbChat.last_message_timestamp).getTime() 
+            lastMessageTimestamp: dbChat.last_message_timestamp
+              ? new Date(dbChat.last_message_timestamp).getTime()
               : new Date(dbChat.updated_at).getTime(),
             unreadCount: 0,
             status: dbChat.status,
+            fetchedOffline: false,
+            isFetchingOffline: false,
           }));
 
           dispatch(setChats(mappedChats));
+
+          // After loading chats, check for offline messages for top 10 most recent
+          if (mappedChats.length > 0) {
+            // Sort by most recent activity (latest message) and take top 10
+            const sortedChats = [...mappedChats].sort((a, b) => b.lastMessageTimestamp - a.lastMessageTimestamp);
+            const top10ChatIds = sortedChats.slice(0, 10).map(chat => chat.id);
+
+            console.log(`[UI] Checking offline messages for ${top10ChatIds.length} most recent chats (IDs: ${top10ChatIds.join(', ')})...`);
+            try {
+              const result = await window.kiyeovoAPI.checkOfflineMessages(top10ChatIds);
+              if (result.success && result.checkedChatIds.length > 0) {
+                console.log(`[UI] Offline message check complete - checked ${result.checkedChatIds.length} chats (IDs: ${result.checkedChatIds.join(', ')})`);
+                dispatch(markOfflineFetched(result.checkedChatIds));
+
+                // Refresh chats to pick up new offline messages (unread counts, last message, etc.)
+                console.log('[UI] Refreshing chats to show offline messages...');
+                console.log(`[UI] Unread from chats: ${JSON.stringify(result.unreadFromChats)}`);
+                const refreshResult = await window.kiyeovoAPI.getChats();
+                if (refreshResult.success) {
+                  const refreshedChats = refreshResult.chats.filter((dbChat: any) => dbChat.other_peer_id !== undefined).map((dbChat: any) => ({
+                    id: dbChat.id,
+                    type: dbChat.type,
+                    name: dbChat.username || dbChat.name,
+                    peerId: dbChat.other_peer_id,
+                    lastMessage: dbChat.last_message_content || 'SYSTEM: No messages yet',
+                    lastMessageTimestamp: dbChat.last_message_timestamp
+                      ? new Date(dbChat.last_message_timestamp).getTime()
+                      : new Date(dbChat.updated_at).getTime(),
+                    unreadCount: result.unreadFromChats.get(dbChat.id) ?? 0,
+                    status: dbChat.status,
+                    fetchedOffline: result.checkedChatIds.includes(dbChat.id),
+                    isFetchingOffline: false,
+                  }));
+                  dispatch(setChats(refreshedChats));
+                  console.log('[UI] Chats refreshed successfully');
+                }
+              } else if (!result.success) {
+                console.error('[UI] Failed to check offline messages:', result.error);
+              }
+            } catch (error) {
+              console.error('[UI] Failed to check offline messages:', error);
+            }
+          }
         } else {
           console.error('[UI] Failed to fetch chats:', result.error);
         }

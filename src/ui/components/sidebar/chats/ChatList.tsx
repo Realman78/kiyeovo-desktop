@@ -4,7 +4,7 @@ import { Search } from "lucide-react";
 import { ChatPreview } from "./ChatPreview";
 import { useDispatch, useSelector } from "react-redux";
 import type { RootState } from "../../../state/store";
-import { setActiveChat } from "../../../state/slices/chatSlice";
+import { setActiveChat, setOfflineFetchStatus, markOfflineFetched } from "../../../state/slices/chatSlice";
 import { EmptyChatList } from "./EmptyChatList";
 
 export const ChatList: FC = () => {
@@ -14,8 +14,31 @@ export const ChatList: FC = () => {
     const selectedChatId = useSelector((state: RootState) => state.chat.activeChat);
     const dispatch = useDispatch();
 
-    const onSelectChat = (chatId: number) => {
+    const onSelectChat = async (chatId: number) => {
         dispatch(setActiveChat(chatId));
+
+        // Check if we need to fetch offline messages for this chat
+        const chat = chats.find(c => c.id === chatId);
+        if (chat && !chat.fetchedOffline && !chat.isFetchingOffline) {
+            console.log(`[UI] Fetching offline messages for chat ${chatId}...`);
+            dispatch(setOfflineFetchStatus({ chatId, isFetching: true }));
+
+            try {
+                const result = await window.kiyeovoAPI.checkOfflineMessagesForChat(chatId);
+                if (result.success && result.checkedChatIds.length > 0) {
+                    console.log(`[UI] Offline messages fetched for chat(s): ${result.checkedChatIds.join(', ')}`);
+                    dispatch(markOfflineFetched(result.checkedChatIds));
+                    // Messages will be added via onMessageReceived event
+                } else {
+                    console.log(`[UI] No offline messages for chat ${chatId}`);
+                    dispatch(markOfflineFetched(chatId));
+                }
+            } catch (error) {
+                console.error(`[UI] Failed to fetch offline messages for chat ${chatId}:`, error);
+                // Still mark as fetched to avoid retry loops on error
+                dispatch(markOfflineFetched(chatId));
+            }
+        }
     }
 
     const activeChats = chats.filter((chat) => chat.status !== 'pending');

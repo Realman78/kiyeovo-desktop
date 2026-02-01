@@ -26,6 +26,7 @@ export class KeyExchange {
   private rotationPromises = new Map<string, { resolve: (value: boolean) => void; reject: (error: Error) => void }>();
   private rotationTimeouts = new Map<string, NodeJS.Timeout>();
   private keyExchangeAbortControllers = new Map<string, () => void>();
+  private keyExchangeStreams = new Map<string, Stream>();
   private database: ChatDatabase;
   private pendingAcceptances = new Map<string, PendingAcceptance>();
   private onKeyExchangeSent: (data: KeyExchangeEvent) => void;
@@ -212,6 +213,7 @@ export class KeyExchange {
     const info = new TextEncoder().encode(infoStr);
 
     const secretBytes = hkdf(sha256, sharedSecret, salt, info, 32);
+    console.log("base64url offline bucket secret:>> ", toBase64Url(secretBytes));
     return toBase64Url(secretBytes);
   }
 
@@ -261,10 +263,21 @@ export class KeyExchange {
       throw new Error('No current username available');
     }
 
+    const peerIdStr = targetPeerId.toString();
+
+    // Check if already waiting for response from this user
+    if (this.keyExchangeAbortControllers.has(peerIdStr)) {
+      throw new Error(`Already waiting for ${targetUsername} to accept your message request`);
+    }
+
+    if (this.sessionManager.getPendingKeyExchange(peerIdStr)) {
+      throw new Error(`Already waiting for ${targetUsername} to accept your message request`);
+    }
+
     // TODO reenable once testing is over
     // Check for recent failed attempts (sender-side rate limiting)
-    // const recentFailure = this.database.getRecentFailedKeyExchange(targetPeerId.toString(), 5);
-    // if (recentFailure || this.sessionManager.getPendingKeyExchange(targetPeerId.toString())) {
+    // const recentFailure = this.database.getRecentFailedKeyExchange(peerIdStr, 5);
+    // if (recentFailure) {
     //   throw new Error(`Rate limit: You must wait before contacting ${targetUsername} again`);
     // }
 
@@ -297,7 +310,10 @@ export class KeyExchange {
     const encoder = new TextEncoder();
     await stream.sink([encoder.encode(messageJson)]);
 
-    this.sessionManager.storePendingKeyExchange(targetPeerId.toString(), {
+    // Store stream so we can close it on cancel
+    this.keyExchangeStreams.set(peerIdStr, stream);
+
+    this.sessionManager.storePendingKeyExchange(peerIdStr, {
       timestamp: timestamp,
       ephemeralPrivateKey,
       ephemeralPublicKey
@@ -310,7 +326,7 @@ export class KeyExchange {
 
     // Create cancellable promise for key exchange
     const cancelPromise = new Promise<never>((_, reject) => {
-      this.keyExchangeAbortControllers.set(targetPeerId.toString(), () => {
+      this.keyExchangeAbortControllers.set(peerIdStr, () => {
         reject(new Error('KEY_EXCHANGE_CANCELLED'));
       });
     });
@@ -318,14 +334,14 @@ export class KeyExchange {
     // Key exchange request successfully sent - notify frontend (dialog can close now)
     this.onKeyExchangeSent({
       username: targetUsername,
-      peerId: targetPeerId.toString(),
+      peerId: peerIdStr,
       messageContent: message,
       expiresAt: timestamp + PENDING_KEY_EXCHANGE_EXPIRATION
     });
 
     try {
       const user = await Promise.race([
-        this.waitForKeyExchangeResponse(targetPeerId.toString(), stream),
+        this.waitForKeyExchangeResponse(peerIdStr, stream),
         timeoutPromise.then(() => null),
         cancelPromise
       ]);
@@ -333,11 +349,13 @@ export class KeyExchange {
       if (!user) {
         throw new Error('Key exchange timed out or failed');
       }
-      console.log(`Authenticated key exchange completed with ${targetPeerId.toString().slice(0, 8)}`);
-      this.keyExchangeAbortControllers.delete(targetPeerId.toString());
+      console.log(`Authenticated key exchange completed with ${peerIdStr.slice(0, 8)}`);
+      this.keyExchangeAbortControllers.delete(peerIdStr);
+      this.keyExchangeStreams.delete(peerIdStr);
       return user;
     } catch (error: unknown) {
-      this.keyExchangeAbortControllers.delete(targetPeerId.toString());
+      this.keyExchangeAbortControllers.delete(peerIdStr);
+      this.keyExchangeStreams.delete(peerIdStr);
       
       // Re-throw cancellation errors so they can be handled upstream
       if (error instanceof Error && error.message === 'KEY_EXCHANGE_CANCELLED') {
@@ -346,10 +364,10 @@ export class KeyExchange {
       }
 
       generalErrorHandler(error);
-      this.sessionManager.removePendingKeyExchange(targetPeerId.toString());
+      this.sessionManager.removePendingKeyExchange(peerIdStr);
 
       if (error instanceof Error && !error.message.includes('Rate limit')) {
-        this.database.logFailedKeyExchange(targetPeerId.toString(), targetUsername, message, error.message);
+        this.database.logFailedKeyExchange(peerIdStr, targetUsername, message, error.message);
       }
 
       throw error;
@@ -1483,10 +1501,21 @@ export class KeyExchange {
   }
 
   // Cancel a pending key exchange initiated by us
-  cancelPendingKeyExchange(peerId: string): boolean {
+  async cancelPendingKeyExchange(peerId: string): Promise<boolean> {
     const abortController = this.keyExchangeAbortControllers.get(peerId);
+    const stream = this.keyExchangeStreams.get(peerId);
     if (abortController) {
-      abortController(); // Reject the promise
+      if (stream) {
+        console.log("closing stream", stream);
+        try {
+          stream.abort(new Error('KEY_EXCHANGE_CANCELLED'));
+        } catch (err) {
+          console.log(`Error closing stream during cancel: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        this.keyExchangeStreams.delete(peerId);
+      }
+
+      abortController();
       this.keyExchangeAbortControllers.delete(peerId);
       this.sessionManager.removePendingKeyExchange(peerId);
       console.log(`Cancelled pending key exchange with ${peerId.slice(0, 8)}...`);

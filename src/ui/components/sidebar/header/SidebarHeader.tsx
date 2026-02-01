@@ -1,4 +1,4 @@
-import { useEffect, useState, type FC } from "react";
+import { useEffect, useState, useRef, type FC } from "react";
 import { Logo } from "../../icons/Logo";
 import { Plus } from "lucide-react";
 import { Button } from "../../ui/Button";
@@ -21,6 +21,14 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
     const isConnected = useSelector((state: RootState) => state.user.connected);
 
     const dispatch = useDispatch();
+
+    // Ref to track latest newConversationDialogOpen value without recreating listeners
+    const newConversationDialogOpenRef = useRef(newConversationDialogOpen);
+
+    // Keep ref in sync with state
+    useEffect(() => {
+        newConversationDialogOpenRef.current = newConversationDialogOpen;
+    }, [newConversationDialogOpen]);
 
     const handleNewConversation = async (peerIdOrUsername: string, message: string) => {
         setError(undefined);
@@ -51,7 +59,8 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
         // Listen for key exchange sent event (to close dialog immediately)
         const unsubSent = window.kiyeovoAPI.onKeyExchangeSent((data) => {
             // this needs to be called only for new conversations, not for existing chats
-            if (!newConversationDialogOpen) return;
+            console.log(`[UI] Key exchange sent to ${data.username}, newConversationDialogOpen: ${newConversationDialogOpenRef.current}`);
+            if (!newConversationDialogOpenRef.current) return;
             console.log(`[UI] Key exchange sent to ${data.username}, closing dialog...`);
             dispatch(addPendingKeyExchange(data));
             setNewConversationDialogOpen(false);

@@ -145,4 +145,22 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     cancelPendingKeyExchange: async (peerId: string): Promise<{ success: boolean; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.CANCEL_PENDING_KEY_EXCHANGE, peerId);
     },
+
+    // Offline messages
+    checkOfflineMessages: async (chatIds?: number[]): Promise<{ success: boolean; checkedChatIds: number[]; unreadFromChats: Map<number, number>; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.CHECK_OFFLINE_MESSAGES, chatIds);
+    },
+    checkOfflineMessagesForChat: async (chatId: number): Promise<{ success: boolean; checkedChatIds: number[]; unreadFromChats: Map<number, number>; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.CHECK_OFFLINE_MESSAGES_FOR_CHAT, chatId);
+    },
+    onOfflineMessagesFetchStart: (callback: (data: { chatIds: number[] }) => void) => {
+        const listener = (_event: any, data: { chatIds: number[] }) => callback(data);
+        ipcRenderer.on(IPC_CHANNELS.OFFLINE_MESSAGES_FETCH_START, listener);
+        return () => ipcRenderer.removeListener(IPC_CHANNELS.OFFLINE_MESSAGES_FETCH_START, listener);
+    },
+    onOfflineMessagesFetchComplete: (callback: (data: { chatIds: number[] }) => void) => {
+        const listener = (_event: any, data: { chatIds: number[] }) => callback(data);
+        ipcRenderer.on(IPC_CHANNELS.OFFLINE_MESSAGES_FETCH_COMPLETE, listener);
+        return () => ipcRenderer.removeListener(IPC_CHANNELS.OFFLINE_MESSAGES_FETCH_COMPLETE, listener);
+    },
 });

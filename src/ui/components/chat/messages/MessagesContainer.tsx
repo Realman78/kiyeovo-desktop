@@ -100,6 +100,7 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
         >
           <div
             className={`max-w-[70%] rounded-lg px-4 py-2.5 ${message.senderPeerId === myPeerId || !!activePendingKeyExchange ? "bg-message-sent text-message-sent-foreground rounded-br-sm" : "bg-message-received text-message-received-foreground rounded-bl-sm"}`}
+            style={{ wordBreak: "break-word" }}
           >
             <p className="text-sm text-left leading-relaxed">{message.content}</p>
           </div>

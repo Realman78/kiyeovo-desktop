@@ -1028,6 +1028,36 @@ export class ChatDatabase {
         }>;
     }
 
+    getOfflineReadBucketInfoForChats(chatIds: number[]): Array<{
+        chat_id: number;
+        offline_bucket_secret: string;
+        peer_id: string;
+        signing_public_key: string;
+        offline_last_read_timestamp: number;
+    }> {
+        if (chatIds.length === 0) return [];
+
+        const placeholders = chatIds.map(() => '?').join(',');
+        const query = `
+            SELECT c.id as chat_id, c.offline_bucket_secret, cp.peer_id, u.signing_public_key, c.offline_last_read_timestamp
+            FROM chats c
+            JOIN chat_participants cp ON c.id = cp.chat_id
+            JOIN users u ON cp.peer_id = u.peer_id
+            WHERE c.id IN (${placeholders})
+            AND c.type = 'direct'
+            AND cp.peer_id != c.created_by
+            AND cp.peer_id NOT IN (SELECT peer_id FROM blocked_peers)
+        `;
+        const stmt = this.db.prepare(query);
+        return stmt.all(...chatIds) as Array<{
+            chat_id: number;
+            offline_bucket_secret: string;
+            peer_id: string;
+            signing_public_key: string;
+            offline_last_read_timestamp: number;
+        }>;
+    }
+
     getAllNotificationsBucketKeys(): string[] {
         const stmt = this.db.prepare('SELECT notifications_bucket_key FROM chats');
         const rows = stmt.all() as Chat[];
@@ -1188,14 +1218,17 @@ export class ChatDatabase {
 
     getMessagesByChatId(chatId: number, limit: number = 50, offset: number = 0): Array<Message & { sender_username?: string | undefined }> {
         const stmt = this.db.prepare(`
-            SELECT 
-                m.*,
-                u.username as sender_username
-            FROM messages m
-            LEFT JOIN users u ON m.sender_peer_id = u.peer_id
-            WHERE m.chat_id = ? 
-            ORDER BY m.timestamp ASC 
-            LIMIT ? OFFSET ?
+            SELECT * FROM (
+                SELECT
+                    m.*,
+                    u.username as sender_username
+                FROM messages m
+                LEFT JOIN users u ON m.sender_peer_id = u.peer_id
+                WHERE m.chat_id = ?
+                ORDER BY m.timestamp DESC
+                LIMIT ? OFFSET ?
+            ) AS recent_messages
+            ORDER BY timestamp ASC
         `);
 
         const rows = stmt.all(chatId, limit, offset) as any[];
