@@ -306,6 +306,17 @@ export const ChatHeader = ({ username, peerId }: ChatHeaderProps) => {
                 Are you sure you want to delete this chat and user? This action cannot be undone.
               </DialogDescription>
             </DialogHeader>
+            <DialogBody>
+              <div className="flex items-start gap-2 p-3 bg-warning/10 border border-warning/30 rounded">
+                <AlertCircle className="w-5 h-5 text-warning mt-0.5 shrink-0" />
+                <div className="text-sm text-warning">
+                  <p className="font-semibold mb-1">Warning: Offline messages will not work</p>
+                  <p className="text-xs">
+                    In case you make contact with <span className="font-semibold">{username}</span> again, you <span className="font-semibold">will not receive offline messages</span> from this user until they also delete and re-initiate contact with you.
+                  </p>
+                </div>
+              </div>
+            </DialogBody>
             <DialogFooter>
               <Button
                 variant="outline"

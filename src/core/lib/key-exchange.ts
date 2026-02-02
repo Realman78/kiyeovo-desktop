@@ -1441,6 +1441,10 @@ export class KeyExchange {
       //   username
       // });
     }
+    // TODO: Offline message desync after "Delete chat & user"
+    // When one user deletes chat/user and re-initiates contact, they generate a new offline_bucket_secret while the other user keeps the old one, causing offline message loss.
+    // Solutions: (1) Exchange/compare secret hashes during key exchange and reconcile mismatches, (2) Store offline secrets in deletion-resistant table, (3) Accept loss and warn users (current approach).
+    // Choosing option 3 for now - user warned that deletion breaks offline messages until both users delete or re-sync.
   }
 
   // TODO dont forget to use this once testing is finished
