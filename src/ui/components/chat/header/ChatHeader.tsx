@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useSelector, useDispatch } from "react-redux";
 import type { RootState } from "../../../state/store";
 import { Button } from "../../ui/Button";
-import { Bell, BellOff, MoreVertical, Shield, UserPlus, Ban, UserCheck, Info, Trash2 } from "lucide-react";
+import { Bell, BellOff, MoreVertical, Shield, UserPlus, Ban, UserCheck, Info, Trash2, AlertCircle } from "lucide-react";
 import { DropdownMenu, DropdownMenuItem } from "../../ui/DropdownMenu";
 import { updateChat, clearMessages, removeChat } from "../../../state/slices/chatSlice";
 import { AboutUserModal } from "./AboutUserModal";
@@ -13,8 +13,11 @@ import {
   DialogTitle,
   DialogFooter,
   DialogDescription,
+  DialogBody,
 } from "../../ui/Dialog";
 import { useToast } from "../../ui/use-toast";
+import { Input } from "../../ui/Input";
+import { validateUsername } from "../../../utils/general";
 
 type ChatHeaderProps = {
   username: string;
@@ -22,6 +25,7 @@ type ChatHeaderProps = {
 }
 export const ChatHeader = ({ username, peerId }: ChatHeaderProps) => {
   const activeChat = useSelector((state: RootState) => state.chat.activeChat);
+  const chats = useSelector((state: RootState) => state.chat.chats);
   const dispatch = useDispatch();
   const { toast } = useToast();
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -30,6 +34,9 @@ export const ChatHeader = ({ username, peerId }: ChatHeaderProps) => {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteChatAndUserConfirmOpen, setDeleteChatAndUserConfirmOpen] = useState(false);
+  const [editUsernameModalOpen, setEditUsernameModalOpen] = useState(false);
+  const [newUsername, setNewUsername] = useState(username);
+  const [validationError, setValidationError] = useState("");
 
   useEffect(() => {
     const checkBlockedStatus = async () => {
@@ -114,6 +121,11 @@ export const ChatHeader = ({ username, peerId }: ChatHeaderProps) => {
     setDropdownOpen(false);
   };
 
+  const handleEditUsername = () => {
+    setEditUsernameModalOpen(true);
+    setDropdownOpen(false);
+  };
+
   const confirmDeleteAllMessages = async () => {
     if (!activeChat) return;
 
@@ -160,6 +172,31 @@ export const ChatHeader = ({ username, peerId }: ChatHeaderProps) => {
     }
   };
 
+  const confirmEditUsername = async () => {
+    if (!activeChat || !activeChat.peerId) return;
+    const error = validateUsername(newUsername, activeChat.peerId);
+    if (error) {
+      setValidationError(error);
+      return;
+    }
+    if (chats.find((chat) => chat.username === newUsername || chat.name === newUsername)) {
+      setValidationError("Username already exists");
+      return;
+    }
+    const result = await window.kiyeovoAPI.updateUsername(activeChat.peerId, newUsername);
+    if (result.success) {
+      toast.info("Username updated successfully");
+      setEditUsernameModalOpen(false);
+      setValidationError("");
+      dispatch(updateChat({
+        id: activeChat.id,
+        updates: { username: newUsername, name: newUsername }
+      }));
+    } else {
+      toast.error("Failed to update username");
+    }
+  };
+
   return <div className={`h-16 px-6 flex items-center justify-between border-b border-border ${activeChat?.status === 'pending' ? "" : "bg-card/50"}`}>
     <div className="flex items-center gap-3">
       {activeChat?.status === 'pending' ? (
@@ -193,6 +230,12 @@ export const ChatHeader = ({ username, peerId }: ChatHeaderProps) => {
           onClick={handleAboutUser}
         >
           About user
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          icon={<Info className="w-4 h-4" />}
+          onClick={handleEditUsername}
+        >
+          Edit username
         </DropdownMenuItem>
         <DropdownMenuItem
           icon={activeChat?.muted ? <Bell className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
@@ -279,6 +322,53 @@ export const ChatHeader = ({ username, peerId }: ChatHeaderProps) => {
                 {isDeleting ? 'Deleting...' : 'Delete Chat & User'}
               </Button>
             </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <Dialog open={editUsernameModalOpen} onOpenChange={setEditUsernameModalOpen}>
+          <DialogContent>
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              confirmEditUsername();
+            }}>
+              <DialogHeader>
+                <DialogTitle>Edit Username</DialogTitle>
+                <DialogDescription>
+                  Enter new username for {username}. This action edits {username}'s username only for you.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogBody>
+                <label className="block text-sm font-medium text-foreground mb-2">
+                  New Username
+                </label>
+                <Input
+                  value={newUsername}
+                  onChange={(e) => setNewUsername(e.target.value)}
+                  placeholder="Enter new username"
+                />
+                {validationError && (
+                  <div className="flex items-center gap-2 mt-2 text-destructive text-sm">
+                    <AlertCircle className="w-4 h-4" />
+                    <span>{validationError}</span>
+                  </div>
+                )}
+              </DialogBody>
+              <DialogFooter>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setEditUsernameModalOpen(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  variant="default"
+                  disabled={validateUsername(newUsername, peerId) !== ""}
+                >
+                  Confirm
+                </Button>
+              </DialogFooter>
+            </form>
           </DialogContent>
         </Dialog>
       </>

@@ -529,6 +529,7 @@ export const IPC_CHANNELS = {
   GET_USER_INFO: 'user:getInfo',
   DELETE_ALL_MESSAGES: 'chat:deleteAllMessages',
   DELETE_CHAT_AND_USER: 'chat:deleteChatAndUser',
+  UPDATE_USERNAME: 'chat:updateUsername',
 } as const;
 
 export interface PasswordRequest {

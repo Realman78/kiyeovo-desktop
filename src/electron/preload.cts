@@ -259,7 +259,9 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
         return ipcRenderer.invoke(IPC_CHANNELS.DELETE_ALL_MESSAGES, chatId);
     },
     deleteChatAndUser: async (chatId: number, userPeerId: string): Promise<{ success: boolean; error: string | null }> => {
-        console.log("deleteChatAndUser", chatId, userPeerId);
         return ipcRenderer.invoke(IPC_CHANNELS.DELETE_CHAT_AND_USER, chatId, userPeerId);
+    },
+    updateUsername: async (peerId: string, newUsername: string): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.UPDATE_USERNAME, peerId, newUsername);
     },
 });

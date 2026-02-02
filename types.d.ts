@@ -122,6 +122,7 @@ declare global {
             toggleChatMute: (chatId: number) => Promise<{ success: boolean; muted: boolean; error: string | null }>;
             deleteAllMessages: (chatId: number) => Promise<{ success: boolean; error: string | null }>;
             deleteChatAndUser: (chatId: number, peerId: string) => Promise<{ success: boolean; error: string | null }>;
+            updateUsername: (peerId: string, newUsername: string) => Promise<{ success: boolean; error: string | null }>;
 
             // User blocking
             blockUser: (peerId: string, username: string | null, reason: string | null) => Promise<{ success: boolean; error: string | null }>;

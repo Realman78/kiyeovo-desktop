@@ -13,6 +13,7 @@ import { Input } from "../../ui/Input";
 import { Button } from "../../ui/Button";
 import { useSelector } from "react-redux";
 import type { RootState } from "../../../state/store";
+import { validateUsername } from "../../../utils/general";
 
 
 interface RegisterDialogProps {
@@ -31,25 +32,9 @@ const RegisterDialog = ({ open, onOpenChange, onRegister, backendError, isRegist
   const peerId = useSelector((state: RootState) => state.user.peerId);
   const isConnected = useSelector((state: RootState) => state.user.connected);
 
-  const validateUsername = (value: string) => {
-    if (value.length < 3) {
-      return "Username must be at least 3 characters";
-    }
-    if (value.length > 20) {
-      return "Username must be less than 20 characters";
-    }
-    if (!/^[a-zA-Z0-9_]+$/.test(value)) {
-      return "Only letters, numbers, and underscores allowed";
-    }
-    if (value === peerId) {
-      return "Username cannot be the same as your peer ID";
-    }
-    return "";
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const error = validateUsername(username);
+    const error = validateUsername(username, peerId);
     if (error) {
       setValidationError(error);
       return;

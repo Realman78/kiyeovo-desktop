@@ -1006,4 +1006,22 @@ function setupChatSettingsHandlers(
       return { success: false, error: error instanceof Error ? error.message : 'Failed to delete chat and user' };
     }
   });
+
+  ipcMain.handle(IPC_CHANNELS.UPDATE_USERNAME, async (_event, peerId: string, newUsername: string) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+
+      console.log(`[IPC] Updating username for ${peerId} to ${newUsername}`);
+      p2pCore.database.updateUsername(peerId, newUsername);
+      console.log(`[IPC] Username updated for ${peerId} to ${newUsername}`);
+
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to delete all messages:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to delete messages' };
+    }
+  });
 }
