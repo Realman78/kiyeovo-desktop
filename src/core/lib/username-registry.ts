@@ -353,6 +353,14 @@ export class UsernameRegistry {
     const { username } = userDb;
     console.log(`Attempting to restore username: ${username}`);
 
+    // Check if we have any peers before attempting registration
+    const peers = this.node.getConnections();
+    if (peers.length === 0) {
+      console.log(`Skipping auto-registration for '${username}' - no DHT peers connected`);
+      console.log(`Registration will be available once connected to the network`);
+      return;
+    }
+
     try {
       await this.register(username, true);
       console.log(`Successfully restored username: ${username}`);

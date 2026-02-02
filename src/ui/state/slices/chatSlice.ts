@@ -34,6 +34,10 @@ export interface Chat {
   justCreated?: boolean; // Flag for newly created chats waiting for first message
   fetchedOffline?: boolean; // Whether offline messages have been checked for this chat
   isFetchingOffline?: boolean; // Whether offline messages are currently being fetched
+  username?: string; // optional because of potential group chats
+  trusted_out_of_band?: boolean; // Whether chat was established via out-of-band profile import
+  muted?: boolean; // Whether notifications and sounds are muted for this chat
+  blocked?: boolean; // Whether the other user is blocked
 }
 
 interface ChatState {
@@ -146,6 +150,7 @@ const chatSlice = createSlice({
     },
     addChat: (state, action: PayloadAction<Chat>) => {
       state.chats.push(action.payload);
+      state.chats.sort((a, b) => b.lastMessageTimestamp - a.lastMessageTimestamp);
     },
     updateChat: (state, action: PayloadAction<{ id: number; updates: Partial<Chat> }>) => {
       const chat = state.chats.find((c) => c.id === action.payload.id);
@@ -160,6 +165,7 @@ const chatSlice = createSlice({
       state.chats = state.chats.filter((chat) => chat.id !== action.payload);
       delete state.messages[action.payload];
       if (state.activeChat?.id === action.payload) {
+        state.messages = [];
         state.activeChat = null;
       }
     },
@@ -193,6 +199,7 @@ const chatSlice = createSlice({
     },
     removePendingKeyExchange: (state, action: PayloadAction<string>) => {
       state.pendingKeyExchanges = state.pendingKeyExchanges.filter((pk) => pk.peerId !== action.payload);
+      // TODO should I set activePendingKeyExchange to null here?
     },
     setOfflineFetchStatus: (state, action: PayloadAction<{ chatId: number; isFetching: boolean }>) => {
       const chat = state.chats.find((c) => c.id === action.payload.chatId);

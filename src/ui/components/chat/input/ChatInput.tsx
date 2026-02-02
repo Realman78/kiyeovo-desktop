@@ -11,7 +11,8 @@ export const ChatInput: FC = () => {
     const [inputQuery, setInputQuery] = useState("");
     const [isSending, setIsSending] = useState(false);
     const activeChat = useSelector((state: RootState) => state.chat.activeChat);
-    
+    const isBlocked = activeChat?.blocked || false;
+
     const handleSendMessage = async (peerIdOrUsername: string, messageContent: string) => {
         try {
             const {success, error} = await window.kiyeovoAPI.sendMessage(peerIdOrUsername, messageContent);
@@ -49,7 +50,7 @@ export const ChatInput: FC = () => {
         setInputQuery('');
     }
 
-    return <form 
+    return <form
         onSubmit={handleSubmit}
         className={`h-20 px-4 flex items-center justify-between border-t border-border gap-4`}
     >
@@ -57,21 +58,21 @@ export const ChatInput: FC = () => {
             type="button"
             variant="ghost"
             size="icon"
-            disabled={isSending}
+            disabled={isSending || isBlocked}
             className="text-sidebar-foreground hover:text-foreground"
         >
             <Paperclip className="w-4 h-4" />
         </Button>
         <Input
-            placeholder="Type a message..."
+            placeholder={isBlocked ? "Cannot send messages to blocked users" : "Type a message..."}
             parentClassName="flex flex-1 w-full"
             value={inputQuery}
-            disabled={isSending}
+            disabled={isSending || isBlocked}
             onChange={(e) => setInputQuery(e.target.value)}
         />
         <Button
             type="submit"
-            disabled={!inputQuery.trim() || isSending}
+            disabled={!inputQuery.trim() || isSending || isBlocked}
             size="icon"
         >
             {isSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}

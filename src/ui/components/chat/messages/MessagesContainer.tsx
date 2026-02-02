@@ -72,12 +72,35 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
   }, [messagesEndRef, messages]);
 
   const showEmptyState = !isPending && messages.length === 0;
+  const isTrustedOutOfBand = activeChat?.trusted_out_of_band;
 
   return <div className={`flex-1 overflow-y-auto p-6 space-y-2`}>
     {showEmptyState && (
       <div className="w-full flex justify-center items-center h-full">
-        <div className="text-muted-foreground text-sm">
-          No messages yet. Say hi! 👋
+        <div className="text-center max-w-md">
+          {isTrustedOutOfBand ? (
+            <>
+              <div className="text-muted-foreground text-sm mb-2">
+                Created chat with trusted user {activeChat?.username}
+              </div>
+              <div className="text-muted-foreground text-xs">
+                If {activeChat?.username || activeChat.peerId || "the other user" } imported your profile, you can start sending messages. <br />
+                If {activeChat?.username || activeChat.peerId || "the other user" } did not import your profile, any messages you send will be lost.
+              </div>
+            </>
+          ) : (
+            <div className="text-muted-foreground text-sm">
+              {activeChat?.blocked ? (
+                <div className="text-muted-foreground text-sm mb-2">
+                  You have blocked this user.
+                </div>
+              ) : (
+                <div className="text-muted-foreground text-sm mb-2">
+                  No messages yet. Say hi! 👋
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     )}

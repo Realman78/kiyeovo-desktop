@@ -41,6 +41,7 @@ export interface Chat {
     offline_last_read_timestamp: number // Last read timestamp for offline messages (prevents re-reading)
     offline_last_ack_sent: number // Last ACK timestamp we sent to this peer (to avoid sending redundant ACKs)
     trusted_out_of_band: boolean // Whether chat was established via out-of-band profile import (uses default inbox)
+    muted: boolean // Whether notifications and sounds are muted for this chat
     created_at: Date
     updated_at: Date
 }
@@ -162,7 +163,8 @@ export class ChatDatabase {
             ...row,
             created_at: new Date(row.created_at),
             updated_at: new Date(row.updated_at),
-            trusted_out_of_band: Boolean(row.trusted_out_of_band)
+            trusted_out_of_band: Boolean(row.trusted_out_of_band),
+            muted: Boolean(row.muted)
         };
     }
 
@@ -199,6 +201,7 @@ export class ChatDatabase {
                 offline_last_read_timestamp INTEGER DEFAULT 0,
                 offline_last_ack_sent INTEGER DEFAULT 0,
                 trusted_out_of_band INTEGER DEFAULT 0,
+                muted INTEGER DEFAULT 0,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (created_by) REFERENCES users (peer_id)
@@ -757,10 +760,11 @@ export class ChatDatabase {
 
             this.db.exec('BEGIN TRANSACTION');
             const stmt = this.db.prepare(`
-                INSERT INTO chats (created_by, type, name, offline_bucket_secret, notifications_bucket_key, status, group_id, group_key, permanent_key, trusted_out_of_band, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO chats (created_by, type, name, offline_bucket_secret, notifications_bucket_key, status, group_id, group_key, permanent_key, trusted_out_of_band, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `);
 
+            const createdAt = chat.created_at instanceof Date ? chat.created_at.toISOString() : chat.created_at;
             const result = stmt.run(
                 chat.created_by,
                 chat.type,
@@ -772,7 +776,8 @@ export class ChatDatabase {
                 chat.type === 'group' && chat?.group_key ? chat.group_key : null,
                 chat.type === 'group' && chat?.permanent_key ? chat.permanent_key : null,
                 chat.trusted_out_of_band ? 1 : 0,
-                chat.created_at instanceof Date ? chat.created_at.toISOString() : chat.created_at
+                createdAt,
+                createdAt
             );
             const chatId = result.lastInsertRowid as number;
 
@@ -820,12 +825,13 @@ export class ChatDatabase {
         }));
     }
 
-    getAllChatsWithUsernameAndLastMsg(myPeerId: string): Array<Chat & { 
+    getAllChatsWithUsernameAndLastMsg(myPeerId: string): Array<Chat & {
         username?: string | undefined;
         other_peer_id?: string | undefined;
         last_message_content?: string | undefined;
         last_message_timestamp?: Date | undefined;
         last_message_sender?: string | undefined;
+        blocked?: boolean | undefined;
     }> {
         const stmt = this.db.prepare(`
             SELECT
@@ -834,14 +840,16 @@ export class ChatDatabase {
                 cp.peer_id as other_peer_id,
                 last_msg.content as last_message_content,
                 last_msg.timestamp as last_message_timestamp,
-                last_msg.sender_peer_id as last_message_sender
+                last_msg.sender_peer_id as last_message_sender,
+                CASE WHEN bp.peer_id IS NOT NULL THEN 1 ELSE 0 END as blocked
             FROM chats c
             LEFT JOIN chat_participants cp ON c.id = cp.chat_id AND c.type = 'direct' AND cp.peer_id != ?
             LEFT JOIN users u ON cp.peer_id = u.peer_id
+            LEFT JOIN blocked_peers bp ON cp.peer_id = bp.peer_id
             LEFT JOIN messages last_msg ON last_msg.id = (
-                SELECT id FROM messages 
-                WHERE chat_id = c.id 
-                ORDER BY timestamp DESC 
+                SELECT id FROM messages
+                WHERE chat_id = c.id
+                ORDER BY timestamp DESC
                 LIMIT 1
             )
             ORDER BY c.updated_at DESC
@@ -855,8 +863,52 @@ export class ChatDatabase {
             other_peer_id: row.other_peer_id || undefined,
             last_message_content: row.last_message_content || undefined,
             last_message_timestamp: row.last_message_timestamp ? new Date(row.last_message_timestamp) : undefined,
-            last_message_sender: row.last_message_sender || undefined
+            last_message_sender: row.last_message_sender || undefined,
+            blocked: Boolean(row.blocked)
         }));
+    }
+
+    getChatByIdWithUsernameAndLastMsg(chatId: number, myPeerId: string): (Chat & {
+        username?: string | undefined;
+        other_peer_id?: string | undefined;
+        last_message_content?: string | undefined;
+        last_message_timestamp?: Date | undefined;
+        last_message_sender?: string | undefined;
+        blocked?: boolean | undefined;
+    }) | null {
+        const stmt = this.db.prepare(`
+            SELECT
+                c.*,
+                u.username,
+                cp.peer_id as other_peer_id,
+                last_msg.content as last_message_content,
+                last_msg.timestamp as last_message_timestamp,
+                last_msg.sender_peer_id as last_message_sender,
+                CASE WHEN bp.peer_id IS NOT NULL THEN 1 ELSE 0 END as blocked
+            FROM chats c
+            LEFT JOIN chat_participants cp ON c.id = cp.chat_id AND c.type = 'direct' AND cp.peer_id != ?
+            LEFT JOIN users u ON cp.peer_id = u.peer_id
+            LEFT JOIN blocked_peers bp ON cp.peer_id = bp.peer_id
+            LEFT JOIN messages last_msg ON last_msg.id = (
+                SELECT id FROM messages
+                WHERE chat_id = c.id
+                ORDER BY timestamp DESC
+                LIMIT 1
+            )
+            WHERE c.id = ?
+        `);
+        const row = stmt.get(myPeerId, chatId) as any;
+
+        if (!row) return null;
+        return {
+            ...this.mapChatRow(row),
+            username: row.username || undefined,
+            other_peer_id: row.other_peer_id || undefined,
+            last_message_content: row.last_message_content || undefined,
+            last_message_timestamp: row.last_message_timestamp ? new Date(row.last_message_timestamp) : undefined,
+            last_message_sender: row.last_message_sender || undefined,
+            blocked: Boolean(row.blocked)
+        };
     }
 
     getChats(chatIds: number[]): Chat[] {
@@ -986,7 +1038,8 @@ export class ChatDatabase {
             offline_last_ack_sent: singleChat.offline_last_ack_sent,
             trusted_out_of_band: singleChat.trusted_out_of_band,
             created_at: new Date(singleChat.created_at),
-            updated_at: new Date(singleChat.updated_at)
+            updated_at: new Date(singleChat.updated_at),
+            muted: singleChat.muted,
         } : null;
     }
 
@@ -1297,6 +1350,32 @@ export class ChatDatabase {
         stmt.run(messageId);
     }
 
+    deleteAllMessagesForChat(chatId: number): void {
+        const stmt = this.db.prepare('DELETE FROM messages WHERE chat_id = ?');
+        stmt.run(chatId);
+    }
+
+    deleteChatAndUser(chatId: number, userPeerId: string): void {
+        this.deleteChat(chatId);
+        this.deleteUserByPeerId(userPeerId);
+        this.deleteBlockedPeer(userPeerId);
+    }
+
+    deleteContactAttemptsByPeerId(peerId: string): void {
+        const stmt = this.db.prepare('DELETE FROM contact_attempts WHERE sender_peer_id = ?');
+        stmt.run(peerId);
+    }
+
+    deleteChatParticipantByChatId(chatId: number): void {
+        const stmt = this.db.prepare('DELETE FROM chat_participants WHERE chat_id = ?');
+        stmt.run(chatId);
+    }
+
+    deleteBlockedPeer(peerId: string): void {
+        const stmt = this.db.prepare('DELETE FROM blocked_peers WHERE peer_id = ?');
+        stmt.run(peerId);
+    }
+
     deleteChat(chatId: number): void {
         // Messages will be deleted automatically due to CASCADE
         const stmt = this.db.prepare('DELETE FROM chats WHERE id = ?');
@@ -1507,6 +1586,16 @@ export class ChatDatabase {
             isLocked: true,
             remainingSeconds: Math.ceil(remainingMs / 1000)
         };
+    }
+
+    // Toggle mute status for a chat
+    toggleChatMute(chatId: number): boolean {
+        const stmt = this.db.prepare('UPDATE chats SET muted = NOT muted WHERE id = ?');
+        stmt.run(chatId);
+
+        // Return new muted status
+        const chat = this.db.prepare('SELECT muted FROM chats WHERE id = ?').get(chatId) as { muted: number } | undefined;
+        return Boolean(chat?.muted);
     }
 
     // Close database connection

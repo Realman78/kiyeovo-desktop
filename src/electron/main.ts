@@ -178,7 +178,7 @@ async function initializeApp() {
     console.log('[Electron] Starting Kiyeovo Desktop...');
 
     // Setup IPC handlers
-    setupIPCHandlers(ipcMain, () => p2pCore);
+    setupIPCHandlers(ipcMain, () => p2pCore, () => mainWindow);
     console.log('[Electron] IPC handlers registered');
 
     // Create window first

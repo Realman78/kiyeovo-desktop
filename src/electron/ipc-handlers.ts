@@ -1,15 +1,20 @@
-import type { IpcMain } from 'electron';
+import type { IpcMain, BrowserWindow } from 'electron';
+import { dialog, Notification } from 'electron';
 import { IPC_CHANNELS, OFFLINE_CHECK_CACHE_TTL, PENDING_KEY_EXCHANGE_EXPIRATION, type P2PCore } from '../core/index.js';
 import { validateMessageLength, validateUsername } from '../core/utils/validators.js';
 import { peerIdFromString } from '@libp2p/peer-id';
 import { OfflineMessageManager } from '../core/lib/offline-message-manager.js';
+import { ProfileManager } from '../core/lib/profile-manager.js';
+import { homedir } from 'os';
+import { join } from 'path';
 
 /**
  * Setup all IPC handlers for communication between renderer and main process
  */
 export function setupIPCHandlers(
   ipcMain: IpcMain,
-  getP2PCore: () => P2PCore | null
+  getP2PCore: () => P2PCore | null,
+  getMainWindow: () => BrowserWindow | null
 ): void {
   // Registration handlers
   setupRegistrationHandlers(ipcMain, getP2PCore);
@@ -26,6 +31,12 @@ export function setupIPCHandlers(
   // Contact attempt handlers
   setupContactAttemptHandlers(ipcMain, getP2PCore);
 
+  // Trusted user import/export handlers
+  setupTrustedUserHandlers(ipcMain, getP2PCore);
+
+  // File dialog handlers
+  setupFileDialogHandlers(ipcMain);
+
   // Chat handlers
   setupChatHandlers(ipcMain, getP2PCore);
 
@@ -37,6 +48,12 @@ export function setupIPCHandlers(
 
   // Offline message handlers
   setupOfflineMessageHandlers(ipcMain, getP2PCore);
+
+  // Notification handlers
+  setupNotificationHandlers(ipcMain, getMainWindow);
+
+  // Chat settings handlers
+  setupChatSettingsHandlers(ipcMain, getP2PCore);
 }
 
 /**
@@ -366,6 +383,145 @@ function setupContactAttemptHandlers(
 }
 
 /**
+ * Trusted user import handlers
+ */
+function setupTrustedUserHandlers(
+  ipcMain: IpcMain,
+  getP2PCore: () => P2PCore | null
+): void {
+  ipcMain.handle(IPC_CHANNELS.IMPORT_TRUSTED_USER, async (_event, filePath: string, password: string, customName?: string) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+
+      console.log(`[IPC] Importing trusted user from: ${filePath}`);
+      const myPeerId = p2pCore.userIdentity.id;
+
+      const result = await ProfileManager.importTrustedUser(
+        filePath,
+        password,
+        myPeerId,
+        p2pCore.database,
+        customName
+      );
+
+      if (result.success) {
+        console.log(`[IPC] Successfully imported trusted user: ${result.username}`);
+      } else {
+        console.error(`[IPC] Failed to import trusted user: ${result.error}`);
+      }
+
+      return result;
+    } catch (error) {
+      console.error('[IPC] Failed to import trusted user:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to import trusted user'
+      };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.EXPORT_PROFILE, async (_event, password: string, sharedSecret: string) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+
+      const username = p2pCore.usernameRegistry.getCurrentUsername();
+      if (!username) {
+        return { success: false, error: 'No username registered' };
+      }
+
+      const myPeerId = p2pCore.userIdentity.id;
+
+      // Save to home directory as ${username}.kiyeovo
+      const filename = join(homedir(), `${username}.kiyeovo`);
+
+      console.log(`[IPC] Exporting profile to: ${filename}`);
+
+      const result = await ProfileManager.exportProfileDesktop(
+        p2pCore.userIdentity,
+        username,
+        myPeerId,
+        filename,
+        password,
+        sharedSecret
+      );
+
+      if (result.success) {
+        console.log(`[IPC] Successfully exported profile to: ${filename}`);
+      } else {
+        console.error(`[IPC] Failed to export profile: ${result.error}`);
+      }
+
+      return result;
+    } catch (error) {
+      console.error('[IPC] Failed to export profile:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to export profile'
+      };
+    }
+  });
+}
+
+/**
+ * File dialog handlers
+ */
+function setupFileDialogHandlers(ipcMain: IpcMain): void {
+  ipcMain.handle(IPC_CHANNELS.SHOW_OPEN_DIALOG, async (_event, options: {
+    title?: string;
+    filters?: Array<{ name: string; extensions: string[] }>;
+  }) => {
+    try {
+      const result = await dialog.showOpenDialog({
+        title: options.title || 'Open File',
+        properties: ['openFile'],
+        filters: options.filters || []
+      });
+
+      return {
+        filePath: result.filePaths[0] || null,
+        canceled: result.canceled
+      };
+    } catch (error) {
+      console.error('[IPC] Failed to show open dialog:', error);
+      return { filePath: null, canceled: true };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.SHOW_SAVE_DIALOG, async (_event, options: {
+    title?: string;
+    defaultPath?: string;
+    filters?: Array<{ name: string; extensions: string[] }>;
+  }) => {
+    try {
+      const dialogOptions: any = {
+        title: options.title || 'Save File',
+        filters: options.filters || []
+      };
+
+      if (options.defaultPath) {
+        dialogOptions.defaultPath = options.defaultPath;
+      }
+
+      const result = await dialog.showSaveDialog(dialogOptions);
+
+      return {
+        filePath: result.filePath || null,
+        canceled: result.canceled
+      };
+    } catch (error) {
+      console.error('[IPC] Failed to show save dialog:', error);
+      return { filePath: null, canceled: true };
+    }
+  });
+}
+
+/**
  * Chat handlers
  */
 function setupChatHandlers(
@@ -388,6 +544,29 @@ function setupChatHandlers(
     } catch (error) {
       console.error('[IPC] Failed to get chats:', error);
       return { success: false, chats: [], error: error instanceof Error ? error.message : 'Failed to get chats' };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.GET_CHAT, async (_event, chatId: number) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, chat: null, error: 'P2P core not initialized' };
+      }
+
+      console.log(`[IPC] Fetching chat by ID: ${chatId}`);
+      const myPeerId = p2pCore.userIdentity.id;
+      const chat = p2pCore.database.getChatByIdWithUsernameAndLastMsg(chatId, myPeerId);
+
+      if (!chat) {
+        return { success: false, chat: null, error: 'Chat not found' };
+      }
+
+      console.log(`[IPC] Found chat: ${chat.name}`);
+      return { success: true, chat, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to get chat:', error);
+      return { success: false, chat: null, error: error instanceof Error ? error.message : 'Failed to get chat' };
     }
   });
 }
@@ -600,6 +779,231 @@ function setupOfflineMessageHandlers(
     } catch (error) {
       console.error(`[IPC] Failed to check offline messages for chat ${chatId}:`, error);
       return { success: false, checkedChatIds: [], unreadFromChats: new Map(), error: error instanceof Error ? error.message : 'Failed to check offline messages' };
+    }
+  });
+}
+/**
+ * Notification handlers
+ */
+function setupNotificationHandlers(
+  ipcMain: IpcMain,
+  getMainWindow: () => BrowserWindow | null
+): void {
+  // Show desktop notification
+  ipcMain.handle(IPC_CHANNELS.SHOW_NOTIFICATION, async (_event, options: {
+    title: string;
+    body: string;
+    chatId?: number;
+  }) => {
+    try {
+      const notification = new Notification({
+        title: options.title,
+        body: options.body,
+      });
+
+      // Handle notification click - focus window and navigate to chat
+      notification.on('click', () => {
+        const mainWindow = getMainWindow();
+        if (mainWindow) {
+          if (mainWindow.isMinimized()) {
+            mainWindow.restore();
+          }
+          mainWindow.focus();
+
+          // Send chat ID to renderer so it can navigate
+          if (options.chatId) {
+            mainWindow.webContents.send('notification:clicked', options.chatId);
+          }
+        }
+      });
+
+      notification.show();
+      return { success: true };
+    } catch (error) {
+      console.error('[IPC] Failed to show notification:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to show notification' };
+    }
+  });
+
+  // Check if window is focused
+  ipcMain.handle(IPC_CHANNELS.IS_WINDOW_FOCUSED, async () => {
+    const mainWindow = getMainWindow();
+    return { focused: mainWindow?.isFocused() ?? false };
+  });
+
+  // Focus window
+  ipcMain.handle(IPC_CHANNELS.FOCUS_WINDOW, async () => {
+    try {
+      const mainWindow = getMainWindow();
+      if (mainWindow) {
+        if (mainWindow.isMinimized()) {
+          mainWindow.restore();
+        }
+        mainWindow.focus();
+      }
+      return { success: true };
+    } catch (error) {
+      console.error('[IPC] Failed to focus window:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to focus window' };
+    }
+  });
+}
+
+/**
+ * Chat settings handlers
+ */
+function setupChatSettingsHandlers(
+  ipcMain: IpcMain,
+  getP2PCore: () => P2PCore | null
+): void {
+  ipcMain.handle(IPC_CHANNELS.TOGGLE_CHAT_MUTE, async (_event, chatId: number) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, muted: false, error: 'P2P core not initialized' };
+      }
+
+      console.log(`[IPC] Toggling mute for chat: ${chatId}`);
+      const muted = p2pCore.database.toggleChatMute(chatId);
+      console.log(`[IPC] Chat ${chatId} muted status: ${muted}`);
+
+      return { success: true, muted, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to toggle chat mute:', error);
+      return { success: false, muted: false, error: error instanceof Error ? error.message : 'Failed to toggle mute' };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.BLOCK_USER, async (_event, peerId: string, username: string | null, reason: string | null) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+
+      console.log(`[IPC] Blocking user: ${peerId}`);
+      p2pCore.database.blockPeer(peerId, username, reason);
+      console.log(`[IPC] User ${peerId} blocked`);
+
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to block user:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to block user' };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.UNBLOCK_USER, async (_event, peerId: string) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+
+      console.log(`[IPC] Unblocking user: ${peerId}`);
+      p2pCore.database.unblockPeer(peerId);
+      console.log(`[IPC] User ${peerId} unblocked`);
+
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to unblock user:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to unblock user' };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.IS_USER_BLOCKED, async (_event, peerId: string) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, blocked: false, error: 'P2P core not initialized' };
+      }
+
+      const blocked = p2pCore.database.isBlocked(peerId);
+      return { success: true, blocked, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to check if user is blocked:', error);
+      return { success: false, blocked: false, error: error instanceof Error ? error.message : 'Failed to check blocked status' };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.GET_USER_INFO, async (_event, peerId: string, chatId: number) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+
+      const user = p2pCore.database.getUserByPeerId(peerId);
+      if (!user) {
+        return { success: false, error: 'User not found' };
+      }
+
+      const chat = p2pCore.database.getChatByIdWithUsernameAndLastMsg(chatId, p2pCore.userIdentity.id);
+      const messageCount = p2pCore.database.getMessageCount(chatId);
+      const blockedPeers = p2pCore.database.getBlockedPeers();
+      const blockedInfo = blockedPeers.find(bp => bp.peer_id === peerId);
+
+      return {
+        success: true,
+        userInfo: {
+          username: user.username,
+          peerId: user.peer_id,
+          userSince: user.created_at,
+          chatCreated: chat?.created_at,
+          trustedOutOfBand: chat?.trusted_out_of_band || false,
+          messageCount,
+          muted: chat?.muted || false,
+          blocked: !!blockedInfo,
+          blockedAt: blockedInfo?.blocked_at,
+          blockReason: blockedInfo?.reason,
+        },
+        error: null
+      };
+    } catch (error) {
+      console.error('[IPC] Failed to get user info:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to get user info' };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.DELETE_ALL_MESSAGES, async (_event, chatId: number) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+
+      console.log(`[IPC] Deleting all messages for chat ${chatId}`);
+      p2pCore.database.deleteAllMessagesForChat(chatId);
+      console.log(`[IPC] All messages deleted for chat ${chatId}`);
+
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to delete all messages:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to delete messages' };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.DELETE_CHAT_AND_USER, async (_event, chatId: number, userPeerId: string) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+
+      console.log(`[IPC] Deleting chat ${chatId} and user ${userPeerId}`);
+      p2pCore.database.deleteChatAndUser(chatId, userPeerId);
+      try {
+        p2pCore.messageHandler.getKeyExchange().deletePendingAcceptanceByPeerId(userPeerId);
+        p2pCore.messageHandler.getSessionManager().clearSession(userPeerId);
+        p2pCore.messageHandler.getSessionManager().removePendingKeyExchange(userPeerId);
+      } catch (err) {
+        console.error('[IPC] Failed to delete in memory data:', err);
+      }
+      console.log(`[IPC] Chat ${chatId} and user ${userPeerId} deleted`);
+
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to delete chat and user:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to delete chat and user' };
     }
   });
 }

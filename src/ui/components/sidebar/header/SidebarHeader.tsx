@@ -1,14 +1,17 @@
 import { useEffect, useState, useRef, type FC } from "react";
 import { Logo } from "../../icons/Logo";
-import { Plus } from "lucide-react";
+import { Plus, MessageSquarePlus, UserPlus } from "lucide-react";
 import { Button } from "../../ui/Button";
 import ConnectionStatusDialog from "./ConnectionStatusDialog";
 import { KiyeovoDialog } from "./KiyeovoDialog";
 import { useDispatch, useSelector } from "react-redux";
 import { setConnected } from "../../../state/slices/userSlice";
 import NewConversationDialog from "./NewConversationDialog";
-import { addPendingKeyExchange, setActivePendingKeyExchange } from "../../../state/slices/chatSlice";
+import ImportTrustedUserDialog from "./ImportTrustedUserDialog";
+import { addPendingKeyExchange, setActivePendingKeyExchange, setActiveChat, addChat, type Chat } from "../../../state/slices/chatSlice";
 import type { RootState } from "../../../state/store";
+import { DropdownMenu, DropdownMenuItem } from "../../ui/DropdownMenu";
+import { useToast } from "../../ui/use-toast";
 
 type SidebarHeaderProps = {};
 
@@ -17,10 +20,13 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
     const [kiyeovoDialogOpen, setKiyeovoDialogOpen] = useState(false);
     const [isDHTConnected, setIsDHTConnected] = useState<boolean | null>(null);
     const [newConversationDialogOpen, setNewConversationDialogOpen] = useState(false);
+    const [importTrustedUserDialogOpen, setImportTrustedUserDialogOpen] = useState(false);
+    const [dropdownOpen, setDropdownOpen] = useState(false);
     const [error, setError] = useState<string | undefined>(undefined);
     const isConnected = useSelector((state: RootState) => state.user.connected);
 
     const dispatch = useDispatch();
+    const { toast } = useToast();
 
     // Ref to track latest newConversationDialogOpen value without recreating listeners
     const newConversationDialogOpenRef = useRef(newConversationDialogOpen);
@@ -90,6 +96,49 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
 
     const handleShowNewConversationDialog = () => {
         setNewConversationDialogOpen(true);
+        setDropdownOpen(false);
+    }
+
+    const handleShowImportTrustedUserDialog = () => {
+        setImportTrustedUserDialogOpen(true);
+        setDropdownOpen(false);
+    }
+
+    const handleImportSuccess = async (chatId: number) => {
+        console.log(`Successfully imported trusted user, chat ID: ${chatId}`);
+
+        // Fetch the new chat and add it to the state
+        try {
+            const result = await window.kiyeovoAPI.getChatById(chatId);
+            if (result.success && result.chat) {
+                const chat: Chat = {
+                    id: result.chat.id,
+                    type: result.chat.type as 'direct' | 'group',
+                    name: result.chat.username || result.chat.name,
+                    peerId: result.chat.other_peer_id,
+                    lastMessage: result.chat.last_message_content || '',
+                    lastMessageTimestamp: result.chat.last_message_timestamp
+                        ? new Date(result.chat.last_message_timestamp).getTime()
+                        : new Date(result.chat.updated_at || result.chat.created_at).getTime(),
+                    unreadCount: 0,
+                    status: result.chat.status as 'active' | 'pending' | 'awaiting_acceptance',
+                    username: result.chat.username,
+                    trusted_out_of_band: result.chat.trusted_out_of_band,
+                    justCreated: true,
+                    fetchedOffline: true,
+                    isFetchingOffline: false,
+                };
+                dispatch(addChat(chat));
+            }
+        } catch (error) {
+            console.error('Failed to fetch chat:', error);
+        }
+
+        // Navigate to the chat
+        dispatch(setActiveChat(chatId));
+
+        // Show success toast
+        toast.success("You can now send encrypted messages to this user.", "User imported successfully");
     }
 
     return <>
@@ -107,14 +156,32 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
                     </span>
                     <span className={`w-2 h-2 rounded-full mb-0.5 ${isDHTConnected === null ? "bg-muted-foreground" : isDHTConnected ? "bg-success pulse-online" : "bg-destructive"}`} />
                 </button>
-                <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={handleShowNewConversationDialog}
-                    className="text-sidebar-foreground hover:text-primary bg-secondary/50 border"
+                <DropdownMenu
+                    open={dropdownOpen}
+                    onOpenChange={setDropdownOpen}
+                    trigger={
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            className="text-sidebar-foreground hover:text-primary bg-secondary/50 border"
+                        >
+                            <Plus className="w-5 h-5" />
+                        </Button>
+                    }
                 >
-                    <Plus className="w-5 h-5" />
-                </Button>
+                    <DropdownMenuItem
+                        icon={<MessageSquarePlus className="w-4 h-4" />}
+                        onClick={handleShowNewConversationDialog}
+                    >
+                        New Conversation
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                        icon={<UserPlus className="w-4 h-4" />}
+                        onClick={handleShowImportTrustedUserDialog}
+                    >
+                        Import Trusted User
+                    </DropdownMenuItem>
+                </DropdownMenu>
             </div>
         </div>
         <ConnectionStatusDialog open={dhtDialogOpen} onOpenChange={setDhtDialogOpen} isConnected={isDHTConnected} />
@@ -125,6 +192,11 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
             onNewConversation={handleNewConversation}
             backendError={error}
             setError={setError}
+        />
+        <ImportTrustedUserDialog
+            open={importTrustedUserDialogOpen}
+            onOpenChange={setImportTrustedUserDialogOpen}
+            onSuccess={handleImportSuccess}
         />
     </>
 };

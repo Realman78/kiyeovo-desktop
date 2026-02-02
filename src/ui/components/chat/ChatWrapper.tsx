@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { ChatHeader } from "./header/ChatHeader";
 import { useSelector } from "react-redux";
 import type { RootState } from "../../state/store";
@@ -8,14 +8,6 @@ import { ChatInput } from "./input/ChatInput";
 import { InvitationManager } from "./input/InvitationManager";
 import { EmptyState } from "./messages/EmptyState";
 import { PendingKxManager } from "./input/PendingKxManager";
-
-interface Message {
-  id: string;
-  content: string;
-  timestamp: string;
-  sent: boolean;
-  status?: "sending" | "sent" | "delivered" | "read";
-}
 
 interface ChatWrapperProps {
   //   chatName: string;
@@ -27,12 +19,10 @@ interface ChatWrapperProps {
 const ChatWrapper = ({
 
 }: ChatWrapperProps) => {
-  const [inputValue, setInputValue] = useState("");
   const activeChat = useSelector((state: RootState) => state.chat.activeChat);
   const activeContactAttempt = useSelector((state: RootState) => state.chat.activeContactAttempt);
   const activePendingKeyExchange = useSelector((state: RootState) => state.chat.activePendingKeyExchange);
   const messages = useSelector((state: RootState) => state.chat.messages);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   //   useEffect(() => {
   //     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -60,7 +50,7 @@ const ChatWrapper = ({
     if (activePendingKeyExchange) {
       return [createPendingMessage(activePendingKeyExchange.messageContent ?? "Message not found.", -78, activePendingKeyExchange.peerId, activePendingKeyExchange.username)]
     }
-    return messages.filter((m) => m.chatId === activeChat?.id) ?? [];
+    return activeChat ? messages.filter((m) => m.chatId === activeChat?.id) ?? [] : [];
   }, [activePendingKeyExchange, activeContactAttempt, activeChat, messages]);
 
   const FooterToDisplay = useMemo(() => {

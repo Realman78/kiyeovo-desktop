@@ -110,6 +110,43 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
         return ipcRenderer.invoke(IPC_CHANNELS.GET_CONTACT_ATTEMPTS);
     },
 
+    // Trusted user import/export
+    importTrustedUser: async (filePath: string, password: string, customName?: string): Promise<{
+        success: boolean;
+        error?: string;
+        fingerprint?: string;
+        chatId?: number;
+        username?: string;
+        peerId?: string;
+    }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.IMPORT_TRUSTED_USER, filePath, password, customName);
+    },
+
+    exportProfile: async (password: string, sharedSecret: string): Promise<{
+        success: boolean;
+        error?: string;
+        filePath?: string;
+        fingerprint?: string;
+    }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.EXPORT_PROFILE, password, sharedSecret);
+    },
+
+    // File dialogs
+    showOpenDialog: async (options: {
+        title?: string;
+        filters?: Array<{ name: string; extensions: string[] }>;
+    }): Promise<{ filePath: string | null; canceled: boolean }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.SHOW_OPEN_DIALOG, options);
+    },
+
+    showSaveDialog: async (options: {
+        title?: string;
+        defaultPath?: string;
+        filters?: Array<{ name: string; extensions: string[] }>;
+    }): Promise<{ filePath: string | null; canceled: boolean }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.SHOW_SAVE_DIALOG, options);
+    },
+
     // Chat created event
     onChatCreated: (callback: (data: ChatCreatedEvent) => void) => {
         const listener = (_event: any, data: ChatCreatedEvent) => callback(data);
@@ -134,6 +171,9 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     // Chats
     getChats: async (): Promise<{ success: boolean; chats: Array<any>; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.GET_CHATS);
+    },
+    getChatById: async (chatId: number): Promise<{ success: boolean; chat: any | null; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.GET_CHAT, chatId);
     },
 
     // Messages
@@ -162,5 +202,64 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
         const listener = (_event: any, data: { chatIds: number[] }) => callback(data);
         ipcRenderer.on(IPC_CHANNELS.OFFLINE_MESSAGES_FETCH_COMPLETE, listener);
         return () => ipcRenderer.removeListener(IPC_CHANNELS.OFFLINE_MESSAGES_FETCH_COMPLETE, listener);
+    },
+
+    // Notifications
+    showNotification: async (options: { title: string; body: string; chatId?: number }): Promise<{ success: boolean; error?: string }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.SHOW_NOTIFICATION, options);
+    },
+    isWindowFocused: async (): Promise<{ focused: boolean }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.IS_WINDOW_FOCUSED);
+    },
+    focusWindow: async (): Promise<{ success: boolean; error?: string }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.FOCUS_WINDOW);
+    },
+    onNotificationClicked: (callback: (chatId: number) => void) => {
+        const listener = (_event: any, chatId: number) => callback(chatId);
+        ipcRenderer.on('notification:clicked', listener);
+        return () => ipcRenderer.removeListener('notification:clicked', listener);
+    },
+
+    // Chat settings
+    toggleChatMute: async (chatId: number): Promise<{ success: boolean; muted: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.TOGGLE_CHAT_MUTE, chatId);
+    },
+
+    // User blocking
+    blockUser: async (peerId: string, username: string | null, reason: string | null): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.BLOCK_USER, peerId, username, reason);
+    },
+    unblockUser: async (peerId: string): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.UNBLOCK_USER, peerId);
+    },
+    isUserBlocked: async (peerId: string): Promise<{ success: boolean; blocked: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.IS_USER_BLOCKED, peerId);
+    },
+    getUserInfo: async (peerId: string, chatId: number): Promise<{
+        success: boolean;
+        userInfo?: {
+            username: string;
+            peerId: string;
+            userSince: Date;
+            chatCreated?: Date;
+            trustedOutOfBand: boolean;
+            messageCount: number;
+            muted: boolean;
+            blocked: boolean;
+            blockedAt?: Date;
+            blockReason?: string | null;
+        };
+        error: string | null
+    }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.GET_USER_INFO, peerId, chatId);
+    },
+
+    // Chat operations
+    deleteAllMessages: async (chatId: number): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.DELETE_ALL_MESSAGES, chatId);
+    },
+    deleteChatAndUser: async (chatId: number, userPeerId: string): Promise<{ success: boolean; error: string | null }> => {
+        console.log("deleteChatAndUser", chatId, userPeerId);
+        return ipcRenderer.invoke(IPC_CHANNELS.DELETE_CHAT_AND_USER, chatId, userPeerId);
     },
 });

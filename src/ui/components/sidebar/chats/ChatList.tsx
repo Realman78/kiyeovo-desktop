@@ -18,8 +18,9 @@ export const ChatList: FC = () => {
         dispatch(setActiveChat(chatId));
 
         // Check if we need to fetch offline messages for this chat
+        // Skip offline message fetching for blocked chats
         const chat = chats.find(c => c.id === chatId);
-        if (chat && !chat.fetchedOffline && !chat.isFetchingOffline) {
+        if (chat && !chat.fetchedOffline && !chat.isFetchingOffline && !chat.blocked) {
             console.log(`[UI] Fetching offline messages for chat ${chatId}...`);
             dispatch(setOfflineFetchStatus({ chatId, isFetching: true }));
 

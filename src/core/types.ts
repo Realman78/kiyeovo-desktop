@@ -481,6 +481,7 @@ export const IPC_CHANNELS = {
   // Chat events
   CHAT_CREATED: 'chat:created',
   GET_CHATS: 'chats:get',
+  GET_CHAT: 'chat:get',
 
   // Message events
   MESSAGE_RECEIVED: 'message:received',
@@ -494,7 +495,15 @@ export const IPC_CHANNELS = {
 
   // Contact attempts
   GET_CONTACT_ATTEMPTS: 'contactAttempts:get',
-  
+
+  // Trusted user import/export
+  IMPORT_TRUSTED_USER: 'trustedUser:import',
+  EXPORT_PROFILE: 'profile:export',
+
+  // File dialogs
+  SHOW_OPEN_DIALOG: 'dialog:showOpen',
+  SHOW_SAVE_DIALOG: 'dialog:showSave',
+
   // Messages
   GET_MESSAGES: 'messages:get',
 
@@ -506,6 +515,20 @@ export const IPC_CHANNELS = {
 
   // Pending key exchange events
   CANCEL_PENDING_KEY_EXCHANGE: 'pendingKeyExchange:cancel',
+
+  // Notifications
+  SHOW_NOTIFICATION: 'notification:show',
+  IS_WINDOW_FOCUSED: 'window:isFocused',
+  FOCUS_WINDOW: 'window:focus',
+
+  // Chat settings
+  TOGGLE_CHAT_MUTE: 'chat:toggleMute',
+  BLOCK_USER: 'user:block',
+  UNBLOCK_USER: 'user:unblock',
+  IS_USER_BLOCKED: 'user:isBlocked',
+  GET_USER_INFO: 'user:getInfo',
+  DELETE_ALL_MESSAGES: 'chat:deleteAllMessages',
+  DELETE_CHAT_AND_USER: 'chat:deleteChatAndUser',
 } as const;
 
 export interface PasswordRequest {

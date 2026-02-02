@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { AtSign, Shield, AlertCircle, Copy, Check, User, Edit2, X } from "lucide-react";
+import { AtSign, Shield, AlertCircle, Copy, Check, User, Edit2, X, Download, Lock, Key, ChevronDown, CheckCircle, FolderOpen } from "lucide-react";
 import {
     Dialog,
     DialogContent,
@@ -30,6 +30,16 @@ const UserDialog = ({ open, onOpenChange, onRegister, backendError, isRegisterin
     const [isCopied, setIsCopied] = useState(false);
     const [isEditingUsername, setIsEditingUsername] = useState(false);
     const [autoRegister, setAutoRegister] = useState(false);
+    const [isExporting, setIsExporting] = useState(false);
+    const [isExportExpanded, setIsExportExpanded] = useState(false);
+    const [exportPassword, setExportPassword] = useState("");
+    const [exportPasswordConfirm, setExportPasswordConfirm] = useState("");
+    const [sharedSecret, setSharedSecret] = useState("");
+    const [exportError, setExportError] = useState("");
+    const [exportSuccess, setExportSuccess] = useState(false);
+    const [exportedFingerprint, setExportedFingerprint] = useState("");
+    const [exportedFilePath, setExportedFilePath] = useState("");
+    const [fingerprintCopied, setFingerprintCopied] = useState(false);
     const { toast } = useToast();
     const user = useSelector((state: RootState) => state.user);
     const [newUsername, setNewUsername] = useState(user.username || "");
@@ -109,6 +119,74 @@ const UserDialog = ({ open, onOpenChange, onRegister, backendError, isRegisterin
     const handleAutoRegisterToggle = async (enabled: boolean) => {
         setAutoRegister(enabled);
         await window.kiyeovoAPI.setAutoRegister(enabled);
+    };
+
+    const handleCloseExportSuccess = () => {
+        setExportSuccess(false);
+        setExportedFingerprint("");
+        setExportedFilePath("");
+        setFingerprintCopied(false);
+        setIsExportExpanded(false);
+        onOpenChange(false);
+    };
+
+    const handleCopyFingerprint = async () => {
+        if (exportedFingerprint) {
+            await navigator.clipboard.writeText(exportedFingerprint);
+            setFingerprintCopied(true);
+            setTimeout(() => setFingerprintCopied(false), 2000);
+        }
+    };
+
+    const handleExportProfile = async () => {
+        setExportError("");
+
+        // Validate inputs
+        if (!exportPassword) {
+            setExportError("Password is required");
+            return;
+        }
+
+        if (exportPassword !== exportPasswordConfirm) {
+            setExportError("Passwords do not match");
+            return;
+        }
+
+        if (!sharedSecret) {
+            setExportError("Shared secret is required");
+            return;
+        }
+
+        if (exportPassword.length < 8) {
+            setExportError("Password must be at least 8 characters");
+            return;
+        }
+
+        setIsExporting(true);
+
+        try {
+            const result = await window.kiyeovoAPI.exportProfile(exportPassword, sharedSecret);
+
+            if (result.success && result.filePath && result.fingerprint) {
+                // Show success dialog with security warnings
+                setExportedFilePath(result.filePath);
+                setExportedFingerprint(result.fingerprint);
+                setExportSuccess(true);
+                setIsExporting(false);
+
+                // Reset form
+                setExportPassword("");
+                setExportPasswordConfirm("");
+                setSharedSecret("");
+            } else {
+                setExportError(result.error || "Failed to export profile");
+                setIsExporting(false);
+            }
+        } catch (error) {
+            console.error("Failed to export profile:", error);
+            setExportError(error instanceof Error ? error.message : "Unexpected error occurred");
+            setIsExporting(false);
+        }
     };
 
     const displayError = backendError || validationError;
@@ -237,6 +315,153 @@ const UserDialog = ({ open, onOpenChange, onRegister, backendError, isRegisterin
                                         }`}
                                     />
                                 </button>
+                            </div>
+                        </div>
+
+                        <div className="pt-2 pb-2 border-b border-border">
+                            <button
+                                type="button"
+                                onClick={() => setIsExportExpanded(!isExportExpanded)}
+                                className="w-full cursor-pointer flex items-center justify-between py-1 hover:bg-secondary/50 transition-colors rounded pr-2"
+                            >
+                                <div>
+                                    <div className="text-sm font-medium text-foreground text-left">
+                                        Export Profile
+                                    </div>
+                                    <p className="text-xs text-muted-foreground text-left">
+                                        Share your encrypted profile with trusted contacts
+                                    </p>
+                                </div>
+                                <ChevronDown
+                                    className={`w-4 h-4 text-muted-foreground transition-transform duration-300 ${isExportExpanded ? '' : '-rotate-90'}`}
+                                />
+                            </button>
+
+                            <div
+                                className={`transition-all duration-300 ease-in-out overflow-hidden ${isExportExpanded ? 'max-h-[600px]' : 'max-h-0'}`}
+                            >
+                                {!exportSuccess ? (
+                                    <div className="space-y-3 pt-3">
+                                        <Input
+                                            type="password"
+                                            placeholder="Enter password..."
+                                            value={exportPassword}
+                                            onChange={(e) => setExportPassword(e.target.value)}
+                                            icon={<Lock className="w-4 h-4" />}
+                                            spellCheck={false}
+                                            autoComplete="new-password"
+                                        />
+                                        <Input
+                                            type="password"
+                                            placeholder="Confirm password..."
+                                            value={exportPasswordConfirm}
+                                            onChange={(e) => setExportPasswordConfirm(e.target.value)}
+                                            icon={<Lock className="w-4 h-4" />}
+                                            spellCheck={false}
+                                            autoComplete="new-password"
+                                        />
+                                        <Input
+                                            type="text"
+                                            placeholder="Shared secret (coordinate with recipient)..."
+                                            value={sharedSecret}
+                                            onChange={(e) => setSharedSecret(e.target.value)}
+                                            icon={<Key className="w-4 h-4" />}
+                                            spellCheck={false}
+                                        />
+                                        {exportError && (
+                                            <div className="flex items-center gap-2 text-destructive text-sm">
+                                                <AlertCircle className="w-4 h-4" />
+                                                <span>{exportError}</span>
+                                            </div>
+                                        )}
+                                        <Button
+                                            type="button"
+                                            size="sm"
+                                            onClick={handleExportProfile}
+                                            disabled={isExporting || !exportPassword || !sharedSecret}
+                                            className="w-full"
+                                        >
+                                            <Download className="w-3 h-3 mr-2" />
+                                            {isExporting ? 'Exporting...' : 'Export Profile'}
+                                        </Button>
+                                    </div>
+                                ) : (
+                                    <div className="space-y-4 pt-3">
+                                        {/* Success Message */}
+                                        <div className="flex items-center gap-2 text-success">
+                                            <CheckCircle className="w-5 h-5" />
+                                            <span className="font-medium">Profile exported successfully!</span>
+                                        </div>
+
+                                        {/* File Location */}
+                                        <div>
+                                            <label className="block text-xs font-medium text-muted-foreground mb-1">
+                                                Saved to
+                                            </label>
+                                            <div className="p-2 rounded-md bg-secondary/50 border border-border">
+                                                <p className="text-xs font-mono break-all">{exportedFilePath}</p>
+                                            </div>
+                                        </div>
+
+                                        {/* Security Warning */}
+                                        <div className="p-3 rounded-md bg-warning/10 border border-warning/50">
+                                            <div className="flex items-start gap-2">
+                                                <AlertCircle className="w-5 h-5 text-warning shrink-0 mt-0.5" />
+                                                <div className="space-y-2">
+                                                    <p className="font-medium text-foreground text-sm">SECURITY NOTICE</p>
+                                                    <p className="text-xs text-muted-foreground">
+                                                        This profile allows anyone with the file and password to:
+                                                    </p>
+                                                    <ul className="text-xs text-muted-foreground space-y-1 ml-4 list-disc">
+                                                        <li>Send you offline messages</li>
+                                                        <li>Impersonate lookups (if they have your peerId)</li>
+                                                    </ul>
+                                                    <p className="text-xs text-muted-foreground font-medium">
+                                                        Only share this with people you trust. Communicate the password separately (phone, video call, etc.).
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Fingerprint */}
+                                        <div>
+                                            <label className="block text-xs font-medium text-muted-foreground mb-1">
+                                                Fingerprint (verify with recipient)
+                                            </label>
+                                            <div className="p-2 rounded-md bg-secondary/50 border border-border font-mono text-xs break-all">
+                                                {exportedFingerprint}
+                                            </div>
+                                            <Button
+                                                type="button"
+                                                variant="outline"
+                                                size="sm"
+                                                onClick={handleCopyFingerprint}
+                                                className="w-full mt-2"
+                                            >
+                                                {fingerprintCopied ? (
+                                                    <>
+                                                        <Check className="w-3 h-3 mr-2" />
+                                                        Copied!
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <Copy className="w-3 h-3 mr-2" />
+                                                        Copy Fingerprint
+                                                    </>
+                                                )}
+                                            </Button>
+                                        </div>
+
+                                        {/* Close Button */}
+                                        <Button
+                                            type="button"
+                                            onClick={handleCloseExportSuccess}
+                                            className="w-full"
+                                        >
+                                            I Understand
+                                        </Button>
+                                    </div>
+                                )}
                             </div>
                         </div>
 

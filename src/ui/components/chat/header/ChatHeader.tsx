@@ -1,20 +1,171 @@
-import { useSelector } from "react-redux";
+import { useState, useEffect } from "react";
+import { useSelector, useDispatch } from "react-redux";
 import type { RootState } from "../../../state/store";
 import { Button } from "../../ui/Button";
-import { MoreVertical, Shield, UserPlus } from "lucide-react";
+import { Bell, BellOff, MoreVertical, Shield, UserPlus, Ban, UserCheck, Info, Trash2 } from "lucide-react";
+import { DropdownMenu, DropdownMenuItem } from "../../ui/DropdownMenu";
+import { updateChat, clearMessages, removeChat } from "../../../state/slices/chatSlice";
+import { AboutUserModal } from "./AboutUserModal";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogDescription,
+} from "../../ui/Dialog";
+import { useToast } from "../../ui/use-toast";
 
 type ChatHeaderProps = {
-    username: string;
-    peerId: string;
+  username: string;
+  peerId: string;
 }
 export const ChatHeader = ({ username, peerId }: ChatHeaderProps) => {
-    const activeChat = useSelector((state: RootState) => state.chat.activeChat);
-    return <div className={`h-16 px-6 flex items-center justify-between border-b border-border ${activeChat?.status === 'pending' ? "" : "bg-card/50"}`}>
+  const activeChat = useSelector((state: RootState) => state.chat.activeChat);
+  const dispatch = useDispatch();
+  const { toast } = useToast();
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [isBlocked, setIsBlocked] = useState(false);
+  const [aboutModalOpen, setAboutModalOpen] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteChatAndUserConfirmOpen, setDeleteChatAndUserConfirmOpen] = useState(false);
+
+  useEffect(() => {
+    const checkBlockedStatus = async () => {
+      if (!peerId || !activeChat) return;
+
+      try {
+        const result = await window.kiyeovoAPI.isUserBlocked(peerId);
+        if (result.success) {
+          setIsBlocked(result.blocked);
+          // Update Redux state
+          dispatch(updateChat({
+            id: activeChat.id,
+            updates: { blocked: result.blocked }
+          }));
+        }
+      } catch (error) {
+        console.error('Failed to check blocked status:', error);
+      }
+    };
+
+    checkBlockedStatus();
+  }, [peerId, activeChat?.id, dispatch]);
+
+  const handleToggleMute = async () => {
+    if (!activeChat) return;
+
+    try {
+      const result = await window.kiyeovoAPI.toggleChatMute(activeChat.id);
+      if (result.success) {
+        dispatch(updateChat({
+          id: activeChat.id,
+          updates: { muted: result.muted }
+        }));
+      }
+    } catch (error) {
+      console.error('Failed to toggle mute:', error);
+    }
+    setDropdownOpen(false);
+  };
+
+  const handleToggleBlock = async () => {
+    if (!peerId || !activeChat) return;
+
+    try {
+      if (isBlocked) {
+        const result = await window.kiyeovoAPI.unblockUser(peerId);
+        if (result.success) {
+          setIsBlocked(false);
+          dispatch(updateChat({
+            id: activeChat.id,
+            updates: { blocked: false }
+          }));
+        }
+      } else {
+        const result = await window.kiyeovoAPI.blockUser(peerId, username, null);
+        if (result.success) {
+          setIsBlocked(true);
+          dispatch(updateChat({
+            id: activeChat.id,
+            updates: { blocked: true }
+          }));
+        }
+      }
+    } catch (error) {
+      console.error('Failed to toggle block:', error);
+    }
+    setDropdownOpen(false);
+  };
+
+  const handleAboutUser = () => {
+    setAboutModalOpen(true);
+    setDropdownOpen(false);
+  };
+
+  const handleDeleteAllMessages = () => {
+    setDeleteConfirmOpen(true);
+    setDropdownOpen(false);
+  };
+
+  const handleDeleteChatAndUser = () => {
+    setDeleteChatAndUserConfirmOpen(true);
+    setDropdownOpen(false);
+  };
+
+  const confirmDeleteAllMessages = async () => {
+    if (!activeChat) return;
+
+    setIsDeleting(true);
+    try {
+      const result = await window.kiyeovoAPI.deleteAllMessages(activeChat.id);
+      if (result.success) {
+        // Clear messages from Redux
+        dispatch(clearMessages(activeChat.id));
+        // Update chat to clear last message
+        dispatch(updateChat({
+          id: activeChat.id,
+          updates: {
+            lastMessage: "SYSTEM: No messages yet",
+            lastMessageTimestamp: Date.now()
+          }
+        }));
+      }
+    } catch (error) {
+      console.error('Failed to delete all messages:', error);
+    } finally {
+      setIsDeleting(false);
+      setDeleteConfirmOpen(false);
+    }
+  };
+  const confirmDeleteChatAndUser = async () => {
+    console.log("confirmDeleteChatAndUser", activeChat);
+    if (!activeChat || !activeChat.peerId) return;
+
+    setIsDeleting(true);
+    try {
+      console.log("deleting chat and user", activeChat.id, activeChat.peerId);
+      const result = await window.kiyeovoAPI.deleteChatAndUser(activeChat.id, activeChat.peerId);
+      console.log("result", result);
+      if (result.success) {
+        dispatch(removeChat(activeChat.id));
+        toast.info("Chat and user deleted successfully");
+      }
+    } catch (error) {
+      console.error('Failed to delete all messages:', error);
+    } finally {
+      setIsDeleting(false);
+      setDeleteConfirmOpen(false);
+    }
+  };
+
+  return <div className={`h-16 px-6 flex items-center justify-between border-b border-border ${activeChat?.status === 'pending' ? "" : "bg-card/50"}`}>
     <div className="flex items-center gap-3">
       {activeChat?.status === 'pending' ? (
         <div className="w-10 h-10 rounded-full bg-warning/20 flex items-center justify-center">
-        <UserPlus className="w-5 h-5 text-warning" />
-      </div>
+          <UserPlus className="w-5 h-5 text-warning" />
+        </div>
       ) : null}
       <div>
         <h3 className="font-medium text-foreground text-left">{username}</h3>
@@ -28,9 +179,109 @@ export const ChatHeader = ({ username, peerId }: ChatHeaderProps) => {
     </div>
 
     <div className="flex items-center gap-1">
-      <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground">
-        <MoreVertical className="w-4 h-4" />
-      </Button>
+      <DropdownMenu
+        open={dropdownOpen}
+        onOpenChange={setDropdownOpen}
+        trigger={
+          <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground">
+            <MoreVertical className="w-4 h-4" />
+          </Button>
+        }
+      >
+        <DropdownMenuItem
+          icon={<Info className="w-4 h-4" />}
+          onClick={handleAboutUser}
+        >
+          About user
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          icon={activeChat?.muted ? <Bell className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
+          onClick={handleToggleMute}
+        >
+          {activeChat?.muted ? 'Enable notifications' : 'Disable notifications'}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          icon={isBlocked ? <UserCheck className="w-4 h-4" /> : <Ban className="w-4 h-4" />}
+          onClick={handleToggleBlock}
+        >
+          {isBlocked ? 'Unblock user' : 'Block user'}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          icon={<Trash2 className="w-4 h-4" />}
+          onClick={handleDeleteAllMessages}
+        >
+          Clear messages
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          icon={<Trash2 className="w-4 h-4" />}
+          onClick={handleDeleteChatAndUser}
+        >
+          Delete chat & User
+        </DropdownMenuItem>
+      </DropdownMenu>
     </div>
+
+    {activeChat && (
+      <>
+        <AboutUserModal
+          open={aboutModalOpen}
+          onOpenChange={setAboutModalOpen}
+          peerId={peerId}
+          chatId={activeChat.id}
+        />
+        <Dialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Delete All Messages</DialogTitle>
+              <DialogDescription>
+                Are you sure you want to delete all messages in this chat? This action cannot be undone.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setDeleteConfirmOpen(false)}
+                disabled={isDeleting}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={confirmDeleteAllMessages}
+                disabled={isDeleting}
+              >
+                {isDeleting ? 'Deleting...' : 'Delete All'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <Dialog open={deleteChatAndUserConfirmOpen} onOpenChange={setDeleteChatAndUserConfirmOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Delete Chat & User</DialogTitle>
+              <DialogDescription>
+                Are you sure you want to delete this chat and user? This action cannot be undone.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setDeleteChatAndUserConfirmOpen(false)}
+                disabled={isDeleting}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={confirmDeleteChatAndUser}
+                disabled={isDeleting}
+              >
+                {isDeleting ? 'Deleting...' : 'Delete Chat & User'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </>
+    )}
   </div>
 }

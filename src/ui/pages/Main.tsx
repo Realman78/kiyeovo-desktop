@@ -6,12 +6,15 @@ import { setChats, addChat, removePendingKeyExchange, setActiveChat, markOffline
 import { removeContactAttempt, setActiveContactAttempt, addMessage, type Chat } from '../state/slices/chatSlice';
 import { useToast } from '../components/ui/use-toast';
 import type { RootState } from '../state/store';
+import { useNotifications } from '../hooks/useNotifications';
 import { store } from '../state/store';
 
 export const Main = () => {
   const dispatch = useDispatch();
   const { toast } = useToast();
   const myPeerId = useSelector((state: RootState) => state.user.peerId);
+
+  useNotifications();
 
   useEffect(() => {
     const unsubKeyExchangeFailed = window.kiyeovoAPI.onKeyExchangeFailed((data) => {
@@ -61,13 +64,17 @@ export const Main = () => {
         isFetchingOffline: false,
       };
 
+      // Read current state to check if user was viewing this contact/pending
+      const currentState = store.getState();
+      const wasViewingContact = currentState.chat.activeContactAttempt?.peerId === data.peerId;
+      const wasViewingPending = currentState.chat.activePendingKeyExchange?.peerId === data.peerId;
+
       dispatch(addChat(newChat));
       dispatch(removeContactAttempt(data.peerId));
-      dispatch(removePendingKeyExchange(data.peerId)); // Remove from pending key exchanges
+      dispatch(removePendingKeyExchange(data.peerId));
 
-      // Only auto-open chat if user was actively viewing this pending key exchange
-      const currentState = store.getState();
-      if (currentState.chat.activePendingKeyExchange?.peerId === data.peerId) {
+      // Auto-open chat if user was actively viewing this contact attempt or pending key exchange
+      if (wasViewingContact || wasViewingPending) {
         dispatch(setActiveChat(data.chatId));
       }
     });
@@ -103,6 +110,8 @@ export const Main = () => {
             status: dbChat.status,
             fetchedOffline: false,
             isFetchingOffline: false,
+            blocked: dbChat.blocked,
+            muted: dbChat.muted,
           }));
 
           dispatch(setChats(mappedChats));
@@ -138,6 +147,8 @@ export const Main = () => {
                     status: dbChat.status,
                     fetchedOffline: result.checkedChatIds.includes(dbChat.id),
                     isFetchingOffline: false,
+                    blocked: dbChat.blocked,
+                    muted: dbChat.muted,
                   }));
                   dispatch(setChats(refreshedChats));
                   console.log('[UI] Chats refreshed successfully');

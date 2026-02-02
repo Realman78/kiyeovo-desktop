@@ -14,8 +14,14 @@ export const SidebarFooter: FC = () => {
   const [isRegistering, setIsRegistering] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
   const dispatch = useDispatch();
+
+  // debugging
+  const chatState = useSelector((state: RootState) => state.chat);
+
   const handleSettings = () => {
+    // this will be used for debugging
     console.log("settings");
+    console.log(chatState);
   }
 
   const handleCopyPeerId = () => {
