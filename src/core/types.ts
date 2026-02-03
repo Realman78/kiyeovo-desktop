@@ -530,6 +530,11 @@ export const IPC_CHANNELS = {
   DELETE_ALL_MESSAGES: 'chat:deleteAllMessages',
   DELETE_CHAT_AND_USER: 'chat:deleteChatAndUser',
   UPDATE_USERNAME: 'chat:updateUsername',
+
+  // App settings
+  GET_NOTIFICATIONS_ENABLED: 'settings:getNotificationsEnabled',
+  SET_NOTIFICATIONS_ENABLED: 'settings:setNotificationsEnabled',
+  NOTIFICATIONS_ENABLED_CHANGED: 'settings:notificationsEnabledChanged',
 } as const;
 
 export interface PasswordRequest {

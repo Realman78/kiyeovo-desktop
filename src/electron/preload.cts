@@ -264,4 +264,17 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     updateUsername: async (peerId: string, newUsername: string): Promise<{ success: boolean; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.UPDATE_USERNAME, peerId, newUsername);
     },
+
+    // App settings
+    getNotificationsEnabled: async (): Promise<{ success: boolean; enabled: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.GET_NOTIFICATIONS_ENABLED);
+    },
+    setNotificationsEnabled: async (enabled: boolean): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.SET_NOTIFICATIONS_ENABLED, enabled);
+    },
+    onNotificationsEnabledChanged: (callback: (enabled: boolean) => void) => {
+        const listener = (_event: any, enabled: boolean) => callback(enabled);
+        ipcRenderer.on(IPC_CHANNELS.NOTIFICATIONS_ENABLED_CHANGED, listener);
+        return () => ipcRenderer.removeListener(IPC_CHANNELS.NOTIFICATIONS_ENABLED_CHANGED, listener);
+    },
 });

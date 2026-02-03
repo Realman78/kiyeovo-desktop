@@ -10,10 +10,29 @@ export const useNotifications = () => {
   const myPeerId = useSelector((state: RootState) => state.user.peerId);
   const dispatch = useDispatch();
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const notificationsEnabledRef = useRef(true);
 
   useEffect(() => {
+    const loadNotificationsSetting = async () => {
+      try {
+        const result = await window.kiyeovoAPI.getNotificationsEnabled();
+        if (result.success) {
+          notificationsEnabledRef.current = result.enabled;
+        }
+      } catch (error) {
+        console.error('Failed to load notifications setting:', error);
+      }
+    };
+    loadNotificationsSetting();
+
     // Initialize audio
     audioRef.current = new Audio('/sounds/notification2.mp3');
+
+    // Listen for notifications setting changes
+    const unsubscribeNotificationsSetting = window.kiyeovoAPI.onNotificationsEnabledChanged((enabled: boolean) => {
+      console.log(`[UI] Notifications enabled changed to: ${enabled}`);
+      notificationsEnabledRef.current = enabled;
+    });
 
     // Listen for message received events
     const unsubscribeMessages = window.kiyeovoAPI.onMessageReceived(async (data: MessageReceivedEvent) => {
@@ -29,8 +48,8 @@ export const useNotifications = () => {
         return;
       }
 
-      // Don't notify if chat is muted
-      if (chat?.muted) {
+      // Don't notify if chat is muted or global notifications are disabled
+      if (chat?.muted || !notificationsEnabledRef.current) {
         return;
       }
 
@@ -61,6 +80,11 @@ export const useNotifications = () => {
 
     // Listen for contact request events
     const unsubscribeContactRequests = window.kiyeovoAPI.onContactRequestReceived(async (data: ContactRequestEvent) => {
+      // Don't notify if global notifications are disabled
+      if (!notificationsEnabledRef.current) {
+        return;
+      }
+
       // Play sound
       try {
         if (audioRef.current) {
@@ -95,6 +119,7 @@ export const useNotifications = () => {
       unsubscribeMessages();
       unsubscribeContactRequests();
       unsubscribeNotificationClick();
+      unsubscribeNotificationsSetting();
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current = null;

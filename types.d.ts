@@ -144,6 +144,11 @@ declare global {
                 };
                 error: string | null
             }>;
+
+            // App settings
+            getNotificationsEnabled: () => Promise<{ success: boolean; enabled: boolean; error: string | null }>;
+            setNotificationsEnabled: (enabled: boolean) => Promise<{ success: boolean; error: string | null }>;
+            onNotificationsEnabledChanged: (callback: (enabled: boolean) => void) => () => void;
         };
     }
 }

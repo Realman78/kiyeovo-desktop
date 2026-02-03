@@ -53,7 +53,7 @@ export function setupIPCHandlers(
   setupNotificationHandlers(ipcMain, getMainWindow);
 
   // Chat settings handlers
-  setupChatSettingsHandlers(ipcMain, getP2PCore);
+  setupChatSettingsHandlers(ipcMain, getP2PCore, getMainWindow);
 }
 
 /**
@@ -854,7 +854,8 @@ function setupNotificationHandlers(
  */
 function setupChatSettingsHandlers(
   ipcMain: IpcMain,
-  getP2PCore: () => P2PCore | null
+  getP2PCore: () => P2PCore | null,
+  getMainWindow: () => BrowserWindow | null
 ): void {
   ipcMain.handle(IPC_CHANNELS.TOGGLE_CHAT_MUTE, async (_event, chatId: number) => {
     try {
@@ -1022,6 +1023,50 @@ function setupChatSettingsHandlers(
     } catch (error) {
       console.error('[IPC] Failed to delete all messages:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to delete messages' };
+    }
+  });
+
+  // App-level settings
+  ipcMain.handle(IPC_CHANNELS.GET_NOTIFICATIONS_ENABLED, async (_event) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, enabled: true, error: 'P2P core not initialized' };
+      }
+
+      const value = p2pCore.database.getSetting('notifications_enabled');
+      // Default to true if not set
+      const enabled = value === null ? true : value === 'true';
+      console.log(`[IPC] Get notifications enabled: ${enabled}`);
+
+      return { success: true, enabled, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to get notifications enabled:', error);
+      return { success: false, enabled: true, error: error instanceof Error ? error.message : 'Failed to get setting' };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.SET_NOTIFICATIONS_ENABLED, async (_event, enabled: boolean) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+
+      console.log(`[IPC] Setting notifications enabled: ${enabled}`);
+      p2pCore.database.setSetting('notifications_enabled', enabled.toString());
+      console.log(`[IPC] Notifications enabled set to: ${enabled}`);
+
+      // Notify all renderer processes about the change
+      const mainWindow = getMainWindow();
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(IPC_CHANNELS.NOTIFICATIONS_ENABLED_CHANGED, enabled);
+      }
+
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to set notifications enabled:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to set setting' };
     }
   });
 }

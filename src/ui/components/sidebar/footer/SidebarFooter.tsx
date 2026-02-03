@@ -6,22 +6,19 @@ import { Check, Copy, Settings, User } from "lucide-react";
 import { Button } from "../../ui/Button";
 import UserDialog from "./UserDialog";
 import { setRegistered, setUsername } from "../../../state/slices/userSlice";
+import { SettingsDialog } from "./SettingsDialog";
 
 export const SidebarFooter: FC = () => {
   const user = useSelector((state: RootState) => state.user);
   const [isCopied, setIsCopied] = useState(false);
   const [userDialogOpen, setUserDialogOpen] = useState(false);
+  const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
   const [isRegistering, setIsRegistering] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
   const dispatch = useDispatch();
 
-  // debugging
-  const chatState = useSelector((state: RootState) => state.chat);
-
   const handleSettings = () => {
-    // this will be used for debugging
-    console.log("settings");
-    console.log(chatState);
+    setSettingsDialogOpen(true);
   }
 
   const handleCopyPeerId = () => {
@@ -94,5 +91,6 @@ export const SidebarFooter: FC = () => {
         <Settings className="w-4 h-4" />
       </Button>
     </div>
+    <SettingsDialog open={settingsDialogOpen} onOpenChange={setSettingsDialogOpen} />
   </div>
 };
