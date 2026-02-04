@@ -85,16 +85,21 @@ export const ChatInput: FC = () => {
 
             const result = await window.kiyeovoAPI.sendFile(activeChat.peerId, filePath);
             if (!result.success) {
+                const errorText = result.error?.toLowerCase() || '';
                 console.log("RESULT ERROR:", result.error);
-                if (result.error?.toLowerCase().includes('dial request has no valid addresses')) {
+                if (errorText.includes('dial request has no valid addresses')) {
                     toast.error('Cannot send file to offline user');
-                } else if (!result.error?.toLowerCase().includes('timeout waiting for file acceptance') && !result.error?.toLowerCase().includes('rejected')) {
+                } else if (!errorText.includes('timeout waiting for file acceptance') && !errorText.includes('rejected')) {
                     toast.error(result.error || 'Failed to send file');
                 }
+                const status =
+                    errorText.includes('timeout waiting for file acceptance') ? 'expired' :
+                    errorText.includes('rejected') ? 'rejected' :
+                    'failed';
                 dispatch(updateFileTransferStatus({
                     messageId: pendingMessageId,
-                    status: 'rejected',
-                    transferError: result.error || 'Offer rejected'
+                    status,
+                    transferError: result.error || (status === 'expired' ? 'Offer expired' : 'Offer rejected')
                 }));
             } else {
                 toast.success('File transfer started');
@@ -102,10 +107,15 @@ export const ChatInput: FC = () => {
         } catch (error) {
             console.error('Error sending file:', error);
             toast.error(error instanceof Error ? error.message : 'Failed to send file');
+            const errorText = error instanceof Error ? error.message.toLowerCase() : '';
+            const status =
+                errorText.includes('timeout waiting for file acceptance') ? 'expired' :
+                errorText.includes('rejected') ? 'rejected' :
+                'failed';
             dispatch(updateFileTransferStatus({
                 messageId: pendingMessageId,
-                status: 'rejected',
-                transferError: error instanceof Error ? error.message : 'Offer rejected'
+                status,
+                transferError: error instanceof Error ? error.message : (status === 'expired' ? 'Offer expired' : 'Offer rejected')
             }));
         }
     }

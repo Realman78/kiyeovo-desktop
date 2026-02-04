@@ -836,11 +836,33 @@ export class FileHandler {
         await sinkPromise;
       }
     } catch (error: unknown) {
+      const errorText = error instanceof Error ? error.message : 'Unknown error';
+      if (fileId) {
+        if (errorText.toLowerCase().includes('timeout waiting for file acceptance')) {
+          this.database.updateMessageTransfer(fileId, {
+            transfer_status: 'expired',
+            transfer_progress: 0,
+            transfer_error: 'Offer expired'
+          });
+        } else if (errorText.toLowerCase().includes('file rejected')) {
+          this.database.updateMessageTransfer(fileId, {
+            transfer_status: 'rejected',
+            transfer_progress: 0,
+            transfer_error: errorText
+          });
+        } else {
+          this.database.updateMessageTransfer(fileId, {
+            transfer_status: 'failed',
+            transfer_progress: 0,
+            transfer_error: errorText
+          });
+        }
+      }
       if (this.onFileTransferFailed && chat) {
         this.onFileTransferFailed({
           chatId: chat.id,
           messageId: fileId,
-          error: error instanceof Error ? error.message : 'Unknown error'
+          error: errorText
         });
       }
 
