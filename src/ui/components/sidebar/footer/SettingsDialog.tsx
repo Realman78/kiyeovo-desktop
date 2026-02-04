@@ -7,7 +7,7 @@ import {
   DialogBody,
 } from "../../ui/Dialog";
 import { Button } from "../../ui/Button";
-import { Bell, BellOff } from "lucide-react";
+import { Bell, BellOff, FolderOpen } from "lucide-react";
 
 type SettingsDialogProps = {
   open: boolean;
@@ -19,6 +19,7 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
   onOpenChange,
 }) => {
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+  const [downloadsDir, setDownloadsDir] = useState<string>('');
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -42,9 +43,17 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
   const loadSettings = async () => {
     setLoading(true);
     try {
-      const result = await window.kiyeovoAPI.getNotificationsEnabled();
-      if (result.success) {
-        setNotificationsEnabled(result.enabled);
+      const [notifResult, downloadsDirResult] = await Promise.all([
+        window.kiyeovoAPI.getNotificationsEnabled(),
+        window.kiyeovoAPI.getDownloadsDir()
+      ]);
+
+      if (notifResult.success) {
+        setNotificationsEnabled(notifResult.enabled);
+      }
+
+      if (downloadsDirResult.success && downloadsDirResult.path) {
+        setDownloadsDir(downloadsDirResult.path);
       }
     } catch (error) {
       console.error("Failed to load settings:", error);
@@ -68,6 +77,26 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
       // Revert on failure
       setNotificationsEnabled(!newValue);
       console.error("Failed to update notifications setting:", error);
+    }
+  };
+
+  const handleChangeDownloadsDir = async () => {
+    try {
+      const result = await window.kiyeovoAPI.showSaveDialog({
+        title: 'Select Downloads Directory',
+        defaultPath: downloadsDir
+      });
+
+      if (!result.canceled && result.filePath) {
+        const setResult = await window.kiyeovoAPI.setDownloadsDir(result.filePath);
+        if (setResult.success) {
+          setDownloadsDir(result.filePath);
+        } else {
+          console.error("Failed to update downloads directory:", setResult.error);
+        }
+      }
+    } catch (error) {
+      console.error("Failed to change downloads directory:", error);
     }
   };
 
@@ -106,6 +135,28 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
                   onClick={handleToggleNotifications}
                 >
                   {notificationsEnabled ? "Disable" : "Enable"}
+                </Button>
+              </div>
+
+              <div className="flex items-center justify-between p-3 border border-border rounded-lg transition-colors">
+                <div className="flex items-center gap-3 flex-1 min-w-0">
+                  <FolderOpen className="w-5 h-5 text-primary shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-foreground">
+                      Downloads Directory
+                    </p>
+                    <p className="text-xs text-muted-foreground truncate" title={downloadsDir}>
+                      {downloadsDir || 'Not set'}
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleChangeDownloadsDir}
+                  className="shrink-0"
+                >
+                  Change
                 </Button>
               </div>
             </div>

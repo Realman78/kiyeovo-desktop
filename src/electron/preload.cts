@@ -138,6 +138,9 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     }): Promise<{ filePath: string | null; canceled: boolean }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.SHOW_OPEN_DIALOG, options);
     },
+    getFileMetadata: async (filePath: string): Promise<{ success: boolean; name: string | null; size: number | null; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.GET_FILE_METADATA, filePath);
+    },
 
     showSaveDialog: async (options: {
         title?: string;
@@ -276,5 +279,50 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
         const listener = (_event: any, enabled: boolean) => callback(enabled);
         ipcRenderer.on(IPC_CHANNELS.NOTIFICATIONS_ENABLED_CHANGED, listener);
         return () => ipcRenderer.removeListener(IPC_CHANNELS.NOTIFICATIONS_ENABLED_CHANGED, listener);
+    },
+    getDownloadsDir: async (): Promise<{ success: boolean; path: string | null; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.GET_DOWNLOADS_DIR);
+    },
+    setDownloadsDir: async (path: string): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.SET_DOWNLOADS_DIR, path);
+    },
+
+    // File transfer
+    sendFile: async (peerId: string, filePath: string): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.SEND_FILE_REQUEST, peerId, filePath);
+    },
+    acceptFile: async (fileId: string): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.ACCEPT_FILE, fileId);
+    },
+    rejectFile: async (fileId: string): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.REJECT_FILE, fileId);
+    },
+    getPendingFiles: async (): Promise<{ success: boolean; files: Array<{ fileId: string; filename: string; size: number; senderId: string; senderUsername: string }>; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.GET_PENDING_FILES);
+    },
+    openFileLocation: async (filePath: string): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.OPEN_FILE_LOCATION, filePath);
+    },
+
+    // File transfer events
+    onFileTransferProgress: (callback: (data: any) => void) => {
+        const listener = (_event: any, data: any) => callback(data);
+        ipcRenderer.on(IPC_CHANNELS.FILE_TRANSFER_PROGRESS, listener);
+        return () => ipcRenderer.removeListener(IPC_CHANNELS.FILE_TRANSFER_PROGRESS, listener);
+    },
+    onFileTransferComplete: (callback: (data: any) => void) => {
+        const listener = (_event: any, data: any) => callback(data);
+        ipcRenderer.on(IPC_CHANNELS.FILE_TRANSFER_COMPLETE, listener);
+        return () => ipcRenderer.removeListener(IPC_CHANNELS.FILE_TRANSFER_COMPLETE, listener);
+    },
+    onFileTransferFailed: (callback: (data: any) => void) => {
+        const listener = (_event: any, data: any) => callback(data);
+        ipcRenderer.on(IPC_CHANNELS.FILE_TRANSFER_FAILED, listener);
+        return () => ipcRenderer.removeListener(IPC_CHANNELS.FILE_TRANSFER_FAILED, listener);
+    },
+    onPendingFileReceived: (callback: (data: any) => void) => {
+        const listener = (_event: any, data: any) => callback(data);
+        ipcRenderer.on(IPC_CHANNELS.PENDING_FILE_RECEIVED, listener);
+        return () => ipcRenderer.removeListener(IPC_CHANNELS.PENDING_FILE_RECEIVED, listener);
     },
 });

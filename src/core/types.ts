@@ -535,6 +535,22 @@ export const IPC_CHANNELS = {
   GET_NOTIFICATIONS_ENABLED: 'settings:getNotificationsEnabled',
   SET_NOTIFICATIONS_ENABLED: 'settings:setNotificationsEnabled',
   NOTIFICATIONS_ENABLED_CHANGED: 'settings:notificationsEnabledChanged',
+  GET_DOWNLOADS_DIR: 'settings:getDownloadsDir',
+  SET_DOWNLOADS_DIR: 'settings:setDownloadsDir',
+  GET_FILE_METADATA: 'file:getMetadata',
+
+  // File transfer
+  SEND_FILE_REQUEST: 'file:send',
+  ACCEPT_FILE: 'file:accept',
+  REJECT_FILE: 'file:reject',
+  GET_PENDING_FILES: 'file:getPending',
+  OPEN_FILE_LOCATION: 'file:openLocation',
+
+  // File transfer events
+  FILE_TRANSFER_PROGRESS: 'file:progress',
+  FILE_TRANSFER_COMPLETE: 'file:complete',
+  FILE_TRANSFER_FAILED: 'file:failed',
+  PENDING_FILE_RECEIVED: 'file:pendingReceived',
 } as const;
 
 export interface PasswordRequest {
@@ -595,9 +611,47 @@ export interface MessageReceivedEvent {
   senderUsername: string;
   timestamp: number;
   messageSentStatus: MessageSentStatus;
+  messageType?: 'text' | 'file' | 'image' | 'system';
+  fileName?: string;
+  fileSize?: number;
+  filePath?: string;
+  transferStatus?: 'pending' | 'in_progress' | 'completed' | 'failed' | 'expired' | 'rejected';
+  transferProgress?: number;
+  transferError?: string;
 }
 
 export type MessageSentStatus = 'online' | 'offline' | null;
+
+export interface FileTransferProgressEvent {
+  chatId: number;
+  messageId: string;
+  current: number;
+  total: number;
+  filename: string;
+  size: number;
+}
+
+export interface FileTransferCompleteEvent {
+  chatId: number;
+  messageId: string;
+  filePath: string;
+}
+
+export interface FileTransferFailedEvent {
+  chatId: number;
+  messageId: string;
+  error: string;
+}
+
+export interface PendingFileReceivedEvent {
+  chatId: number;
+  fileId: string;
+  filename: string;
+  size: number;
+  senderId: string;
+  senderUsername: string;
+  expiresAt: number;
+}
 
 export interface OfflineCheckCacheEntry {
   timestamp: number;

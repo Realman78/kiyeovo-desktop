@@ -1,5 +1,5 @@
 import { peerIdFromString } from '@libp2p/peer-id';
-import type { ChatNode, StreamHandlerContext, AuthenticatedEncryptedMessage, OfflineMessage, OfflineSenderInfo, ConversationSession, EncryptedMessage, ContactMode, KeyExchangeEvent, ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent, SendMessageResponse, StrippedMessage, MessageSentStatus } from '../types.js';
+import type { ChatNode, StreamHandlerContext, AuthenticatedEncryptedMessage, OfflineMessage, OfflineSenderInfo, ConversationSession, EncryptedMessage, ContactMode, KeyExchangeEvent, ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent, SendMessageResponse, StrippedMessage, MessageSentStatus, FileTransferProgressEvent, FileTransferCompleteEvent, FileTransferFailedEvent, PendingFileReceivedEvent } from '../types.js';
 import { CHAT_PROTOCOL, MESSAGE_TIMEOUT, SESSION_MANAGER_CLEANUP_INTERVAL } from '../constants.js';
 import { SessionManager } from './session-manager.js';
 import { MessageEncryption } from './message-encryption.js';
@@ -9,6 +9,7 @@ import { KeyExchange } from './key-exchange.js';
 import { ChatDatabase, Message, User } from './db/database.js';
 import { OfflineMessageManager } from './offline-message-manager.js';
 import { UsernameRegistry } from './username-registry.js';
+import { FileHandler } from './file-handler.js';
 import { generalErrorHandler } from '../utils/general-error.js';
 import { PeerId } from '@libp2p/interface';
 
@@ -20,6 +21,7 @@ export class MessageHandler {
   private usernameRegistry: UsernameRegistry;
   private sessionManager: SessionManager;
   private keyExchange: KeyExchange;
+  private fileHandler: FileHandler;
   private database: ChatDatabase;
   private cleanupPeerEvents: (() => void) | null = null;
   private onMessageReceived: (data: MessageReceivedEvent) => void;
@@ -33,6 +35,10 @@ export class MessageHandler {
     onChatCreated: (data: ChatCreatedEvent) => void,
     onKeyExchangeFailed: (data: KeyExchangeFailedEvent) => void,
     onMessageReceived: (data: MessageReceivedEvent) => void,
+    onFileTransferProgress: (data: FileTransferProgressEvent) => void,
+    onFileTransferComplete: (data: FileTransferCompleteEvent) => void,
+    onFileTransferFailed: (data: FileTransferFailedEvent) => void,
+    onPendingFileReceived: (data: PendingFileReceivedEvent) => void,
   ) {
     this.node = node;
     this.usernameRegistry = usernameRegistry;
@@ -40,6 +46,7 @@ export class MessageHandler {
     this.sessionManager = new SessionManager();
     this.onMessageReceived = onMessageReceived;
     this.keyExchange = new KeyExchange(node, usernameRegistry, this.sessionManager, database, onKeyExchangeSent, onContactRequestReceived, onChatCreated, onKeyExchangeFailed);
+    this.fileHandler = new FileHandler(node, this, database, onFileTransferProgress, onFileTransferComplete, onFileTransferFailed, onPendingFileReceived);
     this.setupProtocolHandler();
     this.cleanupPeerEvents = PeerConnectionHandler.setupPeerEvents(node, this.sessionManager);
     this.startSessionCleanup();
@@ -140,7 +147,7 @@ export class MessageHandler {
   /**
    * Ensures a user exists and has an active session with key rotation handling.
    */
-  async ensureUserSession(targetUsernameOrPeerId: string, message: string): Promise<{
+  async ensureUserSession(targetUsernameOrPeerId: string, message: string, isFileTransfer = false): Promise<{
     user: User
     session: ConversationSession
     peerId: PeerId
@@ -149,6 +156,10 @@ export class MessageHandler {
     let targetPeerId: PeerId;
 
     if (!user) {
+      if (isFileTransfer) {
+        throw new Error('Cannot send file as first message. Send a text message first.');
+      }
+
       try {
         const userRegistration = await this.usernameRegistry.lookup(targetUsernameOrPeerId);
         targetPeerId = peerIdFromString(userRegistration.peerID);
@@ -713,5 +724,9 @@ export class MessageHandler {
     } catch (error: unknown) {
       generalErrorHandler(error, `Failed to set contact mode`);
     }
+  }
+
+  getFileHandler(): FileHandler {
+    return this.fileHandler;
   }
 } 

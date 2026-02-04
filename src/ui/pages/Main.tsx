@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import Sidebar from '../components/sidebar/Sidebar';
 import ChatWrapper from '../components/chat/ChatWrapper';
-import { setChats, addChat, removePendingKeyExchange, setActiveChat, markOfflineFetched } from '../state/slices/chatSlice';
+import { setChats, addChat, removePendingKeyExchange, setActiveChat, markOfflineFetched, updateFileTransferProgress, updateFileTransferStatus, updateFileTransferError, setPendingFileStatus, updateChat } from '../state/slices/chatSlice';
 import { removeContactAttempt, setActiveContactAttempt, addMessage, type Chat } from '../state/slices/chatSlice';
 import { useToast } from '../components/ui/use-toast';
 import type { RootState } from '../state/store';
@@ -40,9 +40,16 @@ export const Main = () => {
         senderUsername: data.senderUsername,
         content: data.content,
         timestamp: data.timestamp,
-        messageType: 'text',
+        messageType: data.messageType || 'text',
         messageSentStatus: data.messageSentStatus,
-        currentUserPeerId: myPeerId
+        currentUserPeerId: myPeerId,
+        // File transfer fields (if present)
+        fileName: data.fileName,
+        fileSize: data.fileSize,
+        filePath: data.filePath,
+        transferStatus: data.transferStatus,
+        transferProgress: data.transferProgress,
+        transferError: data.transferError
       }));
     });
 
@@ -79,10 +86,90 @@ export const Main = () => {
       }
     });
 
+    // File transfer event listeners
+    const unsubFileTransferProgress = window.kiyeovoAPI.onFileTransferProgress((data) => {
+      console.log(`[UI] File transfer progress: ${data.current}/${data.total} for message ${data.messageId}`);
+      dispatch(updateFileTransferProgress({
+        messageId: data.messageId,
+        progress: Math.floor((data.current / data.total) * 100),
+        chatId: data.chatId,
+        filename: data.filename,
+        size: data.size
+      }));
+    });
+
+    const unsubFileTransferComplete = window.kiyeovoAPI.onFileTransferComplete((data) => {
+      console.log(`[UI] File transfer complete for message ${data.messageId}`);
+      dispatch(updateFileTransferStatus({
+        messageId: data.messageId,
+        status: 'completed',
+        filePath: data.filePath
+      }));
+      toast.success('File transfer completed');
+    });
+
+    const unsubFileTransferFailed = window.kiyeovoAPI.onFileTransferFailed((data) => {
+      console.log(`[UI] File transfer failed for message ${data.messageId}: ${data.error}`);
+      dispatch(updateFileTransferError({
+        messageId: data.messageId,
+        error: data.error
+      }));
+      toast.error(`File transfer failed: ${data.error}`);
+    });
+
+    const unsubPendingFileReceived = window.kiyeovoAPI.onPendingFileReceived((data) => {
+      console.log(`[UI] Pending file received: ${data.filename} from ${data.senderUsername}`);
+      dispatch(addMessage({
+        id: data.fileId,
+        chatId: data.chatId,
+        senderPeerId: data.senderId,
+        senderUsername: data.senderUsername,
+        content: `${data.filename} (${data.size} bytes)`,
+        timestamp: Date.now(),
+        messageType: 'file',
+        messageSentStatus: 'online',
+        currentUserPeerId: myPeerId,
+        fileName: data.filename,
+        fileSize: data.size,
+        transferStatus: 'pending',
+        transferProgress: 0,
+        transferExpiresAt: data.expiresAt
+      }));
+      dispatch(updateChat({
+        id: data.chatId,
+        updates: {
+          lastMessage: `File offer: ${data.filename}`,
+          lastMessageTimestamp: Date.now()
+        }
+      }));
+      // Unread count is handled by addMessage reducer for non-active chats.
+      dispatch(setPendingFileStatus({ chatId: data.chatId, hasPendingFile: true }));
+      toast.info(`${data.senderUsername} wants to send you a file: ${data.filename}`);
+
+      const msUntilExpire = Math.max(0, data.expiresAt - Date.now());
+      setTimeout(() => {
+        const state = store.getState();
+        const message = state.chat.messages.find(m => m.id === data.fileId);
+        if (message && message.transferStatus === 'pending') {
+          dispatch(updateFileTransferStatus({
+            messageId: data.fileId,
+            status: 'expired',
+            transferError: 'Offer expired'
+          }));
+          const hasOtherPending = state.chat.messages.some(m => m.chatId === data.chatId && m.id !== data.fileId && m.transferStatus === 'pending');
+          dispatch(setPendingFileStatus({ chatId: data.chatId, hasPendingFile: hasOtherPending }));
+        }
+      }, msUntilExpire);
+    });
+
     return () => {
       unsubKeyExchangeFailed();
       unsubMessageReceived();
       unsubChatCreated();
+      unsubFileTransferProgress();
+      unsubFileTransferComplete();
+      unsubFileTransferFailed();
+      unsubPendingFileReceived();
     };
   }, [])
 

@@ -4,6 +4,7 @@ import type { RootState } from "../../../state/store";
 import { useDispatch, useSelector } from "react-redux";
 import { formatTimestampToHourMinute } from "../../../utils/dateUtils";
 import { PendingNotifications } from "./PendingNotifications";
+import { FileMessage } from "./FileMessage";
 import type { MessageSentStatus } from "../../../types";
 
 type MessagesContainerProps = {
@@ -15,10 +16,19 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
   const myPeerId = useSelector((state: RootState) => state.user.peerId);
   const activeChat = useSelector((state: RootState) => state.chat.activeChat);
   const activePendingKeyExchange = useSelector((state: RootState) => state.chat.activePendingKeyExchange);
-
   const dispatch = useDispatch();
 
   const [error, setError] = useState<string | null>(null);
+
+  const parseFileContent = (content: string | null | undefined): { fileName?: string; fileSize?: number } => {
+    if (!content) return {};
+    const match = content.match(/^(.*)\s+\((\d+)\s+bytes\)$/);
+    if (!match) return {};
+    return {
+      fileName: match[1],
+      fileSize: Number(match[2])
+    };
+  };
 
 
   useEffect(() => {
@@ -27,6 +37,26 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
         const result = await window.kiyeovoAPI.getMessages(activeChat.id);
         if (result.success) {
           const messages = result.messages.map(msg => {
+            let fileName = msg.file_name;
+            let fileSize = msg.file_size;
+            if (msg.message_type === 'file' && (!fileName || fileSize === undefined)) {
+              const parsed = parseFileContent(msg.content);
+              fileName = fileName || parsed.fileName;
+              if (fileSize === undefined) {
+                fileSize = parsed.fileSize;
+              }
+            }
+            const inferredTransferStatus =
+              msg.transfer_status ??
+              (msg.message_type === 'file'
+                ? 'completed'
+                : undefined);
+
+            const transferExpiresAt =
+              msg.message_type === 'file' && msg.transfer_status === 'pending'
+                ? msg.timestamp.getTime() + 30 * 1000
+                : undefined;
+
             return {
               id: msg.id,
               chatId: msg.chat_id,
@@ -35,7 +65,15 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
               content: msg.content,
               timestamp: msg.timestamp.getTime(),
               messageType: msg.message_type as 'text' | 'file' | 'image' | 'system',
-              messageSentStatus: 'online' as MessageSentStatus
+              messageSentStatus: 'online' as MessageSentStatus,
+              // File transfer fields
+              fileName,
+              fileSize,
+              filePath: msg.file_path,
+              transferStatus: inferredTransferStatus as 'pending' | 'in_progress' | 'completed' | 'failed' | 'expired' | 'rejected' | undefined,
+              transferProgress: msg.transfer_progress,
+              transferError: msg.transfer_error,
+              transferExpiresAt
             }
           });
           dispatch(setMessages(messages));
@@ -125,7 +163,22 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
             className={`max-w-[70%] rounded-lg px-4 py-2.5 ${message.senderPeerId === myPeerId || !!activePendingKeyExchange ? "bg-message-sent text-message-sent-foreground rounded-br-sm" : "bg-message-received text-message-received-foreground rounded-bl-sm"}`}
             style={{ wordBreak: "break-word" }}
           >
-            <p className="text-sm text-left leading-relaxed">{message.content}</p>
+            {message.messageType === 'file' && message.fileName ? (
+              <FileMessage
+                fileId={message.id}
+                chatId={message.chatId}
+                fileName={message.fileName}
+                fileSize={message.fileSize || 0}
+                filePath={message.filePath}
+                transferStatus={message.transferStatus || 'pending'}
+                transferProgress={message.transferProgress}
+                transferError={message.transferError}
+                transferExpiresAt={message.transferExpiresAt}
+                isFromCurrentUser={message.senderPeerId === myPeerId}
+              />
+            ) : (
+              <p className="text-sm text-left leading-relaxed">{message.content}</p>
+            )}
           </div>
           {showTimestamp && (
             <span className="text-xs text-muted-foreground mt-1 font-mono">

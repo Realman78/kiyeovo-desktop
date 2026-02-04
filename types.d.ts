@@ -107,6 +107,7 @@ declare global {
                 defaultPath?: string;
                 filters?: Array<{ name: string; extensions: string[] }>;
             }) => Promise<{ filePath: string | null; canceled: boolean }>;
+            getFileMetadata: (filePath: string) => Promise<{ success: boolean; name: string | null; size: number | null; error: string | null }>;
 
             // Notifications
             showNotification: (options: {
@@ -149,6 +150,55 @@ declare global {
             getNotificationsEnabled: () => Promise<{ success: boolean; enabled: boolean; error: string | null }>;
             setNotificationsEnabled: (enabled: boolean) => Promise<{ success: boolean; error: string | null }>;
             onNotificationsEnabledChanged: (callback: (enabled: boolean) => void) => () => void;
+            getDownloadsDir: () => Promise<{ success: boolean; path: string | null; error: string | null }>;
+            setDownloadsDir: (path: string) => Promise<{ success: boolean; error: string | null }>;
+
+            // File transfer
+            sendFile: (peerId: string, filePath: string) => Promise<{ success: boolean; error: string | null }>;
+            acceptFile: (fileId: string) => Promise<{ success: boolean; error: string | null }>;
+            rejectFile: (fileId: string) => Promise<{ success: boolean; error: string | null }>;
+            getPendingFiles: () => Promise<{
+                success: boolean;
+                files: Array<{
+                    fileId: string;
+                    filename: string;
+                    size: number;
+                    senderId: string;
+                    senderUsername: string;
+                    expiresAt: number;
+                }>;
+                error: string | null;
+            }>;
+            openFileLocation: (filePath: string) => Promise<{ success: boolean; error: string | null }>;
+
+            // File transfer events
+            onFileTransferProgress: (callback: (data: {
+                chatId: number;
+                messageId: string;
+                current: number;
+                total: number;
+                filename: string;
+                size: number;
+            }) => void) => () => void;
+            onFileTransferComplete: (callback: (data: {
+                chatId: number;
+                messageId: string;
+                filePath: string;
+            }) => void) => () => void;
+            onFileTransferFailed: (callback: (data: {
+                chatId: number;
+                messageId: string;
+                error: string;
+            }) => void) => () => void;
+            onPendingFileReceived: (callback: (data: {
+                chatId: number;
+                fileId: string;
+                filename: string;
+                size: number;
+                senderId: string;
+                senderUsername: string;
+                expiresAt: number;
+            }) => void) => () => void;
         };
     }
 }

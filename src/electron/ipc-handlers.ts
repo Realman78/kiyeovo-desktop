@@ -1,12 +1,13 @@
 import type { IpcMain, BrowserWindow } from 'electron';
-import { dialog, Notification } from 'electron';
+import { dialog, Notification, shell } from 'electron';
 import { IPC_CHANNELS, OFFLINE_CHECK_CACHE_TTL, PENDING_KEY_EXCHANGE_EXPIRATION, type P2PCore } from '../core/index.js';
 import { validateMessageLength, validateUsername } from '../core/utils/validators.js';
 import { peerIdFromString } from '@libp2p/peer-id';
 import { OfflineMessageManager } from '../core/lib/offline-message-manager.js';
 import { ProfileManager } from '../core/lib/profile-manager.js';
 import { homedir } from 'os';
-import { join } from 'path';
+import { basename, join } from 'path';
+import { stat } from 'fs/promises';
 
 /**
  * Setup all IPC handlers for communication between renderer and main process
@@ -54,6 +55,9 @@ export function setupIPCHandlers(
 
   // Chat settings handlers
   setupChatSettingsHandlers(ipcMain, getP2PCore, getMainWindow);
+
+  // File transfer handlers
+  setupFileTransferHandlers(ipcMain, getP2PCore);
 }
 
 /**
@@ -517,6 +521,26 @@ function setupFileDialogHandlers(ipcMain: IpcMain): void {
     } catch (error) {
       console.error('[IPC] Failed to show save dialog:', error);
       return { filePath: null, canceled: true };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.GET_FILE_METADATA, async (_event, filePath: string) => {
+    try {
+      const stats = await stat(filePath);
+      return {
+        success: true,
+        name: basename(filePath),
+        size: stats.size,
+        error: null
+      };
+    } catch (error) {
+      console.error('[IPC] Failed to get file metadata:', error);
+      return {
+        success: false,
+        name: null,
+        size: null,
+        error: error instanceof Error ? error.message : 'Failed to get file metadata'
+      };
     }
   });
 }
@@ -1067,6 +1091,146 @@ function setupChatSettingsHandlers(
     } catch (error) {
       console.error('[IPC] Failed to set notifications enabled:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to set setting' };
+    }
+  });
+
+  // Downloads directory settings
+  ipcMain.handle(IPC_CHANNELS.GET_DOWNLOADS_DIR, async (_event) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, path: null, error: 'P2P core not initialized' };
+      }
+
+      const path = p2pCore.database.getSetting('downloads_directory');
+      // Default to Downloads folder in user's home directory
+      const defaultPath = join(homedir(), 'Downloads', 'kiyeovo');
+      const downloadsPath = path || defaultPath;
+
+      console.log(`[IPC] Get downloads directory: ${downloadsPath}`);
+      return { success: true, path: downloadsPath, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to get downloads directory:', error);
+      return { success: false, path: null, error: error instanceof Error ? error.message : 'Failed to get setting' };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.SET_DOWNLOADS_DIR, async (_event, path: string) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+
+      console.log(`[IPC] Setting downloads directory: ${path}`);
+      p2pCore.database.setSetting('downloads_directory', path);
+      console.log(`[IPC] Downloads directory set to: ${path}`);
+
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to set downloads directory:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to set setting' };
+    }
+  });
+}
+
+/**
+ * File transfer handlers
+ */
+function setupFileTransferHandlers(
+  ipcMain: IpcMain,
+  getP2PCore: () => P2PCore | null
+): void {
+  // Send file
+  ipcMain.handle(IPC_CHANNELS.SEND_FILE_REQUEST, async (_event, peerId: string, filePath: string) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+
+      console.log(`[IPC] Sending file ${filePath} to ${peerId}`);
+
+      // Get username from peerId
+      const user = p2pCore.database.getUserByPeerId(peerId);
+      if (!user) {
+        return { success: false, error: 'User not found' };
+      }
+
+      // Send the file (this will emit progress events internally)
+      await p2pCore.messageHandler.getFileHandler().sendFile(user.username, filePath);
+
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to send file:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to send file' };
+    }
+  });
+
+  // Accept file
+  ipcMain.handle(IPC_CHANNELS.ACCEPT_FILE, async (_event, fileId: string) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+
+      console.log(`[IPC] Accepting file: ${fileId}`);
+      p2pCore.messageHandler.getFileHandler().acceptPendingFile(fileId);
+
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to accept file:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to accept file' };
+    }
+  });
+
+  // Reject file
+  ipcMain.handle(IPC_CHANNELS.REJECT_FILE, async (_event, fileId: string) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+
+      console.log(`[IPC] Rejecting file: ${fileId}`);
+      p2pCore.messageHandler.getFileHandler().rejectPendingFile(fileId);
+
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to reject file:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to reject file' };
+    }
+  });
+
+  // Get pending files
+  ipcMain.handle(IPC_CHANNELS.GET_PENDING_FILES, async (_event) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, files: [], error: 'P2P core not initialized' };
+      }
+
+      const files = p2pCore.messageHandler.getFileHandler().getPendingFiles();
+      console.log(`[IPC] Get pending files: ${files.length} files`);
+
+      return { success: true, files, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to get pending files:', error);
+      return { success: false, files: [], error: error instanceof Error ? error.message : 'Failed to get pending files' };
+    }
+  });
+
+  // Open file location
+  ipcMain.handle(IPC_CHANNELS.OPEN_FILE_LOCATION, async (_event, filePath: string) => {
+    try {
+      console.log(`[IPC] Opening file location: ${filePath}`);
+      shell.showItemInFolder(filePath);
+
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to open file location:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to open file location' };
     }
   });
 }

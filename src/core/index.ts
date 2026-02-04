@@ -5,7 +5,7 @@ import { MessageHandler } from './lib/message-handler.js';
 import { EncryptedUserIdentity } from './lib/encrypted-user-identity.js';
 import { ChatDatabase } from './lib/db/database.js';
 import { DATABASE_CLEANUP_INTERVAL } from './constants.js';
-import type { ChatNode, ContactRequestEvent, KeyExchangeEvent, PasswordResponse, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent } from './types.js';
+import type { ChatNode, ContactRequestEvent, KeyExchangeEvent, PasswordResponse, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent, FileTransferProgressEvent, FileTransferCompleteEvent, FileTransferFailedEvent, PendingFileReceivedEvent } from './types.js';
 
 export interface P2PCore {
   node: ChatNode;
@@ -30,6 +30,10 @@ export interface P2PCoreConfig {
   onMessageReceived: (data: MessageReceivedEvent) => void;
   onBootstrapNodes: (nodes: string[]) => void;
   onRestoreUsername: (username: string) => void;
+  onFileTransferProgress: (data: FileTransferProgressEvent) => void;
+  onFileTransferComplete: (data: FileTransferCompleteEvent) => void;
+  onFileTransferFailed: (data: FileTransferFailedEvent) => void;
+  onPendingFileReceived: (data: PendingFileReceivedEvent) => void;
 }
 
 /**
@@ -37,7 +41,7 @@ export interface P2PCoreConfig {
  * This is the main entry point for the Kiyeovo P2P functionality
  */
 export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore> {
-  const { onStatus, onDHTConnectionStatus, onKeyExchangeSent, onContactRequestReceived, onChatCreated, onKeyExchangeFailed, onMessageReceived, onRestoreUsername } = config;
+  const { onStatus, onDHTConnectionStatus, onKeyExchangeSent, onContactRequestReceived, onChatCreated, onKeyExchangeFailed, onMessageReceived, onRestoreUsername, onFileTransferProgress, onFileTransferComplete, onFileTransferFailed, onPendingFileReceived } = config;
   const sendStatus = (message: string, stage: any) => {
     console.log(`[P2P Core] ${message}`);
     onStatus(message, stage);
@@ -153,7 +157,40 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
     onContactRequestReceived(data);
   };
 
-  const messageHandler = new MessageHandler(node, usernameRegistry, database, sendKeyExchangeSent, sendContactRequestReceived, sendChatCreated, sendKeyExchangeFailed, sendMessageReceived);
+  const sendFileTransferProgress = (data: FileTransferProgressEvent) => {
+    console.log(`[P2P Core] File transfer progress: ${data.current}/${data.total} chunks`);
+    onFileTransferProgress(data);
+  };
+
+  const sendFileTransferComplete = (data: FileTransferCompleteEvent) => {
+    console.log(`[P2P Core] File transfer complete: ${data.filePath}`);
+    onFileTransferComplete(data);
+  };
+
+  const sendFileTransferFailed = (data: FileTransferFailedEvent) => {
+    console.log(`[P2P Core] File transfer failed: ${data.error}`);
+    onFileTransferFailed(data);
+  };
+
+  const sendPendingFileReceived = (data: PendingFileReceivedEvent) => {
+    console.log(`[P2P Core] Pending file received: ${data.filename} from ${data.senderUsername}`);
+    onPendingFileReceived(data);
+  };
+
+  const messageHandler = new MessageHandler(
+    node,
+    usernameRegistry,
+    database,
+    sendKeyExchangeSent,
+    sendContactRequestReceived,
+    sendChatCreated,
+    sendKeyExchangeFailed,
+    sendMessageReceived,
+    sendFileTransferProgress,
+    sendFileTransferComplete,
+    sendFileTransferFailed,
+    sendPendingFileReceived
+  );
 
   // Offline messages will be checked from UI after chats load
 

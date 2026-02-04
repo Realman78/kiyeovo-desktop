@@ -45,3 +45,5 @@ Should I save the information about a message being "offline" to show for later?
 6. PUT to DHT - Key: /kiyeovo-offline/test-shared-secret/Fnct1g9tDqVB7vFXN2QLoDLAKPIKzruAARCVT4gFscY, Original: 1938 bytes -> je li ovaj bucket zapravo uvijek isti za sve trusted korisnike? ako stavi isti secret naravno. vjv da. treba to napomenut u warningu
 
 7.  Offline message desync after "Delete chat & user"
+
+8. DIGNI TIMEOUTE

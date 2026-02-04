@@ -20,6 +20,14 @@ export interface ChatMessage {
   messageType: 'text' | 'file' | 'image' | 'system';
   messageSentStatus: MessageSentStatus;
   currentUserPeerId?: string; // For determining if message is from current user
+  // File transfer fields
+  fileName?: string;
+  fileSize?: number;
+  filePath?: string;
+  transferStatus?: 'pending' | 'in_progress' | 'completed' | 'failed' | 'expired' | 'rejected';
+  transferProgress?: number; // Percentage 0-100
+  transferError?: string;
+  transferExpiresAt?: number;
 }
 
 export interface Chat {
@@ -38,6 +46,7 @@ export interface Chat {
   trusted_out_of_band?: boolean; // Whether chat was established via out-of-band profile import
   muted?: boolean; // Whether notifications and sounds are muted for this chat
   blocked?: boolean; // Whether the other user is blocked
+  hasPendingFile?: boolean; // Whether chat has a pending file request
 }
 
 interface ChatState {
@@ -145,6 +154,27 @@ const chatSlice = createSlice({
         state.chats.sort((a, b) => b.lastMessageTimestamp - a.lastMessageTimestamp);
       }
     },
+    removeMessageById: (state, action: PayloadAction<{ messageId: string; chatId: number }>) => {
+      const { messageId, chatId } = action.payload;
+      const initialLength = state.messages.length;
+      state.messages = state.messages.filter((m) => m.id !== messageId);
+
+      if (state.messages.length === initialLength) {
+        return;
+      }
+
+      const chatIndex = state.chats.findIndex((c) => c.id === chatId);
+      if (chatIndex !== -1) {
+        const lastMessage = [...state.messages]
+          .filter((m) => m.chatId === chatId)
+          .sort((a, b) => b.timestamp - a.timestamp)[0];
+
+        if (lastMessage) {
+          state.chats[chatIndex].lastMessage = lastMessage.content;
+          state.chats[chatIndex].lastMessageTimestamp = lastMessage.timestamp;
+        }
+      }
+    },
     setChats: (state, action: PayloadAction<Chat[]>) => {
       state.chats = action.payload;
     },
@@ -158,6 +188,9 @@ const chatSlice = createSlice({
         Object.assign(chat, action.payload.updates);
         if (state.activeChat?.id === action.payload.id) {
           Object.assign(state.activeChat, action.payload.updates);
+        }
+        if (action.payload.updates.lastMessageTimestamp !== undefined) {
+          state.chats.sort((a, b) => b.lastMessageTimestamp - a.lastMessageTimestamp);
         }
       }
     },
@@ -217,6 +250,62 @@ const chatSlice = createSlice({
         }
       });
     },
+    // File transfer actions
+    updateFileTransferProgress: (state, action: PayloadAction<{ messageId: string; progress: number; chatId: number; filename: string; size: number }>) => {
+      let message = state.messages.find((m) => m.id === action.payload.messageId);
+      if (!message) {
+        message = state.messages.find((m) =>
+          m.chatId === action.payload.chatId &&
+          m.messageType === 'file' &&
+          m.fileName === action.payload.filename &&
+          (m.transferStatus === 'pending' || m.transferStatus === 'in_progress')
+        );
+        if (message) {
+          message.id = action.payload.messageId;
+        }
+      }
+      if (message) {
+        message.fileName = action.payload.filename;
+        message.fileSize = action.payload.size;
+        message.transferProgress = action.payload.progress;
+        if (message.transferStatus === 'pending') {
+          message.transferStatus = 'in_progress';
+        }
+      }
+    },
+    updateFileTransferStatus: (state, action: PayloadAction<{
+      messageId: string;
+      status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'expired' | 'rejected';
+      filePath?: string;
+      transferError?: string;
+    }>) => {
+      const message = state.messages.find((m) => m.id === action.payload.messageId);
+      if (message) {
+        message.transferStatus = action.payload.status;
+        if (action.payload.status === 'completed' && action.payload.filePath) {
+          message.filePath = action.payload.filePath;
+        }
+        if (action.payload.status === 'completed') {
+          message.transferProgress = 100;
+        }
+        if (action.payload.transferError) {
+          message.transferError = action.payload.transferError;
+        }
+      }
+    },
+    updateFileTransferError: (state, action: PayloadAction<{ messageId: string; error: string }>) => {
+      const message = state.messages.find((m) => m.id === action.payload.messageId);
+      if (message) {
+        message.transferStatus = 'failed';
+        message.transferError = action.payload.error;
+      }
+    },
+    setPendingFileStatus: (state, action: PayloadAction<{ chatId: number; hasPendingFile: boolean }>) => {
+      const chat = state.chats.find((c) => c.id === action.payload.chatId);
+      if (chat) {
+        chat.hasPendingFile = action.payload.hasPendingFile;
+      }
+    },
   },
 });
 
@@ -239,7 +328,12 @@ export const {
   addPendingKeyExchange,
   removePendingKeyExchange,
   setOfflineFetchStatus,
-  markOfflineFetched
+  markOfflineFetched,
+  updateFileTransferProgress,
+  updateFileTransferStatus,
+  updateFileTransferError,
+  setPendingFileStatus,
+  removeMessageById
 } = chatSlice.actions;
 
 export default chatSlice.reducer;

@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { isDev } from './util.js';
-import { initializeP2PCore, InitStatus, IPC_CHANNELS, KeyExchangeEvent, type P2PCore, type ContactRequestEvent, type ChatCreatedEvent, type KeyExchangeFailedEvent, type MessageReceivedEvent } from '../core/index.js';
+import { initializeP2PCore, InitStatus, IPC_CHANNELS, KeyExchangeEvent, type P2PCore, type ContactRequestEvent, type ChatCreatedEvent, type KeyExchangeFailedEvent, type MessageReceivedEvent, type FileTransferProgressEvent, type FileTransferCompleteEvent, type FileTransferFailedEvent, type PendingFileReceivedEvent } from '../core/index.js';
 import { ensureAppDataDir } from '../core/utils/miscellaneous.js';
 import { requestPasswordFromUI } from './password-prompt.js';
 import { setupIPCHandlers } from './ipc-handlers.js';
@@ -102,6 +102,34 @@ function sendRestoreUsername(username: string) {
   }
 }
 
+function sendFileTransferProgress(data: FileTransferProgressEvent) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    console.log(`[Electron] File transfer progress: ${data.current}/${data.total} for ${data.filename}`);
+    mainWindow.webContents.send(IPC_CHANNELS.FILE_TRANSFER_PROGRESS, data);
+  }
+}
+
+function sendFileTransferComplete(data: FileTransferCompleteEvent) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    console.log(`[Electron] File transfer complete: ${data.filePath}`);
+    mainWindow.webContents.send(IPC_CHANNELS.FILE_TRANSFER_COMPLETE, data);
+  }
+}
+
+function sendFileTransferFailed(data: FileTransferFailedEvent) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    console.log(`[Electron] File transfer failed: ${data.error}`);
+    mainWindow.webContents.send(IPC_CHANNELS.FILE_TRANSFER_FAILED, data);
+  }
+}
+
+function sendPendingFileReceived(data: PendingFileReceivedEvent) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    console.log(`[Electron] Pending file received: ${data.filename} from ${data.senderUsername}`);
+    mainWindow.webContents.send(IPC_CHANNELS.PENDING_FILE_RECEIVED, data);
+  }
+}
+
 async function initializeP2PAfterWindow() {
   try {
     if (!mainWindow) {
@@ -153,6 +181,18 @@ async function initializeP2PAfterWindow() {
       },
       onRestoreUsername: (username: string) => {
         sendRestoreUsername(username);
+      },
+      onFileTransferProgress: (data: FileTransferProgressEvent) => {
+        sendFileTransferProgress(data);
+      },
+      onFileTransferComplete: (data: FileTransferCompleteEvent) => {
+        sendFileTransferComplete(data);
+      },
+      onFileTransferFailed: (data: FileTransferFailedEvent) => {
+        sendFileTransferFailed(data);
+      },
+      onPendingFileReceived: (data: PendingFileReceivedEvent) => {
+        sendPendingFileReceived(data);
       }
     });
 

@@ -1,7 +1,7 @@
 import type { FC } from "react";
 import type { Chat } from "../../../state/slices/chatSlice";
 import { formatTimestampToHourMinute } from "../../../utils/dateUtils";
-import { Ban, BellOff } from "lucide-react";
+import { Ban, BellOff, Paperclip } from "lucide-react";
 
 type ChatPreviewProps = {
     chat: Chat;
@@ -31,6 +31,9 @@ export const ChatPreview: FC<ChatPreviewProps> = ({ chat, onSelectChat, selected
                     <div className="flex items-center gap-2 shrink-0">
                         {chat.muted && (
                             <BellOff className="w-4 h-4 text-muted-foreground" />
+                        )}
+                        {chat.hasPendingFile && (
+                            <Paperclip className="w-4 h-4 text-primary"/>
                         )}
                         {chat.isFetchingOffline && !chat.blocked && (
                             <div className="w-4 h-4 border-2 border-muted-foreground border-t-transparent rounded-full animate-spin" title="Checking for offline messages..." />

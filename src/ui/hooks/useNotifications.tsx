@@ -78,6 +78,41 @@ export const useNotifications = () => {
       }
     });
 
+    // Listen for pending file offers
+    const unsubscribePendingFiles = window.kiyeovoAPI.onPendingFileReceived(async (data: any) => {
+      if (!notificationsEnabledRef.current) {
+        return;
+      }
+
+      const currentState = store.getState();
+      const chat = currentState.chat.chats.find(c => c.id === data.chatId);
+      if (chat?.muted) {
+        return;
+      }
+
+      try {
+        if (audioRef.current) {
+          audioRef.current.currentTime = 0;
+          await audioRef.current.play();
+        }
+      } catch (error) {
+        console.error('Failed to play notification sound:', error);
+      }
+
+      try {
+        const { focused } = await window.kiyeovoAPI.isWindowFocused();
+        if (!focused) {
+          await window.kiyeovoAPI.showNotification({
+            title: `File offer from ${data.senderUsername}`,
+            body: data.filename,
+            chatId: data.chatId,
+          });
+        }
+      } catch (error) {
+        console.error('Failed to show notification:', error);
+      }
+    });
+
     // Listen for contact request events
     const unsubscribeContactRequests = window.kiyeovoAPI.onContactRequestReceived(async (data: ContactRequestEvent) => {
       // Don't notify if global notifications are disabled
@@ -117,6 +152,7 @@ export const useNotifications = () => {
 
     return () => {
       unsubscribeMessages();
+      unsubscribePendingFiles();
       unsubscribeContactRequests();
       unsubscribeNotificationClick();
       unsubscribeNotificationsSetting();

@@ -61,6 +61,12 @@ export interface Message {
     message_type: 'text' | 'file' | 'image' | 'system'
     timestamp: Date
     created_at: Date
+    file_name?: string
+    file_size?: number
+    file_path?: string
+    transfer_status?: 'pending' | 'in_progress' | 'completed' | 'failed' | 'expired' | 'rejected'
+    transfer_progress?: number
+    transfer_error?: string
 }
 
 export interface EncryptedUserIdentityDb {
@@ -217,6 +223,12 @@ export class ChatDatabase {
                 sender_peer_id TEXT NOT NULL,
                 content TEXT NOT NULL, -- Decrypted content stored in plaintext (relies on OS disk encryption for at-rest protection)
                 message_type TEXT NOT NULL CHECK(message_type IN ('text', 'file', 'image', 'system')),
+                file_name TEXT,
+                file_size INTEGER,
+                file_path TEXT,
+                transfer_status TEXT,
+                transfer_progress INTEGER,
+                transfer_error TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (chat_id) REFERENCES chats (id) ON DELETE CASCADE,
@@ -367,7 +379,7 @@ export class ChatDatabase {
       -- Indexes for cleanup queries
       CREATE INDEX IF NOT EXISTS idx_failed_key_exchanges_timestamp ON failed_key_exchanges(timestamp);
       CREATE INDEX IF NOT EXISTS idx_notifications_status_created ON notifications(status, created_at);
-    `);
+        `);
     }
 
     // Helper method to retry database operations
@@ -1243,8 +1255,21 @@ export class ChatDatabase {
     async createMessage(message: Omit<Message, 'created_at'>): Promise<string> {
         return this.retryOperation(() => {
             const stmt = this.db.prepare(`
-                INSERT INTO messages (id, chat_id, sender_peer_id, content, message_type, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO messages (
+                    id,
+                    chat_id,
+                    sender_peer_id,
+                    content,
+                    message_type,
+                    timestamp,
+                    file_name,
+                    file_size,
+                    file_path,
+                    transfer_status,
+                    transfer_progress,
+                    transfer_error
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `);
 
             stmt.run(
@@ -1253,7 +1278,13 @@ export class ChatDatabase {
                 message.sender_peer_id,
                 message.content,
                 message.message_type,
-                message.timestamp instanceof Date ? message.timestamp.toISOString() : message.timestamp
+                message.timestamp instanceof Date ? message.timestamp.toISOString() : message.timestamp,
+                message.file_name ?? null,
+                message.file_size ?? null,
+                message.file_path ?? null,
+                message.transfer_status ?? null,
+                message.transfer_progress ?? null,
+                message.transfer_error ?? null
             );
 
             // Update the chat's updated_at to match the message timestamp
@@ -1267,6 +1298,49 @@ export class ChatDatabase {
 
             return message.id;
         });
+    }
+
+    updateMessageTransfer(messageId: string, updates: {
+        file_name?: string;
+        file_size?: number;
+        file_path?: string;
+        transfer_status?: 'pending' | 'in_progress' | 'completed' | 'failed' | 'expired' | 'rejected';
+        transfer_progress?: number;
+        transfer_error?: string;
+    }): void {
+        const stmt = this.db.prepare(`
+            UPDATE messages SET
+                file_name = COALESCE(?, file_name),
+                file_size = COALESCE(?, file_size),
+                file_path = COALESCE(?, file_path),
+                transfer_status = COALESCE(?, transfer_status),
+                transfer_progress = COALESCE(?, transfer_progress),
+                transfer_error = COALESCE(?, transfer_error)
+            WHERE id = ?
+        `);
+
+        stmt.run(
+            updates.file_name ?? null,
+            updates.file_size ?? null,
+            updates.file_path ?? null,
+            updates.transfer_status ?? null,
+            updates.transfer_progress ?? null,
+            updates.transfer_error ?? null,
+            messageId
+        );
+    }
+
+    expirePendingFileOffers(timeoutMs: number): number {
+        const cutoff = new Date(Date.now() - timeoutMs).toISOString();
+        const stmt = this.db.prepare(`
+            UPDATE messages
+            SET transfer_status = 'expired', transfer_error = 'Offer expired'
+            WHERE message_type = 'file'
+              AND transfer_status = 'pending'
+              AND timestamp < ?
+        `);
+        const result = stmt.run(cutoff);
+        return result.changes ?? 0;
     }
 
     getMessagesByChatId(chatId: number, limit: number = 50, offset: number = 0): Array<Message & { sender_username?: string | undefined }> {
