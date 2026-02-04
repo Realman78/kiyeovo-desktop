@@ -9,6 +9,9 @@ import {
 import { Button } from "../../ui/Button";
 import { Bell, BellOff, FolderOpen, Info } from "lucide-react";
 import { KiyeovoDialog } from "../header/KiyeovoDialog";
+import { TorSettingsSection } from "./TorSettingsSection";
+import { TOR_CONFIG } from "../../../constants";
+
 
 type SettingsDialogProps = {
   open: boolean;
@@ -23,6 +26,19 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
   const [downloadsDir, setDownloadsDir] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [torSettings, setTorSettings] = useState({
+    enabled: false,
+    socksHost: TOR_CONFIG.DEFAULT_SOCKS_HOST,
+    socksPort: TOR_CONFIG.DEFAULT_SOCKS_PORT,
+    connectionTimeout: TOR_CONFIG.DEFAULT_CONNECTION_TIMEOUT,
+    circuitTimeout: TOR_CONFIG.DEFAULT_CIRCUIT_TIMEOUT,
+    maxRetries: TOR_CONFIG.DEFAULT_MAX_RETRIES,
+    healthCheckInterval: TOR_CONFIG.DEFAULT_HEALTH_CHECK_INTERVAL,
+    dnsResolution: TOR_CONFIG.DNS_RESOLUTION_TOR as 'tor' | 'system'
+  });
+  const [originalTorSettings, setOriginalTorSettings] = useState(torSettings);
+  const [torConfirmOpen, setTorConfirmOpen] = useState(false);
+  const [pendingTorSettings, setPendingTorSettings] = useState(torSettings);
 
   useEffect(() => {
     if (open) {
@@ -45,9 +61,10 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
   const loadSettings = async () => {
     setLoading(true);
     try {
-      const [notifResult, downloadsDirResult] = await Promise.all([
+      const [notifResult, downloadsDirResult, torResult] = await Promise.all([
         window.kiyeovoAPI.getNotificationsEnabled(),
-        window.kiyeovoAPI.getDownloadsDir()
+        window.kiyeovoAPI.getDownloadsDir(),
+        window.kiyeovoAPI.getTorSettings()
       ]);
 
       if (notifResult.success) {
@@ -56,6 +73,21 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
 
       if (downloadsDirResult.success && downloadsDirResult.path) {
         setDownloadsDir(downloadsDirResult.path);
+      }
+      if (torResult.success && torResult.settings) {
+        const s = torResult.settings;
+        const loadedSettings = {
+          enabled: s.enabled === 'true',
+          socksHost: s.socksHost || TOR_CONFIG.DEFAULT_SOCKS_HOST,
+          socksPort: s.socksPort ? parseInt(s.socksPort, 10) : TOR_CONFIG.DEFAULT_SOCKS_PORT,
+          connectionTimeout: s.connectionTimeout ? parseInt(s.connectionTimeout, 10) : TOR_CONFIG.DEFAULT_CONNECTION_TIMEOUT,
+          circuitTimeout: s.circuitTimeout ? parseInt(s.circuitTimeout, 10) : TOR_CONFIG.DEFAULT_CIRCUIT_TIMEOUT,
+          maxRetries: s.maxRetries ? parseInt(s.maxRetries, 10) : TOR_CONFIG.DEFAULT_MAX_RETRIES,
+          healthCheckInterval: s.healthCheckInterval ? parseInt(s.healthCheckInterval, 10) : TOR_CONFIG.DEFAULT_HEALTH_CHECK_INTERVAL,
+          dnsResolution: (s.dnsResolution === TOR_CONFIG.DNS_RESOLUTION_SYSTEM ? 'system' : 'tor') as 'tor' | 'system'
+        };
+        setTorSettings(loadedSettings);
+        setOriginalTorSettings(loadedSettings);
       }
     } catch (error) {
       console.error("Failed to load settings:", error);
@@ -102,9 +134,32 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
     }
   };
 
+  const handleConfirmTorRestart = (updatedSettings: typeof torSettings) => {
+    setPendingTorSettings(updatedSettings);
+    setTorConfirmOpen(true);
+  };
+
+  const handleApplyTorSettings = async () => {
+    try {
+      const result = await window.kiyeovoAPI.setTorSettings(pendingTorSettings);
+      if (!result.success) {
+        console.error('Failed to update Tor settings:', result.error);
+        return;
+      }
+      await window.kiyeovoAPI.restartApp();
+    } catch (error) {
+      console.error('Failed to apply Tor settings:', error);
+    }
+  };
+
+  const handleCancelTorRestart = () => {
+    setTorSettings(originalTorSettings);
+    setTorConfirmOpen(false);
+  };
+
   return (
     <>
-      <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Settings</DialogTitle>
@@ -161,6 +216,13 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
                   </Button>
                 </div>
 
+                <TorSettingsSection
+                  torSettings={torSettings}
+                  setTorSettings={setTorSettings}
+                  originalTorSettings={originalTorSettings}
+                  onConfirmRestart={handleConfirmTorRestart}
+                />
+
                 <div className="flex items-center justify-between p-3 border border-border rounded-lg transition-colors">
                   <div className="flex items-center gap-3 flex-1 min-w-0">
                     <FolderOpen className="w-5 h-5 text-primary shrink-0" />
@@ -185,9 +247,31 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
               </div>
             )}
           </DialogBody>
-        </DialogContent>
-      </Dialog>
-      <KiyeovoDialog open={aboutOpen} onOpenChange={setAboutOpen} />
+      </DialogContent>
+    </Dialog>
+    <KiyeovoDialog open={aboutOpen} onOpenChange={setAboutOpen} />
+    <Dialog open={torConfirmOpen} onOpenChange={(open) => { if (!open) handleCancelTorRestart(); }}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Restart Required</DialogTitle>
+        </DialogHeader>
+        <DialogBody>
+          <p className="text-sm text-muted-foreground">
+            {pendingTorSettings.enabled !== originalTorSettings.enabled
+              ? `${pendingTorSettings.enabled ? 'Enabling' : 'Disabling'} Tor requires a full app restart. Continue?`
+              : 'Changing Tor settings requires a full app restart. Apply changes now?'}
+          </p>
+          <div className="flex justify-end gap-2 mt-4">
+            <Button variant="outline" size="sm" onClick={handleCancelTorRestart}>
+              Cancel
+            </Button>
+            <Button size="sm" onClick={() => { setTorConfirmOpen(false); void handleApplyTorSettings(); }}>
+              Restart
+            </Button>
+          </div>
+        </DialogBody>
+      </DialogContent>
+    </Dialog>
     </>
   );
 };

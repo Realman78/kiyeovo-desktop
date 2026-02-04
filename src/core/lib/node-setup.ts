@@ -49,6 +49,31 @@ export function createTransportArray(torConfig: ReturnType<typeof getTorConfig>)
   }
 }
 
+function getTorConfigFromSettings(database: ChatDatabase): ReturnType<typeof getTorConfig> {
+  const base = getTorConfig();
+  const get = (key: string) => database.getSetting(key);
+
+  const enabled = get('tor_enabled');
+  const socksHost = get('tor_socks_host');
+  const socksPort = get('tor_socks_port');
+  const connectionTimeout = get('tor_connection_timeout');
+  const circuitTimeout = get('tor_circuit_timeout');
+  const maxRetries = get('tor_max_retries');
+  const healthCheckInterval = get('tor_health_check_interval');
+  const dnsResolution = get('tor_dns_resolution');
+
+  return {
+    enabled: enabled === null ? base.enabled : enabled === 'true',
+    socksHost: socksHost ?? base.socksHost,
+    socksPort: socksPort ? parseInt(socksPort, 10) : base.socksPort,
+    connectionTimeout: connectionTimeout ? parseInt(connectionTimeout, 10) : base.connectionTimeout,
+    circuitTimeout: circuitTimeout ? parseInt(circuitTimeout, 10) : base.circuitTimeout,
+    maxRetries: maxRetries ? parseInt(maxRetries, 10) : base.maxRetries,
+    healthCheckInterval: healthCheckInterval ? parseInt(healthCheckInterval, 10) : base.healthCheckInterval,
+    dnsResolution: (dnsResolution as 'tor' | 'system' | null) ?? base.dnsResolution
+  };
+}
+
 export async function createChatNode(port: number, userIdentity: EncryptedUserIdentity, database: ChatDatabase): Promise<ChatNode> {
   try {
     if (port < 1024 || port > 65535) {
@@ -59,7 +84,7 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
     const privateKey = userIdentity.getLibp2pPrivateKey();
 
     const listenAddress = `/ip4/0.0.0.0/tcp/${port}`;
-    const torConfig = getTorConfig();
+    const torConfig = getTorConfigFromSettings(database);
 
     if (torConfig.enabled) {
       console.log('Tor transport enabled - routing through SOCKS5 proxy');
@@ -178,7 +203,7 @@ export async function connectToBootstrap(node: ChatNode, database: ChatDatabase)
     .filter(addr => addr !== node.peerId.toString());
 
   // In Tor mode, only use onion bootstrap addresses to avoid Tor exit failures
-  const torCfg = getTorConfig();
+  const torCfg = getTorConfigFromSettings(database);
   if (torCfg.enabled) {
     const onionAddrs = addressesToTry.filter(a => a.includes('/onion3/'));
     console.log('TOR enabled: ignoring non-onion bootstrap addresses');

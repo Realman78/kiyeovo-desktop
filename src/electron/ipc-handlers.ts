@@ -1,7 +1,7 @@
 import type { IpcMain, BrowserWindow } from 'electron';
-import { dialog, Notification, shell } from 'electron';
+import { app, dialog, Notification, shell } from 'electron';
 import { IPC_CHANNELS, OFFLINE_CHECK_CACHE_TTL, PENDING_KEY_EXCHANGE_EXPIRATION, type P2PCore } from '../core/index.js';
-import { DOWNLOADS_DIR } from '../core/constants.js';
+import { DOWNLOADS_DIR, getTorConfig } from '../core/constants.js';
 import { validateMessageLength, validateUsername } from '../core/utils/validators.js';
 import { peerIdFromString } from '@libp2p/peer-id';
 import { OfflineMessageManager } from '../core/lib/offline-message-manager.js';
@@ -59,6 +59,9 @@ export function setupIPCHandlers(
 
   // File transfer handlers
   setupFileTransferHandlers(ipcMain, getP2PCore);
+
+  // App handlers
+  setupAppHandlers(ipcMain);
 }
 
 /**
@@ -1130,6 +1133,91 @@ function setupChatSettingsHandlers(
     } catch (error) {
       console.error('[IPC] Failed to set downloads directory:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to set setting' };
+    }
+  });
+
+  // Tor settings
+  ipcMain.handle(IPC_CHANNELS.GET_TOR_SETTINGS, async () => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, settings: null, error: 'P2P core not initialized' };
+      }
+
+      const db = p2pCore.database;
+      const get = (key: string) => db.getSetting(key);
+      const base = getTorConfig();
+
+      const enabled = get('tor_enabled');
+      const socksHost = get('tor_socks_host');
+      const socksPort = get('tor_socks_port');
+      const connectionTimeout = get('tor_connection_timeout');
+      const circuitTimeout = get('tor_circuit_timeout');
+      const maxRetries = get('tor_max_retries');
+      const healthCheckInterval = get('tor_health_check_interval');
+      const dnsResolution = get('tor_dns_resolution');
+
+      const settings = {
+        enabled: enabled ?? String(base.enabled),
+        socksHost: socksHost ?? base.socksHost,
+        socksPort: socksPort ?? String(base.socksPort),
+        connectionTimeout: connectionTimeout ?? String(base.connectionTimeout),
+        circuitTimeout: circuitTimeout ?? String(base.circuitTimeout),
+        maxRetries: maxRetries ?? String(base.maxRetries),
+        healthCheckInterval: healthCheckInterval ?? String(base.healthCheckInterval),
+        dnsResolution: dnsResolution ?? base.dnsResolution
+      };
+
+      return { success: true, settings, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to get Tor settings:', error);
+      return { success: false, settings: null, error: error instanceof Error ? error.message : 'Failed to get Tor settings' };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.SET_TOR_SETTINGS, async (_event, settings: {
+    enabled: boolean;
+    socksHost: string;
+    socksPort: number;
+    connectionTimeout: number;
+    circuitTimeout: number;
+    maxRetries: number;
+    healthCheckInterval: number;
+    dnsResolution: 'tor' | 'system';
+  }) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+
+      const db = p2pCore.database;
+      db.setSetting('tor_enabled', String(settings.enabled));
+      db.setSetting('tor_socks_host', settings.socksHost);
+      db.setSetting('tor_socks_port', String(settings.socksPort));
+      db.setSetting('tor_connection_timeout', String(settings.connectionTimeout));
+      db.setSetting('tor_circuit_timeout', String(settings.circuitTimeout));
+      db.setSetting('tor_max_retries', String(settings.maxRetries));
+      db.setSetting('tor_health_check_interval', String(settings.healthCheckInterval));
+      db.setSetting('tor_dns_resolution', settings.dnsResolution);
+
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to set Tor settings:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to set Tor settings' };
+    }
+  });
+}
+
+function setupAppHandlers(ipcMain: IpcMain): void {
+  ipcMain.handle(IPC_CHANNELS.RESTART_APP, async () => {
+    try {
+      app.relaunch();
+      app.exit(0);
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to restart app:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to restart app' };
     }
   });
 }

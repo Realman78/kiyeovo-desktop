@@ -537,6 +537,9 @@ export const IPC_CHANNELS = {
   NOTIFICATIONS_ENABLED_CHANGED: 'settings:notificationsEnabledChanged',
   GET_DOWNLOADS_DIR: 'settings:getDownloadsDir',
   SET_DOWNLOADS_DIR: 'settings:setDownloadsDir',
+  GET_TOR_SETTINGS: 'settings:getTorSettings',
+  SET_TOR_SETTINGS: 'settings:setTorSettings',
+  RESTART_APP: 'app:restart',
   GET_FILE_METADATA: 'file:getMetadata',
 
   // File transfer

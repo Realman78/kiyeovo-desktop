@@ -108,6 +108,31 @@ declare global {
                 defaultPath?: string;
                 filters?: Array<{ name: string; extensions: string[] }>;
             }) => Promise<{ filePath: string | null; canceled: boolean }>;
+            getTorSettings: () => Promise<{
+                success: boolean;
+                settings: {
+                    enabled: string | null;
+                    socksHost: string | null;
+                    socksPort: string | null;
+                    connectionTimeout: string | null;
+                    circuitTimeout: string | null;
+                    maxRetries: string | null;
+                    healthCheckInterval: string | null;
+                    dnsResolution: string | null;
+                } | null;
+                error: string | null;
+            }>;
+            setTorSettings: (settings: {
+                enabled: boolean;
+                socksHost: string;
+                socksPort: number;
+                connectionTimeout: number;
+                circuitTimeout: number;
+                maxRetries: number;
+                healthCheckInterval: number;
+                dnsResolution: 'tor' | 'system';
+            }) => Promise<{ success: boolean; error: string | null }>;
+            restartApp: () => Promise<{ success: boolean; error: string | null }>;
             getFileMetadata: (filePath: string) => Promise<{ success: boolean; name: string | null; size: number | null; error: string | null }>;
 
             // Notifications

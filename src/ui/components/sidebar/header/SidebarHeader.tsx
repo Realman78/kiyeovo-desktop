@@ -23,6 +23,7 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
     const [importTrustedUserDialogOpen, setImportTrustedUserDialogOpen] = useState(false);
     const [dropdownOpen, setDropdownOpen] = useState(false);
     const [error, setError] = useState<string | undefined>(undefined);
+    const [isTorEnabled, setIsTorEnabled] = useState<boolean>(false);
     const isConnected = useSelector((state: RootState) => state.user.connected);
 
     const dispatch = useDispatch();
@@ -84,6 +85,21 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
             setIsDHTConnected(true);
         }
     }, [isConnected]);
+
+    useEffect(() => {
+        // Load Tor settings to display connection mode
+        const loadTorSettings = async () => {
+            try {
+                const result = await window.kiyeovoAPI.getTorSettings();
+                if (result.success && result.settings) {
+                    setIsTorEnabled(result.settings.enabled === 'true');
+                }
+            } catch (error) {
+                console.error('Failed to load Tor settings:', error);
+            }
+        };
+        void loadTorSettings();
+    }, []);
 
 
     const handleShowDhtDialog = () => {
@@ -152,7 +168,7 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
                     className={`flex cursor-pointer items-center gap-2 px-2 py-1 rounded-md transition-colors hover:bg-sidebar-accent group ${isDHTConnected === null ? "text-muted-foreground" : isDHTConnected ? "text-success" : "text-destructive"}`}
                 >
                     <span className="font-mono text-xs uppercase tracking-wider">
-                        {isDHTConnected === null ? "Connecting..." : isDHTConnected ? "Connected" : "Offline"}
+                        {isDHTConnected === null ? "Connecting..." : isDHTConnected ? `Connected (${isTorEnabled ? 'tor' : 'local'})` : "Offline"}
                     </span>
                     <span className={`w-2 h-2 rounded-full mb-0.5 ${isDHTConnected === null ? "bg-muted-foreground" : isDHTConnected ? "bg-success pulse-online" : "bg-destructive"}`} />
                 </button>

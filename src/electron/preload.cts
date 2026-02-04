@@ -151,6 +151,40 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
         return ipcRenderer.invoke(IPC_CHANNELS.SHOW_SAVE_DIALOG, options);
     },
 
+    getTorSettings: async (): Promise<{
+        success: boolean;
+        settings: {
+            enabled: string | null;
+            socksHost: string | null;
+            socksPort: string | null;
+            connectionTimeout: string | null;
+            circuitTimeout: string | null;
+            maxRetries: string | null;
+            healthCheckInterval: string | null;
+            dnsResolution: string | null;
+        } | null;
+        error: string | null;
+    }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.GET_TOR_SETTINGS);
+    },
+
+    setTorSettings: async (settings: {
+        enabled: boolean;
+        socksHost: string;
+        socksPort: number;
+        connectionTimeout: number;
+        circuitTimeout: number;
+        maxRetries: number;
+        healthCheckInterval: number;
+        dnsResolution: 'tor' | 'system';
+    }): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.SET_TOR_SETTINGS, settings);
+    },
+
+    restartApp: async (): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.RESTART_APP);
+    },
+
     // Chat created event
     onChatCreated: (callback: (data: ChatCreatedEvent) => void) => {
         const listener = (_event: any, data: ChatCreatedEvent) => callback(data);
