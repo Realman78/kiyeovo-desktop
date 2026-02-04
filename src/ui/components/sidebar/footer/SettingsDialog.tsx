@@ -7,7 +7,8 @@ import {
   DialogBody,
 } from "../../ui/Dialog";
 import { Button } from "../../ui/Button";
-import { Bell, BellOff, FolderOpen } from "lucide-react";
+import { Bell, BellOff, FolderOpen, Info } from "lucide-react";
+import { KiyeovoDialog } from "../header/KiyeovoDialog";
 
 type SettingsDialogProps = {
   open: boolean;
@@ -21,6 +22,7 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [downloadsDir, setDownloadsDir] = useState<string>('');
   const [loading, setLoading] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -101,68 +103,91 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
-        <DialogHeader>
-          <DialogTitle>Settings</DialogTitle>
-        </DialogHeader>
-        <DialogBody>
-          {loading ? (
-            <div className="text-sm text-muted-foreground">Loading settings...</div>
-          ) : (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between p-3 border border-border rounded-lg transition-colors">
-                <div className="flex items-center gap-3">
-                  {notificationsEnabled ? (
-                    <Bell className="w-5 h-5 text-primary" />
-                  ) : (
-                    <BellOff className="w-5 h-5 text-muted-foreground" />
-                  )}
-                  <div>
-                    <p className="text-sm font-medium text-foreground">
-                      Notifications & Sounds
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {notificationsEnabled
-                        ? "Enabled for all chats"
-                        : "Disabled for all chats"}
-                    </p>
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Settings</DialogTitle>
+          </DialogHeader>
+          <DialogBody>
+            {loading ? (
+              <div className="text-sm text-muted-foreground">Loading settings...</div>
+            ) : (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between p-3 border border-border rounded-lg transition-colors">
+                  <div className="flex items-center gap-3">
+                    <Info className="w-5 h-5 text-primary" />
+                    <div>
+                      <p className="text-sm font-medium text-foreground">
+                        About Kiyeovo
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        App info and resources
+                      </p>
+                    </div>
                   </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setAboutOpen(true)}
+                  >
+                    Open
+                  </Button>
                 </div>
-                <Button
-                  variant={notificationsEnabled ? "default" : "outline"}
-                  size="sm"
-                  onClick={handleToggleNotifications}
-                >
-                  {notificationsEnabled ? "Disable" : "Enable"}
-                </Button>
-              </div>
+                <div className="flex items-center justify-between p-3 border border-border rounded-lg transition-colors">
+                  <div className="flex items-center gap-3">
+                    {notificationsEnabled ? (
+                      <Bell className="w-5 h-5 text-primary" />
+                    ) : (
+                      <BellOff className="w-5 h-5 text-muted-foreground" />
+                    )}
+                    <div>
+                      <p className="text-sm font-medium text-foreground">
+                        Notifications & Sounds
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {notificationsEnabled
+                          ? "Enabled for all chats"
+                          : "Disabled for all chats"}
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    variant={!notificationsEnabled ? "default" : "outline"}
+                    size="sm"
+                    onClick={handleToggleNotifications}
+                  >
+                    {notificationsEnabled ? "Disable" : "Enable"}
+                  </Button>
+                </div>
 
-              <div className="flex items-center justify-between p-3 border border-border rounded-lg transition-colors">
-                <div className="flex items-center gap-3 flex-1 min-w-0">
-                  <FolderOpen className="w-5 h-5 text-primary shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-foreground">
-                      Downloads Directory
-                    </p>
-                    <p className="text-xs text-muted-foreground truncate" title={downloadsDir}>
-                      {downloadsDir || 'Not set'}
-                    </p>
+                <div className="flex items-center justify-between p-3 border border-border rounded-lg transition-colors">
+                  <div className="flex items-center gap-3 flex-1 min-w-0">
+                    <FolderOpen className="w-5 h-5 text-primary shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-foreground">
+                        Downloads Directory
+                      </p>
+                      <p className="text-xs text-muted-foreground truncate" title={downloadsDir}>
+                        {downloadsDir || 'Not set'}
+                      </p>
+                    </div>
                   </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleChangeDownloadsDir}
+                    className="shrink-0"
+                  >
+                    Change
+                  </Button>
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleChangeDownloadsDir}
-                  className="shrink-0"
-                >
-                  Change
-                </Button>
               </div>
-            </div>
-          )}
-        </DialogBody>
-      </DialogContent>
-    </Dialog>
+            )}
+          </DialogBody>
+        </DialogContent>
+      </Dialog>
+      <KiyeovoDialog open={aboutOpen} onOpenChange={setAboutOpen} />
+    </>
   );
 };
