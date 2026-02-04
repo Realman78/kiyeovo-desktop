@@ -61,7 +61,7 @@ export function setupIPCHandlers(
   setupFileTransferHandlers(ipcMain, getP2PCore);
 
   // App handlers
-  setupAppHandlers(ipcMain);
+  setupAppHandlers(ipcMain, getP2PCore);
 }
 
 /**
@@ -1209,7 +1209,7 @@ function setupChatSettingsHandlers(
   });
 }
 
-function setupAppHandlers(ipcMain: IpcMain): void {
+function setupAppHandlers(ipcMain: IpcMain, getP2PCore: () => P2PCore | null): void {
   ipcMain.handle(IPC_CHANNELS.RESTART_APP, async () => {
     try {
       app.relaunch();
@@ -1218,6 +1218,29 @@ function setupAppHandlers(ipcMain: IpcMain): void {
     } catch (error) {
       console.error('[IPC] Failed to restart app:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to restart app' };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.DELETE_ACCOUNT_AND_DATA, async () => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+
+      console.log('[IPC] Deleting all account data...');
+
+      await p2pCore.database.wipeDatabase();
+
+      console.log('[IPC] Database wiped. Restarting app...');
+
+      app.relaunch();
+      app.exit(0);
+
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to delete account:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to delete account' };
     }
   });
 }

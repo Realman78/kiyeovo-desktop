@@ -7,9 +7,11 @@ import {
   DialogBody,
 } from "../../ui/Dialog";
 import { Button } from "../../ui/Button";
-import { Bell, BellOff, FolderOpen, Info } from "lucide-react";
+import { Bell, BellOff, FolderOpen, Info, Trash2 } from "lucide-react";
 import { KiyeovoDialog } from "../header/KiyeovoDialog";
 import { TorSettingsSection } from "./TorSettingsSection";
+import { DeleteAccountDialog } from "./DeleteAccountDialog";
+import { TorRestartDialog } from "./TorRestartDialog";
 import { TOR_CONFIG } from "../../../constants";
 
 
@@ -39,6 +41,7 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
   const [originalTorSettings, setOriginalTorSettings] = useState(torSettings);
   const [torConfirmOpen, setTorConfirmOpen] = useState(false);
   const [pendingTorSettings, setPendingTorSettings] = useState(torSettings);
+  const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -157,9 +160,21 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
     setTorConfirmOpen(false);
   };
 
+  const handleDeleteAccount = async () => {
+    try {
+      const result = await window.kiyeovoAPI.deleteAccountAndData();
+      if (!result.success) {
+        console.error('Failed to delete account:', result.error);
+        return;
+      }
+    } catch (error) {
+      console.error('Failed to delete account:', error);
+    }
+  };
+
   return (
     <>
-    <Dialog open={open} onOpenChange={onOpenChange}>
+      <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Settings</DialogTitle>
@@ -215,14 +230,6 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
                     {notificationsEnabled ? "Disable" : "Enable"}
                   </Button>
                 </div>
-
-                <TorSettingsSection
-                  torSettings={torSettings}
-                  setTorSettings={setTorSettings}
-                  originalTorSettings={originalTorSettings}
-                  onConfirmRestart={handleConfirmTorRestart}
-                />
-
                 <div className="flex items-center justify-between p-3 border border-border rounded-lg transition-colors">
                   <div className="flex items-center gap-3 flex-1 min-w-0">
                     <FolderOpen className="w-5 h-5 text-primary shrink-0" />
@@ -244,34 +251,53 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
                     Change
                   </Button>
                 </div>
+                <TorSettingsSection
+                  torSettings={torSettings}
+                  setTorSettings={setTorSettings}
+                  originalTorSettings={originalTorSettings}
+                  onConfirmRestart={handleConfirmTorRestart}
+                />
+
+                <div className="flex items-center justify-between p-3 border border-destructive/50 rounded-lg transition-colors bg-destructive/5">
+                  <div className="flex items-center gap-3 flex-1">
+                    <Trash2 className="w-5 h-5 text-destructive shrink-0" />
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-foreground">
+                        Delete Account
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Permanently delete all data
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => setDeleteAccountOpen(true)}
+                    className="shrink-0"
+                  >
+                    Delete
+                  </Button>
+                </div>
               </div>
             )}
           </DialogBody>
-      </DialogContent>
-    </Dialog>
-    <KiyeovoDialog open={aboutOpen} onOpenChange={setAboutOpen} />
-    <Dialog open={torConfirmOpen} onOpenChange={(open) => { if (!open) handleCancelTorRestart(); }}>
-      <DialogContent className="max-w-sm">
-        <DialogHeader>
-          <DialogTitle>Restart Required</DialogTitle>
-        </DialogHeader>
-        <DialogBody>
-          <p className="text-sm text-muted-foreground">
-            {pendingTorSettings.enabled !== originalTorSettings.enabled
-              ? `${pendingTorSettings.enabled ? 'Enabling' : 'Disabling'} Tor requires a full app restart. Continue?`
-              : 'Changing Tor settings requires a full app restart. Apply changes now?'}
-          </p>
-          <div className="flex justify-end gap-2 mt-4">
-            <Button variant="outline" size="sm" onClick={handleCancelTorRestart}>
-              Cancel
-            </Button>
-            <Button size="sm" onClick={() => { setTorConfirmOpen(false); void handleApplyTorSettings(); }}>
-              Restart
-            </Button>
-          </div>
-        </DialogBody>
-      </DialogContent>
-    </Dialog>
+        </DialogContent>
+      </Dialog>
+      <KiyeovoDialog open={aboutOpen} onOpenChange={setAboutOpen} />
+      <TorRestartDialog
+        open={torConfirmOpen}
+        onOpenChange={setTorConfirmOpen}
+        pendingSettings={pendingTorSettings}
+        originalSettings={originalTorSettings}
+        onCancel={handleCancelTorRestart}
+        onConfirm={handleApplyTorSettings}
+      />
+      <DeleteAccountDialog
+        open={deleteAccountOpen}
+        onOpenChange={setDeleteAccountOpen}
+        onConfirm={handleDeleteAccount}
+      />
     </>
   );
 };

@@ -133,6 +133,7 @@ declare global {
                 dnsResolution: 'tor' | 'system';
             }) => Promise<{ success: boolean; error: string | null }>;
             restartApp: () => Promise<{ success: boolean; error: string | null }>;
+            deleteAccountAndData: () => Promise<{ success: boolean; error: string | null }>;
             getFileMetadata: (filePath: string) => Promise<{ success: boolean; name: string | null; size: number | null; error: string | null }>;
 
             // Notifications

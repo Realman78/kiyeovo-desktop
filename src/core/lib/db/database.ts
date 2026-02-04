@@ -1690,6 +1690,48 @@ export class ChatDatabase {
         }
     }
 
+    /**
+     * Wipes all data from the database
+     */
+    async wipeDatabase(): Promise<void> {
+        try {
+            console.log('[DATABASE] WARNING: Wiping all database data...');
+
+            // Disable foreign keys temporarily to avoid constraint errors
+            this.db.pragma('foreign_keys = OFF');
+
+            // Get all table names
+            const tables = this.db.prepare(`
+                SELECT name FROM sqlite_master
+                WHERE type='table' AND name NOT LIKE 'sqlite_%'
+            `).all() as Array<{ name: string }>;
+
+            // Delete all data from each table
+            this.db.exec('BEGIN TRANSACTION');
+
+            for (const table of tables) {
+                console.log(`[DATABASE] Deleting data from table: ${table.name}`);
+                this.db.prepare(`DELETE FROM ${table.name}`).run();
+            }
+
+            this.db.exec('COMMIT');
+
+            // Re-enable foreign keys
+            this.db.pragma('foreign_keys = ON');
+
+            // Vacuum to reclaim space
+            this.db.exec('VACUUM');
+
+            console.log('[DATABASE] All data wiped successfully');
+        } catch (error) {
+            this.db.exec('ROLLBACK');
+            // Re-enable foreign keys even on error
+            this.db.pragma('foreign_keys = ON');
+            console.error('[DATABASE] Error wiping database:', error);
+            throw error;
+        }
+    }
+
     // Backup methods
     async backup(backupPath: string): Promise<void> {
         await this.db.backup(backupPath);

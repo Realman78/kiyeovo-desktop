@@ -185,6 +185,10 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
         return ipcRenderer.invoke(IPC_CHANNELS.RESTART_APP);
     },
 
+    deleteAccountAndData: async (): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.DELETE_ACCOUNT_AND_DATA);
+    },
+
     // Chat created event
     onChatCreated: (callback: (data: ChatCreatedEvent) => void) => {
         const listener = (_event: any, data: ChatCreatedEvent) => callback(data);

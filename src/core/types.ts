@@ -540,6 +540,7 @@ export const IPC_CHANNELS = {
   GET_TOR_SETTINGS: 'settings:getTorSettings',
   SET_TOR_SETTINGS: 'settings:setTorSettings',
   RESTART_APP: 'app:restart',
+  DELETE_ACCOUNT_AND_DATA: 'app:deleteAccountAndData',
   GET_FILE_METADATA: 'file:getMetadata',
 
   // File transfer
