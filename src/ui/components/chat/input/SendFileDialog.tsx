@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -9,6 +9,7 @@ import {
 } from '../../ui/Dialog';
 import { Button } from '../../ui/Button';
 import { FileUp, X } from 'lucide-react';
+import { MAX_FILE_SIZE } from '../../../constants';
 
 interface SendFileDialogProps {
   open: boolean;
@@ -19,6 +20,23 @@ interface SendFileDialogProps {
 export const SendFileDialog: React.FC<SendFileDialogProps> = ({ open, onOpenChange, onSend }) => {
   const [selectedFile, setSelectedFile] = useState<{ path: string; name: string; size: number } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [sizeError, setSizeError] = useState<string | null>(null);
+
+  const formatFileSize = (bytes: number): string => {
+    if (bytes <= 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return `${Math.round((bytes / Math.pow(k, i)) * 100) / 100} ${sizes[i]}`;
+  };
+
+  useEffect(() => {
+    if (!open) {
+      setIsLoading(false);
+      setSelectedFile(null);
+      setSizeError(null);
+    }
+  }, [open]);
 
   const handleBrowse = async () => {
     try {
@@ -46,28 +64,25 @@ export const SendFileDialog: React.FC<SendFileDialogProps> = ({ open, onOpenChan
           name: fileName,
           size: fileSize
         });
+        setSizeError(fileSize > MAX_FILE_SIZE ? `File exceeds size limit (${formatFileSize(MAX_FILE_SIZE)} max)` : null);
       }
     } catch (error) {
       console.error('Error selecting file:', error);
     }
   };
 
-  const handleSend = async () => {
-    if (!selectedFile) return;
+  const handleSend = () => {
+    if (!selectedFile || sizeError) return;
 
     const filePath = selectedFile.path;
     const fileName = selectedFile.name;
     const fileSize = selectedFile.size;
+
     setSelectedFile(null);
     onOpenChange(false);
-    setIsLoading(true);
-    try {
-      await onSend(filePath, fileName, fileSize);
-    } catch (error) {
-      console.error('Error sending file:', error);
-    } finally {
-      setIsLoading(false);
-    }
+    void onSend(filePath, fileName, fileSize).catch(err => {
+      console.error('Error sending file:', err);
+    });
   };
 
   const handleCancel = () => {
@@ -89,7 +104,7 @@ export const SendFileDialog: React.FC<SendFileDialogProps> = ({ open, onOpenChan
                 <div className="flex-1 min-w-0">
                   <p className="font-medium text-sm truncate">{selectedFile.name}</p>
                   <p className="text-xs text-muted-foreground mt-1">{selectedFile.path}</p>
-                  <p className="text-xs text-muted-foreground mt-1">{selectedFile.size} bytes</p>
+                  <p className="text-xs text-muted-foreground mt-1">{formatFileSize(selectedFile.size)}</p>
                 </div>
                 <button
                   onClick={() => setSelectedFile(null)}
@@ -98,6 +113,9 @@ export const SendFileDialog: React.FC<SendFileDialogProps> = ({ open, onOpenChan
                   <X className="w-4 h-4" />
                 </button>
               </div>
+              {sizeError && (
+                <p className="text-xs text-destructive mt-2">{sizeError}</p>
+              )}
             </div>
           ) : (
             <div className="border-2 border-dashed border-border rounded-lg p-8 text-center">
@@ -120,7 +138,7 @@ export const SendFileDialog: React.FC<SendFileDialogProps> = ({ open, onOpenChan
           </Button>
           <Button
             onClick={handleSend}
-            disabled={!selectedFile || isLoading}
+            disabled={!selectedFile || isLoading || !!sizeError}
           >
             {isLoading ? 'Sending...' : 'Send'}
           </Button>

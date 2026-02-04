@@ -135,6 +135,7 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     showOpenDialog: async (options: {
         title?: string;
         filters?: Array<{ name: string; extensions: string[] }>;
+        properties?: Array<'openFile' | 'openDirectory'>;
     }): Promise<{ filePath: string | null; canceled: boolean }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.SHOW_OPEN_DIALOG, options);
     },

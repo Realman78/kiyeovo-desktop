@@ -7,6 +7,7 @@ import { useDispatch, useSelector } from "react-redux";
 import type { RootState } from "../../../state/store";
 import { SendFileDialog } from "./SendFileDialog";
 import { addMessage, updateFileTransferStatus } from "../../../state/slices/chatSlice";
+import { FILE_ACCEPTANCE_TIMEOUT } from "../../../constants";
 
 export const ChatInput: FC = () => {
     const { toast } = useToast();
@@ -63,7 +64,7 @@ export const ChatInput: FC = () => {
         }
 
         const pendingMessageId = `pending-file-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-        const transferExpiresAt = Date.now() + 30 * 1000;
+        const transferExpiresAt = Date.now() + FILE_ACCEPTANCE_TIMEOUT;
         try {
             dispatch(addMessage({
                 id: pendingMessageId,

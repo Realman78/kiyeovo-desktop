@@ -84,9 +84,9 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
 
   const handleChangeDownloadsDir = async () => {
     try {
-      const result = await window.kiyeovoAPI.showSaveDialog({
+      const result = await window.kiyeovoAPI.showOpenDialog({
         title: 'Select Downloads Directory',
-        defaultPath: downloadsDir
+        properties: ['openDirectory']
       });
 
       if (!result.canceled && result.filePath) {

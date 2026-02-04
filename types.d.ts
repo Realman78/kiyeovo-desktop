@@ -100,6 +100,7 @@ declare global {
             showOpenDialog: (options: {
                 title?: string;
                 filters?: Array<{ name: string; extensions: string[] }>;
+                properties?: Array<'openFile' | 'openDirectory'>;
             }) => Promise<{ filePath: string | null; canceled: boolean }>;
 
             showSaveDialog: (options: {

@@ -1,6 +1,7 @@
 import type { IpcMain, BrowserWindow } from 'electron';
 import { dialog, Notification, shell } from 'electron';
 import { IPC_CHANNELS, OFFLINE_CHECK_CACHE_TTL, PENDING_KEY_EXCHANGE_EXPIRATION, type P2PCore } from '../core/index.js';
+import { DOWNLOADS_DIR } from '../core/constants.js';
 import { validateMessageLength, validateUsername } from '../core/utils/validators.js';
 import { peerIdFromString } from '@libp2p/peer-id';
 import { OfflineMessageManager } from '../core/lib/offline-message-manager.js';
@@ -479,11 +480,12 @@ function setupFileDialogHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(IPC_CHANNELS.SHOW_OPEN_DIALOG, async (_event, options: {
     title?: string;
     filters?: Array<{ name: string; extensions: string[] }>;
+    properties?: Array<'openFile' | 'openDirectory'>;
   }) => {
     try {
       const result = await dialog.showOpenDialog({
         title: options.title || 'Open File',
-        properties: ['openFile'],
+        properties: options.properties || ['openFile'],
         filters: options.filters || []
       });
 
@@ -1103,9 +1105,7 @@ function setupChatSettingsHandlers(
       }
 
       const path = p2pCore.database.getSetting('downloads_directory');
-      // Default to Downloads folder in user's home directory
-      const defaultPath = join(homedir(), 'Downloads', 'kiyeovo');
-      const downloadsPath = path || defaultPath;
+      const downloadsPath = path || DOWNLOADS_DIR;
 
       console.log(`[IPC] Get downloads directory: ${downloadsPath}`);
       return { success: true, path: downloadsPath, error: null };

@@ -6,6 +6,7 @@ import { formatTimestampToHourMinute } from "../../../utils/dateUtils";
 import { PendingNotifications } from "./PendingNotifications";
 import { FileMessage } from "./FileMessage";
 import type { MessageSentStatus } from "../../../types";
+import { FILE_ACCEPTANCE_TIMEOUT, SHOW_TIMESTAMP_INTERVAL } from "../../../constants";
 
 type MessagesContainerProps = {
   messages: ChatMessage[];
@@ -54,7 +55,7 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
 
             const transferExpiresAt =
               msg.message_type === 'file' && msg.transfer_status === 'pending'
-                ? msg.timestamp.getTime() + 30 * 1000
+                ? msg.timestamp.getTime() + FILE_ACCEPTANCE_TIMEOUT
                 : undefined;
 
             return {
@@ -152,7 +153,7 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
       const showTimestamp =
         index === 0 ||
         messages[index - 1].senderPeerId !== message.senderPeerId ||
-        message.timestamp - messages[index - 1].timestamp > 15 * 60 * 1000;
+        message.timestamp - messages[index - 1].timestamp > SHOW_TIMESTAMP_INTERVAL;
 
       return (
         <div
