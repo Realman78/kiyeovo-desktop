@@ -6,9 +6,10 @@ import { validateMessageLength, validateUsername } from '../core/utils/validator
 import { peerIdFromString } from '@libp2p/peer-id';
 import { OfflineMessageManager } from '../core/lib/offline-message-manager.js';
 import { ProfileManager } from '../core/lib/profile-manager.js';
+import { ensureAppDataDir } from '../core/utils/miscellaneous.js';
 import { homedir } from 'os';
 import { basename, join } from 'path';
-import { stat } from 'fs/promises';
+import { copyFile, stat } from 'fs/promises';
 
 /**
  * Setup all IPC handlers for communication between renderer and main process
@@ -1241,6 +1242,71 @@ function setupAppHandlers(ipcMain: IpcMain, getP2PCore: () => P2PCore | null): v
     } catch (error) {
       console.error('[IPC] Failed to delete account:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to delete account' };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.BACKUP_DATABASE, async (_event, backupPath: string) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+
+      console.log(`[IPC] Backing up database to: ${backupPath}`);
+      await p2pCore.database.backup(backupPath);
+      console.log('[IPC] Database backup completed');
+
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to backup database:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to backup database' };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.RESTORE_DATABASE, async (_event, backupPath: string) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+
+      console.log(`[IPC] Restoring database from: ${backupPath}`);
+
+      // Close current database connection
+      p2pCore.database.close();
+
+      // Restore the database
+      await p2pCore.database.restore(backupPath);
+
+      console.log('[IPC] Database restored. Restarting app...');
+
+      // Restart the app
+      app.relaunch();
+      app.exit(0);
+
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to restore database:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to restore database' };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.RESTORE_DATABASE_FROM_FILE, async (_event, backupPath: string) => {
+    try {
+      const dataDir = ensureAppDataDir();
+      const dbPath = join(dataDir, 'chat.db');
+
+      console.log(`[IPC] Restoring database (no core) from: ${backupPath} -> ${dbPath}`);
+      await copyFile(backupPath, dbPath);
+
+      console.log('[IPC] Database restored. Restarting app...');
+      app.relaunch();
+      app.exit(0);
+
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to restore database from file:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to restore database from file' };
     }
   });
 }

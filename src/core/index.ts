@@ -80,7 +80,7 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
   sendStatus(`Starting Kiyeovo P2P node on port ${config.port}...`, 'database');
 
   // Initialize database
-  const dbPath = path.join(config.dataDir, `chat-${config.port}.db`);
+  const dbPath = path.join(config.dataDir, 'chat.db');
   const database = new ChatDatabase(dbPath);
   sendStatus(`Database initialized at: ${dbPath}`, 'database');
 

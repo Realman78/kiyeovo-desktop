@@ -7,12 +7,14 @@ import {
   DialogBody,
 } from "../../ui/Dialog";
 import { Button } from "../../ui/Button";
-import { Bell, BellOff, FolderOpen, Info, Trash2 } from "lucide-react";
+import { Bell, BellOff, FolderOpen, Info, Trash2, Database } from "lucide-react";
 import { KiyeovoDialog } from "../header/KiyeovoDialog";
 import { TorSettingsSection } from "./TorSettingsSection";
 import { DeleteAccountDialog } from "./DeleteAccountDialog";
 import { TorRestartDialog } from "./TorRestartDialog";
 import { TOR_CONFIG } from "../../../constants";
+import { handleDeleteAccount } from "../../../utils/handlers";
+import { useToast } from "../../ui/use-toast";
 
 
 type SettingsDialogProps = {
@@ -24,6 +26,7 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
   open,
   onOpenChange,
 }) => {
+  const { toast } = useToast();
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [downloadsDir, setDownloadsDir] = useState<string>('');
   const [loading, setLoading] = useState(false);
@@ -155,21 +158,38 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
     }
   };
 
+  const handleBackupDatabase = async () => {
+    try {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+        const defaultFileName = `kiyeovo-backup-${timestamp}.db`;
+
+        const result = await window.kiyeovoAPI.showSaveDialog({
+            title: 'Save Database Backup',
+            defaultPath: defaultFileName,
+            filters: [
+                { name: 'Database Files', extensions: ['db'] },
+                { name: 'All Files', extensions: ['*'] }
+            ]
+        });
+
+        if (!result.canceled && result.filePath) {
+            const backupResult = await window.kiyeovoAPI.backupDatabase(result.filePath);
+            if (backupResult.success) {
+                toast.info('Database backup successful');
+                onOpenChange(false);
+                // Could show a success toast here
+            } else {
+                console.error('Failed to backup database:', backupResult.error);
+            }
+        }
+    } catch (error) {
+        console.error('Failed to backup database:', error);
+    }
+}
+
   const handleCancelTorRestart = () => {
     setTorSettings(originalTorSettings);
     setTorConfirmOpen(false);
-  };
-
-  const handleDeleteAccount = async () => {
-    try {
-      const result = await window.kiyeovoAPI.deleteAccountAndData();
-      if (!result.success) {
-        console.error('Failed to delete account:', result.error);
-        return;
-      }
-    } catch (error) {
-      console.error('Failed to delete account:', error);
-    }
   };
 
   return (
@@ -257,6 +277,28 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
                   originalTorSettings={originalTorSettings}
                   onConfirmRestart={handleConfirmTorRestart}
                 />
+
+                <div className="flex items-center justify-between p-3 border border-border rounded-lg transition-colors">
+                  <div className="flex items-center gap-3 flex-1">
+                    <Database className="w-5 h-5 text-primary shrink-0" />
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-foreground">
+                        Backup Database
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Save a copy of all your data
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleBackupDatabase}
+                    className="shrink-0"
+                  >
+                    Backup
+                  </Button>
+                </div>
 
                 <div className="flex items-center justify-between p-3 border border-destructive/50 rounded-lg transition-colors bg-destructive/5">
                   <div className="flex items-center gap-3 flex-1">

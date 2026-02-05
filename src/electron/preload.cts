@@ -189,6 +189,17 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
         return ipcRenderer.invoke(IPC_CHANNELS.DELETE_ACCOUNT_AND_DATA);
     },
 
+    backupDatabase: async (backupPath: string): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.BACKUP_DATABASE, backupPath);
+    },
+
+    restoreDatabase: async (backupPath: string): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.RESTORE_DATABASE, backupPath);
+    },
+    restoreDatabaseFromFile: async (backupPath: string): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.RESTORE_DATABASE_FROM_FILE, backupPath);
+    },
+
     // Chat created event
     onChatCreated: (callback: (data: ChatCreatedEvent) => void) => {
         const listener = (_event: any, data: ChatCreatedEvent) => callback(data);

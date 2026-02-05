@@ -134,6 +134,9 @@ declare global {
             }) => Promise<{ success: boolean; error: string | null }>;
             restartApp: () => Promise<{ success: boolean; error: string | null }>;
             deleteAccountAndData: () => Promise<{ success: boolean; error: string | null }>;
+            backupDatabase: (backupPath: string) => Promise<{ success: boolean; error: string | null }>;
+            restoreDatabase: (backupPath: string) => Promise<{ success: boolean; error: string | null }>;
+            restoreDatabaseFromFile: (backupPath: string) => Promise<{ success: boolean; error: string | null }>;
             getFileMetadata: (filePath: string) => Promise<{ success: boolean; name: string | null; size: number | null; error: string | null }>;
 
             // Notifications

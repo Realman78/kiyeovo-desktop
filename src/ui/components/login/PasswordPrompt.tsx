@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import type { PasswordRequest } from '../../types';
 import { Input } from '../ui/Input';
-import { Eye, EyeOff, Lock, Shield, AlertCircle, CheckCircle, FileKey, Loader2 } from 'lucide-react'
+import { Eye, EyeOff, Lock, Shield, AlertCircle, CheckCircle, FileKey, Loader2, Database } from 'lucide-react'
 import { Button } from '../ui/Button';
 import {
   Dialog,
@@ -136,6 +136,28 @@ export function PasswordPrompt({ passwordRequest, handleSubmit, password, setPas
   };
 
   const isLocked = cooldownRemaining > 0;
+
+  const handleImportBackup = async () => {
+    try {
+      const result = await window.kiyeovoAPI.showOpenDialog({
+        title: 'Select Database Backup',
+        filters: [
+          { name: 'Database Files', extensions: ['db'] },
+          { name: 'All Files', extensions: ['*'] }
+        ]
+      });
+
+      if (!result.canceled && result.filePath) {
+        const restoreResult = await window.kiyeovoAPI.restoreDatabaseFromFile(result.filePath);
+        if (!restoreResult.success) {
+          console.error('Failed to restore database:', restoreResult.error);
+        }
+        // App will restart automatically after successful restore
+      }
+    } catch (error) {
+      console.error('Failed to import backup:', error);
+    }
+  };
 
   return (
     <div className='flex flex-col gap-4 justify-center items-center'>
@@ -283,6 +305,19 @@ export function PasswordPrompt({ passwordRequest, handleSubmit, password, setPas
             </>
           )}
         </Button>
+
+        <div className="mt-4 pt-4 border-t border-border">
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full"
+            onClick={handleImportBackup}
+            disabled={isSubmitting || isLocked}
+          >
+            <Database className="w-4 h-4" />
+            Import from Backup
+          </Button>
+        </div>
       </form>
 
       {/* Recovery Phrase Dialog */}
