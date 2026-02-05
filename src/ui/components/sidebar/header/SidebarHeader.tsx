@@ -111,6 +111,7 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
     }
 
     const handleShowNewConversationDialog = () => {
+        setError(undefined);
         setNewConversationDialogOpen(true);
         setDropdownOpen(false);
     }
@@ -204,7 +205,12 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
         <KiyeovoDialog open={kiyeovoDialogOpen} onOpenChange={setKiyeovoDialogOpen} />
         <NewConversationDialog
             open={newConversationDialogOpen}
-            onOpenChange={setNewConversationDialogOpen}
+            onOpenChange={(open) => {
+                setNewConversationDialogOpen(open);
+                if (!open) {
+                    setError(undefined);
+                }
+            }}
             onNewConversation={handleNewConversation}
             backendError={error}
             setError={setError}

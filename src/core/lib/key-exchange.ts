@@ -274,12 +274,11 @@ export class KeyExchange {
       throw new Error(`Already waiting for ${targetUsername} to accept your message request`);
     }
 
-    // TODO reenable once testing is over
     // Check for recent failed attempts (sender-side rate limiting)
-    // const recentFailure = this.database.getRecentFailedKeyExchange(peerIdStr, 5);
-    // if (recentFailure) {
-    //   throw new Error(`Rate limit: You must wait before contacting ${targetUsername} again`);
-    // }
+    const recentFailure = this.database.getRecentFailedKeyExchange(peerIdStr, 5);
+    if (recentFailure) {
+      throw new Error(`Rate limit: You must wait before contacting ${targetUsername} again`);
+    }
 
     const ephemeralPrivateKey = x25519.utils.randomSecretKey();
     const ephemeralPublicKey = x25519.getPublicKey(ephemeralPrivateKey);
@@ -356,7 +355,7 @@ export class KeyExchange {
     } catch (error: unknown) {
       this.keyExchangeAbortControllers.delete(peerIdStr);
       this.keyExchangeStreams.delete(peerIdStr);
-      
+
       // Re-throw cancellation errors so they can be handled upstream
       if (error instanceof Error && error.message === 'KEY_EXCHANGE_CANCELLED') {
         console.log(`Key exchange with ${targetUsername} was cancelled by user`);
@@ -369,6 +368,14 @@ export class KeyExchange {
       if (error instanceof Error && !error.message.includes('Rate limit')) {
         this.database.logFailedKeyExchange(peerIdStr, targetUsername, message, error.message);
       }
+
+      // Notify frontend about the failure
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.onKeyExchangeFailed({
+        username: targetUsername,
+        peerId: peerIdStr,
+        error: errorMessage
+      });
 
       throw error;
     }
@@ -469,18 +476,17 @@ export class KeyExchange {
       return null;
     }
 
-    // TODO: Re-enable this once testing is finished
-    // // Check if user has contacted me recently
-    // if (this.didUserContactMeRecently(remoteId)) {
-    //   console.log(`User has contacted me recently - rejecting contact request from ${senderUsername}`);
-    //   return null;
-    // }
+    // Check if user has contacted me recently
+    if (this.didUserContactMeRecently(remoteId)) {
+      console.log(`User has contacted me recently - rejecting contact request from ${senderUsername}`);
+      return null;
+    }
 
-    // // Rate limiting check
-    // if (this.isKeyExchangeRateLimitExceeded()) {
-    //   console.log(`Rate limit exceeded - rejecting contact request from ${senderUsername}`);
-    //   return null;
-    // }
+    // Rate limiting check
+    if (this.isKeyExchangeRateLimitExceeded()) {
+      console.log(`Rate limit exceeded - rejecting contact request from ${senderUsername}`);
+      return null;
+    }
 
     // Silent mode - just log the attempt
     const contactAttemptId = this.database.logContactAttempt({
@@ -1447,7 +1453,6 @@ export class KeyExchange {
     // Choosing option 3 for now - user warned that deletion breaks offline messages until both users delete or re-sync.
   }
 
-  // TODO dont forget to use this once testing is finished
   private isKeyExchangeRateLimitExceeded(): boolean {
     let keyExchangeRateLimit = this.database.getSetting('key_exchange_rate_limit') ?? KEY_EXCHANGE_RATE_LIMIT_DEFAULT;
     if (isNaN(Number(keyExchangeRateLimit)) || Number(keyExchangeRateLimit) < 1 || Number(keyExchangeRateLimit) > 100) {

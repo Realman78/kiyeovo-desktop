@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import Sidebar from '../components/sidebar/Sidebar';
 import ChatWrapper from '../components/chat/ChatWrapper';
-import { setChats, addChat, removePendingKeyExchange, setActiveChat, markOfflineFetched, updateFileTransferProgress, updateFileTransferStatus, updateFileTransferError, setPendingFileStatus, updateChat } from '../state/slices/chatSlice';
+import { setChats, addChat, removePendingKeyExchange, setActiveChat, markOfflineFetched, updateFileTransferProgress, updateFileTransferStatus, updateFileTransferError, setPendingFileStatus, updateChat, setActivePendingKeyExchange } from '../state/slices/chatSlice';
 import { removeContactAttempt, setActiveContactAttempt, addMessage, type Chat } from '../state/slices/chatSlice';
 import { useToast } from '../components/ui/use-toast';
 import type { RootState } from '../state/store';
@@ -22,11 +22,25 @@ export const Main = () => {
         toast.error(`${data.username} went offline`);
       } else if (data.error.includes("No pending acceptance found")) {
         toast.error(data.error);
+      } else if (data.error.includes("rejected")) {
+        toast.error(`${data.username} rejected your contact request`);
       } else {
         toast.error(`Key exchange with ${data.username} failed or timed out`);
       }
+
+      const currentState = store.getState();
+      const wasViewingPending = currentState.chat.activePendingKeyExchange?.peerId === data.peerId;
+      const wasViewingContact = currentState.chat.activeContactAttempt?.peerId === data.peerId;
+
       dispatch(removeContactAttempt(data.peerId));
-      dispatch(setActiveContactAttempt(null));
+      dispatch(removePendingKeyExchange(data.peerId));
+
+      if (wasViewingPending) {
+        dispatch(setActivePendingKeyExchange(null));
+      }
+      if (wasViewingContact) {
+        dispatch(setActiveContactAttempt(null));
+      }
     });
 
     const unsubMessageReceived = window.kiyeovoAPI.onMessageReceived((data) => {
