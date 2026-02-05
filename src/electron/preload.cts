@@ -9,8 +9,8 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
         ipcRenderer.on(IPC_CHANNELS.PASSWORD_REQUEST, listener);
         return () => ipcRenderer.removeListener(IPC_CHANNELS.PASSWORD_REQUEST, listener);
     },
-    submitPassword: (password: string, rememberMe: boolean) => {
-        ipcRenderer.send(IPC_CHANNELS.PASSWORD_RESPONSE, { password, rememberMe });
+    submitPassword: (password: string, rememberMe: boolean, useRecoveryPhrase?: boolean) => {
+        ipcRenderer.send(IPC_CHANNELS.PASSWORD_RESPONSE, { password, rememberMe, useRecoveryPhrase });
     },
 
     // Initialization status

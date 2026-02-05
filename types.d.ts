@@ -6,7 +6,7 @@ declare global {
         kiyeovoAPI: {
             // Password authentication
             onPasswordRequest: (callback: (request: PasswordRequest) => void) => () => void;
-            submitPassword: (password: string, rememberMe: boolean) => void;
+            submitPassword: (password: string, rememberMe: boolean, useRecoveryPhrase?: boolean) => void;
 
             // Initialization status
             onInitStatus: (callback: (status: InitStatus) => void) => () => void;
