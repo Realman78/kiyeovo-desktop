@@ -434,6 +434,8 @@ export class ChatDatabase {
         // TODO if recovery phrase is used, we need to append "-recovery" to the peer_id
         const stmt = this.db.prepare(`SELECT * FROM encrypted_user_identities WHERE peer_id NOT LIKE ? ORDER BY created_at DESC LIMIT 1`);
         const row = stmt.get('%-recovery') as any;
+        // TODO remove debug log
+        console.log('[DATABASE] getEncryptedUserIdentity result:', row ? `Found identity: ${row.peer_id}` : 'No identity found');
         return row ? {
             id: row.id,
             peer_id: row.peer_id,

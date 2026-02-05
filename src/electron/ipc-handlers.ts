@@ -1297,7 +1297,35 @@ function setupAppHandlers(ipcMain: IpcMain, getP2PCore: () => P2PCore | null): v
       const dbPath = join(dataDir, 'chat.db');
 
       console.log(`[IPC] Restoring database (no core) from: ${backupPath} -> ${dbPath}`);
+
+      // Clean up any existing database and WAL files first
+      const fs = await import('fs/promises');
+      try {
+        await fs.unlink(dbPath);
+        console.log('[IPC] Removed existing chat.db');
+      } catch (e) {
+        // File doesn't exist, that's ok
+      }
+      try {
+        await fs.unlink(`${dbPath}-wal`);
+        console.log('[IPC] Removed existing chat.db-wal');
+      } catch (e) {
+        // File doesn't exist, that's ok
+      }
+      try {
+        await fs.unlink(`${dbPath}-shm`);
+        console.log('[IPC] Removed existing chat.db-shm');
+      } catch (e) {
+        // File doesn't exist, that's ok
+      }
+
+      // Copy the backup file
       await copyFile(backupPath, dbPath);
+      console.log('[IPC] Database file copied successfully');
+
+      // Verify the file exists
+      await stat(dbPath);
+      console.log('[IPC] Database file verified');
 
       console.log('[IPC] Database restored. Restarting app...');
       app.relaunch();
