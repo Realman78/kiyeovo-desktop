@@ -13,3 +13,11 @@ export const TOR_CONFIG = {
   DNS_RESOLUTION_TOR: 'tor',
   DNS_RESOLUTION_SYSTEM: 'system'
 };
+
+// Configuration defaults - must match core constants
+export const CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES = 10;
+export const KEY_EXCHANGE_RATE_LIMIT_DEFAULT = 10;
+export const OFFLINE_MESSAGE_LIMIT = 100;
+export const FILE_OFFER_RATE_LIMIT = 5;
+export const MAX_PENDING_FILES_PER_PEER = 5;
+export const MAX_PENDING_FILES_TOTAL = 10;

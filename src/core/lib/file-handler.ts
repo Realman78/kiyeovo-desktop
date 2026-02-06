@@ -71,6 +71,27 @@ export class FileHandler {
     this.#setupRejectionCounterReset();
   }
 
+  // Get configuration values from database with fallback to constants
+  private getMaxFileSize(): number {
+    const setting = this.database.getSetting('max_file_size');
+    return setting ? parseInt(setting, 10) : MAX_FILE_SIZE;
+  }
+
+  private getFileOfferRateLimit(): number {
+    const setting = this.database.getSetting('file_offer_rate_limit');
+    return setting ? parseInt(setting, 10) : FILE_OFFER_RATE_LIMIT;
+  }
+
+  private getMaxPendingFilesPerPeer(): number {
+    const setting = this.database.getSetting('max_pending_files_per_peer');
+    return setting ? parseInt(setting, 10) : MAX_PENDING_FILES_PER_PEER;
+  }
+
+  private getMaxPendingFilesTotal(): number {
+    const setting = this.database.getSetting('max_pending_files_total');
+    return setting ? parseInt(setting, 10) : MAX_PENDING_FILES_TOTAL;
+  }
+
   // Reset rejection counters every 10 minutes to give users a fresh start
   #setupRejectionCounterReset(): void {
     setInterval(() => {
@@ -115,7 +136,7 @@ export class FileHandler {
 
     this.fileOfferTimestamps.set(peerId, recentTimestamps);
 
-    return recentTimestamps.length >= FILE_OFFER_RATE_LIMIT;
+    return recentTimestamps.length >= this.getFileOfferRateLimit();
   }
 
   // Track a new file offer from peer
@@ -231,7 +252,8 @@ export class FileHandler {
             offer = offerMsg;
 
             // Global pending files limit
-            if (this.getTotalPendingFiles() >= MAX_PENDING_FILES_TOTAL) {
+            const maxPendingTotal = this.getMaxPendingFilesTotal();
+            if (this.getTotalPendingFiles() >= maxPendingTotal) {
               this.globalPendingRejectionsCount++;
 
               // After 20 rejections, switch to silent rejection (save bandwidth)
@@ -241,7 +263,7 @@ export class FileHandler {
               }
 
               // Normal rejection (first 20 times)
-              console.log(`File rejected: too many pending file transfers (${this.getTotalPendingFiles()}/${MAX_PENDING_FILES_TOTAL})`);
+              console.log(`File rejected: too many pending file transfers (${this.getTotalPendingFiles()}/${maxPendingTotal})`);
               const response: FileOfferResponse = {
                 type: FILE_OFFER_RESPONSE,
                 fileId: offer.fileId,
@@ -254,7 +276,8 @@ export class FileHandler {
 
             // Per-peer pending files limit
             const pendingFromPeer = this.getPendingFilesFromPeer(senderPeerId);
-            if (pendingFromPeer >= MAX_PENDING_FILES_PER_PEER) {
+            const maxPendingPerPeer = this.getMaxPendingFilesPerPeer();
+            if (pendingFromPeer >= maxPendingPerPeer) {
               const rejectionCount = (this.perPeerPendingRejections.get(senderPeerId) ?? 0) + 1;
               this.perPeerPendingRejections.set(senderPeerId, rejectionCount);
 
@@ -265,7 +288,7 @@ export class FileHandler {
               }
 
               // Normal rejection (first 5 times)
-              console.log(`File rejected: too many pending files from ${senderPeerId.slice(0, 8)}... (${pendingFromPeer}/${MAX_PENDING_FILES_PER_PEER})`);
+              console.log(`File rejected: too many pending files from ${senderPeerId.slice(0, 8)}... (${pendingFromPeer}/${maxPendingPerPeer})`);
               const response: FileOfferResponse = {
                 type: FILE_OFFER_RESPONSE,
                 fileId: offer.fileId,
@@ -335,8 +358,9 @@ export class FileHandler {
             }
 
             // Validate file size
-            if (offer.size > MAX_FILE_SIZE || offer.size <= 0) {
-              console.log(`File rejected: invalid size (${offer.size} bytes, max ${MAX_FILE_SIZE} bytes)`);
+            const maxFileSize = this.getMaxFileSize();
+            if (offer.size > maxFileSize || offer.size <= 0) {
+              console.log(`File rejected: invalid size (${offer.size} bytes, max ${maxFileSize} bytes)`);
               const response: FileOfferResponse = {
                 type: FILE_OFFER_RESPONSE,
                 fileId: offer.fileId,
@@ -703,8 +727,9 @@ export class FileHandler {
 
       // Validate file size before loading metadata
       const fileStats = await stat(filePath);
-      if (fileStats.size > MAX_FILE_SIZE) {
-        throw new Error(`File too large (${fileStats.size} bytes, max ${MAX_FILE_SIZE} bytes)`);
+      const maxFileSize = this.getMaxFileSize();
+      if (fileStats.size > maxFileSize) {
+        throw new Error(`File too large (${fileStats.size} bytes, max ${maxFileSize} bytes)`);
       }
       if (fileStats.size <= 0) {
         throw new Error('File is empty');

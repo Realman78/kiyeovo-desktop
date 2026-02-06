@@ -539,6 +539,8 @@ export const IPC_CHANNELS = {
   SET_DOWNLOADS_DIR: 'settings:setDownloadsDir',
   GET_TOR_SETTINGS: 'settings:getTorSettings',
   SET_TOR_SETTINGS: 'settings:setTorSettings',
+  GET_APP_CONFIG: 'settings:getAppConfig',
+  SET_APP_CONFIG: 'settings:setAppConfig',
   RESTART_APP: 'app:restart',
   DELETE_ACCOUNT_AND_DATA: 'app:deleteAccountAndData',
   BACKUP_DATABASE: 'app:backupDatabase',
@@ -602,6 +604,19 @@ export interface ChatCreatedEvent {
   chatId: number;
   peerId: string;
   username: string;
+}
+
+export interface AppConfig {
+  // Basic settings
+  chatsToCheckForOfflineMessages: number;
+  keyExchangeRateLimit: number;
+  offlineMessageLimit: number;
+
+  // Advanced settings
+  maxFileSize: number; // in bytes
+  fileOfferRateLimit: number;
+  maxPendingFilesPerPeer: number;
+  maxPendingFilesTotal: number;
 }
 
 export interface KeyExchangeFailedEvent {

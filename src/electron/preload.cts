@@ -181,6 +181,34 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
         return ipcRenderer.invoke(IPC_CHANNELS.SET_TOR_SETTINGS, settings);
     },
 
+    getAppConfig: async (): Promise<{
+        success: boolean;
+        config: {
+            chatsToCheckForOfflineMessages: number;
+            keyExchangeRateLimit: number;
+            offlineMessageLimit: number;
+            maxFileSize: number;
+            fileOfferRateLimit: number;
+            maxPendingFilesPerPeer: number;
+            maxPendingFilesTotal: number;
+        } | null;
+        error: string | null;
+    }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.GET_APP_CONFIG);
+    },
+
+    setAppConfig: async (config: {
+        chatsToCheckForOfflineMessages: number;
+        keyExchangeRateLimit: number;
+        offlineMessageLimit: number;
+        maxFileSize: number;
+        fileOfferRateLimit: number;
+        maxPendingFilesPerPeer: number;
+        maxPendingFilesTotal: number;
+    }): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.SET_APP_CONFIG, config);
+    },
+
     restartApp: async (): Promise<{ success: boolean; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.RESTART_APP);
     },

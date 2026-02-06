@@ -4,6 +4,18 @@ import type { Chat, Message } from './src/core/lib/db/database';
 declare global {
     interface Window {
         kiyeovoAPI: {
+            AppConfig: {
+                chatsToCheckForOfflineMessages: number;
+                keyExchangeRateLimit: number;
+                offlineMessageLimit: number;
+                maxFileSize: number;
+                fileOfferRateLimit: number;
+                maxPendingFilesPerPeer: number;
+                maxPendingFilesTotal: number;
+                databaseCleanupInterval: number;
+            };
+            getAppConfig: () => Promise<{ success: boolean; config: AppConfig; error: string | null }>;
+            setAppConfig: (config: AppConfig) => Promise<{ success: boolean; error: string | null }>;
             // Password authentication
             onPasswordRequest: (callback: (request: PasswordRequest) => void) => () => void;
             submitPassword: (password: string, rememberMe: boolean, useRecoveryPhrase?: boolean) => void;

@@ -1,7 +1,7 @@
 import type { IpcMain, BrowserWindow } from 'electron';
 import { app, dialog, Notification, shell } from 'electron';
-import { IPC_CHANNELS, OFFLINE_CHECK_CACHE_TTL, PENDING_KEY_EXCHANGE_EXPIRATION, type P2PCore } from '../core/index.js';
-import { DOWNLOADS_DIR, getTorConfig } from '../core/constants.js';
+import { IPC_CHANNELS, OFFLINE_CHECK_CACHE_TTL, PENDING_KEY_EXCHANGE_EXPIRATION, type P2PCore, type AppConfig } from '../core/index.js';
+import { DOWNLOADS_DIR, getTorConfig, CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES, KEY_EXCHANGE_RATE_LIMIT_DEFAULT, OFFLINE_MESSAGE_LIMIT, MAX_FILE_SIZE, FILE_OFFER_RATE_LIMIT, MAX_PENDING_FILES_PER_PEER, MAX_PENDING_FILES_TOTAL } from '../core/constants.js';
 import { validateMessageLength, validateUsername } from '../core/utils/validators.js';
 import { peerIdFromString } from '@libp2p/peer-id';
 import { OfflineMessageManager } from '../core/lib/offline-message-manager.js';
@@ -1206,6 +1206,67 @@ function setupChatSettingsHandlers(
     } catch (error) {
       console.error('[IPC] Failed to set Tor settings:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to set Tor settings' };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.GET_APP_CONFIG, async () => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, config: null, error: 'P2P core not initialized' };
+      }
+
+      const db = p2pCore.database;
+      const get = (key: string, defaultValue: string) => db.getSetting(key) ?? defaultValue;
+
+      const config = {
+        chatsToCheckForOfflineMessages: parseInt(get('chats_to_check_for_offline_messages', String(CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES)), 10),
+        keyExchangeRateLimit: parseInt(get('key_exchange_rate_limit', String(KEY_EXCHANGE_RATE_LIMIT_DEFAULT)), 10),
+        offlineMessageLimit: parseInt(get('offline_message_limit', String(OFFLINE_MESSAGE_LIMIT)), 10),
+        maxFileSize: parseInt(get('max_file_size', String(MAX_FILE_SIZE)), 10),
+        fileOfferRateLimit: parseInt(get('file_offer_rate_limit', String(FILE_OFFER_RATE_LIMIT)), 10),
+        maxPendingFilesPerPeer: parseInt(get('max_pending_files_per_peer', String(MAX_PENDING_FILES_PER_PEER)), 10),
+        maxPendingFilesTotal: parseInt(get('max_pending_files_total', String(MAX_PENDING_FILES_TOTAL)), 10),
+      };
+
+      return { success: true, config, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to get app config:', error);
+      return { success: false, config: null, error: error instanceof Error ? error.message : 'Failed to get app config' };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.SET_APP_CONFIG, async (_event, config: AppConfig) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+
+      // Validate and clamp values to sane ranges
+      const validated = {
+        chatsToCheckForOfflineMessages: Math.max(1, Math.min(50, config.chatsToCheckForOfflineMessages)),
+        keyExchangeRateLimit: Math.max(1, Math.min(100, config.keyExchangeRateLimit)),
+        offlineMessageLimit: Math.max(10, Math.min(500, config.offlineMessageLimit)),
+        maxFileSize: Math.max(1 * 1024 * 1024, Math.min(512 * 1024 * 1024, config.maxFileSize)),
+        fileOfferRateLimit: Math.max(1, Math.min(20, config.fileOfferRateLimit)),
+        maxPendingFilesPerPeer: Math.max(1, Math.min(20, config.maxPendingFilesPerPeer)),
+        maxPendingFilesTotal: Math.max(1, Math.min(50, config.maxPendingFilesTotal)),
+      };
+
+      const db = p2pCore.database;
+      db.setSetting('chats_to_check_for_offline_messages', String(validated.chatsToCheckForOfflineMessages));
+      db.setSetting('key_exchange_rate_limit', String(validated.keyExchangeRateLimit));
+      db.setSetting('offline_message_limit', String(validated.offlineMessageLimit));
+      db.setSetting('max_file_size', String(validated.maxFileSize));
+      db.setSetting('file_offer_rate_limit', String(validated.fileOfferRateLimit));
+      db.setSetting('max_pending_files_per_peer', String(validated.maxPendingFilesPerPeer));
+      db.setSetting('max_pending_files_total', String(validated.maxPendingFilesTotal));
+
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to set app config:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to set app config' };
     }
   });
 }

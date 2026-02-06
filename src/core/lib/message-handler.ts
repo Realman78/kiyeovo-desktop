@@ -1,6 +1,6 @@
 import { peerIdFromString } from '@libp2p/peer-id';
 import type { ChatNode, StreamHandlerContext, AuthenticatedEncryptedMessage, OfflineMessage, OfflineSenderInfo, ConversationSession, EncryptedMessage, ContactMode, KeyExchangeEvent, ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent, SendMessageResponse, StrippedMessage, MessageSentStatus, FileTransferProgressEvent, FileTransferCompleteEvent, FileTransferFailedEvent, PendingFileReceivedEvent } from '../types.js';
-import { CHAT_PROTOCOL, MESSAGE_TIMEOUT, SESSION_MANAGER_CLEANUP_INTERVAL } from '../constants.js';
+import { CHAT_PROTOCOL, CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES, MESSAGE_TIMEOUT, SESSION_MANAGER_CLEANUP_INTERVAL } from '../constants.js';
 import { SessionManager } from './session-manager.js';
 import { MessageEncryption } from './message-encryption.js';
 import { PeerConnectionHandler } from './peer-connection-handler.js';
@@ -50,6 +50,12 @@ export class MessageHandler {
     this.setupProtocolHandler();
     this.cleanupPeerEvents = PeerConnectionHandler.setupPeerEvents(node, this.sessionManager);
     this.startSessionCleanup();
+  }
+
+  // Get configuration value from database with fallback to constant
+  private getChatsToCheckForOfflineMessages(): number {
+    const setting = this.database.getSetting('chats_to_check_for_offline_messages');
+    return setting ? parseInt(setting, 10) : CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES;
   }
 
   /**
@@ -439,7 +445,7 @@ export class MessageHandler {
     // Get bucket info for reading: secret + peer's signing public key
     const bucketInfoList = chatIds
       ? this.database.getOfflineReadBucketInfoForChats(chatIds)
-      : this.database.getOfflineReadBucketInfo(10);
+      : this.database.getOfflineReadBucketInfo(this.getChatsToCheckForOfflineMessages());
 
     if (bucketInfoList.length === 0) {
       console.log('No chats found for offline message check');
