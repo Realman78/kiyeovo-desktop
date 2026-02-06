@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { AtSign, Shield, AlertCircle, Copy, Check, User, Edit2, X, Download, Lock, Key, ChevronDown, CheckCircle, FolderOpen } from "lucide-react";
+import { AtSign, Shield, AlertCircle, Copy, Check, User, Edit2, X, Download, Lock, Key, ChevronDown, CheckCircle } from "lucide-react";
 import {
     Dialog,
     DialogContent,
@@ -49,8 +49,8 @@ const UserDialog = ({ open, onOpenChange, onRegister, backendError, isRegisterin
         if (value.length < 3) {
             return "Username must be at least 3 characters";
         }
-        if (value.length > 20) {
-            return "Username must be less than 20 characters";
+        if (value.length > 32) {
+            return "Username must be less than 32 characters";
         }
         if (!/^[a-zA-Z0-9_]+$/.test(value)) {
             return "Only letters, numbers, and underscores allowed";

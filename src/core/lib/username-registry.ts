@@ -52,6 +52,14 @@ export class UsernameRegistry {
       throw new Error('User identity not initialized');
     }
 
+    if (username.length < 3) {
+      throw new Error('Username must be at least 3 characters');
+    }
+
+    if (username.length > 32) {
+      throw new Error('Username must be less than 32 characters');
+    }
+
     if (!UsernameRegistry.USERNAME_REGEX.test(username)) {
       throw new Error('Username can only contain alphanumerics and underscores');
     }

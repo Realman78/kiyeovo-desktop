@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { UserPlus, AtSign, Shield, AlertCircle, Copy, Check } from "lucide-react";
+import { UserPlus, AtSign, Shield, AlertCircle, Copy, Check, Shuffle } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -14,6 +14,7 @@ import { Button } from "../../ui/Button";
 import { useSelector } from "react-redux";
 import type { RootState } from "../../../state/store";
 import { validateUsername } from "../../../utils/general";
+import { generateRandomUsername } from "../../../utils/random-username";
 
 
 interface RegisterDialogProps {
@@ -43,7 +44,20 @@ const RegisterDialog = ({ open, onOpenChange, onRegister, backendError, isRegist
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setUsername(e.target.value);
+    const newValue = e.target.value;
+    setUsername(newValue);
+    // Real-time validation
+    if (newValue) {
+      const error = validateUsername(newValue, peerId);
+      setValidationError(error);
+    } else {
+      setValidationError("");
+    }
+  };
+
+  const handleGenerateUsername = () => {
+    const randomName = generateRandomUsername();
+    setUsername(randomName);
     if (validationError) setValidationError("");
   };
 
@@ -100,15 +114,27 @@ const RegisterDialog = ({ open, onOpenChange, onRegister, backendError, isRegist
               <label className="block text-sm font-medium text-foreground mb-2">
                 Username
               </label>
-              <Input
-                placeholder="Enter username..."
-                value={username}
-                onChange={handleChange}
-                icon={<AtSign className="w-4 h-4" />}
-                autoFocus
-                disabled={!isConnected}
-                spellCheck={false}
-              />
+              <div className="relative">
+                <Input
+                  placeholder="Enter username..."
+                  value={username}
+                  onChange={handleChange}
+                  icon={<AtSign className="w-4 h-4" />}
+                  autoFocus
+                  disabled={!isConnected}
+                  spellCheck={false}
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={handleGenerateUsername}
+                  disabled={!isConnected || isRegistering}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Generate random username"
+                >
+                  <Shuffle className="w-4 h-4" />
+                </button>
+              </div>
               <label className="flex items-start gap-2 cursor-pointer group mt-3">
                 <input
                   type="checkbox"
@@ -118,7 +144,7 @@ const RegisterDialog = ({ open, onOpenChange, onRegister, backendError, isRegist
                   className="mt-0.5 h-4 w-4 cursor-pointer rounded border-border bg-input text-primary transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 />
                 <span className="text-xs text-muted-foreground group-hover:text-foreground transition-colors leading-relaxed">
-                  Register on startup {username.length > 0 ? '(if username not taken)' : ''}
+                  Register on startup if username not taken
                 </span>
               </label>
               {displayError && (
@@ -158,8 +184,8 @@ const RegisterDialog = ({ open, onOpenChange, onRegister, backendError, isRegist
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={isRegistering || !isConnected}>
-              {isRegistering ? 'Registering...' : username ? 'Register' : 'Register without username'}
+            <Button type="submit" disabled={isRegistering || !isConnected || !username || !!validateUsername(username, peerId)}>
+              {isRegistering ? 'Registering...' : 'Register'}
             </Button>
           </DialogFooter>
         </form>

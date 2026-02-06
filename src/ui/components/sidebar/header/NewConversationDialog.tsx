@@ -36,8 +36,8 @@ const NewConversationDialog = ({ open, onOpenChange, onNewConversation, backendE
     if (value.length < 3) {
       return "Username must be at least 3 characters";
     }
-    if (value.length > 20) {
-      return "Username must be less than 20 characters";
+    if (value.length > 32) {
+      return "Username must be less than 32 characters";
     }
     if (!/^[a-zA-Z0-9_]+$/.test(value)) {
       return "Only letters, numbers, and underscores allowed";
