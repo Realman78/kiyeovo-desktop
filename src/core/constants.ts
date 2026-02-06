@@ -172,4 +172,6 @@ export const FILE_OFFER_RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
 export const MAX_PENDING_FILES_PER_PEER = 5; // Max unanswered file offers per peer
 export const MAX_PENDING_FILES_TOTAL = 10; // Max unanswered file offers globally
 export const FILE_REJECTION_COUNTER_RESET_INTERVAL = 10 * 60 * 1000; // Reset rejection counters every 10 minutes
+export const SILENT_REJECTION_THRESHOLD_GLOBAL = 20; // After N global rejections, stop responding (bandwidth optimization)
+export const SILENT_REJECTION_THRESHOLD_PER_PEER = 5; // After N rejections to same peer, stop responding (bandwidth optimization)
 export const CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES = 10;

@@ -1,7 +1,7 @@
 import type { IpcMain, BrowserWindow } from 'electron';
 import { app, dialog, Notification, shell } from 'electron';
 import { IPC_CHANNELS, OFFLINE_CHECK_CACHE_TTL, PENDING_KEY_EXCHANGE_EXPIRATION, type P2PCore, type AppConfig } from '../core/index.js';
-import { DOWNLOADS_DIR, getTorConfig, CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES, KEY_EXCHANGE_RATE_LIMIT_DEFAULT, OFFLINE_MESSAGE_LIMIT, MAX_FILE_SIZE, FILE_OFFER_RATE_LIMIT, MAX_PENDING_FILES_PER_PEER, MAX_PENDING_FILES_TOTAL } from '../core/constants.js';
+import { DOWNLOADS_DIR, getTorConfig, CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES, KEY_EXCHANGE_RATE_LIMIT_DEFAULT, OFFLINE_MESSAGE_LIMIT, MAX_FILE_SIZE, FILE_OFFER_RATE_LIMIT, MAX_PENDING_FILES_PER_PEER, MAX_PENDING_FILES_TOTAL, SILENT_REJECTION_THRESHOLD_GLOBAL, SILENT_REJECTION_THRESHOLD_PER_PEER } from '../core/constants.js';
 import { validateMessageLength, validateUsername } from '../core/utils/validators.js';
 import { peerIdFromString } from '@libp2p/peer-id';
 import { OfflineMessageManager } from '../core/lib/offline-message-manager.js';
@@ -1227,6 +1227,8 @@ function setupChatSettingsHandlers(
         fileOfferRateLimit: parseInt(get('file_offer_rate_limit', String(FILE_OFFER_RATE_LIMIT)), 10),
         maxPendingFilesPerPeer: parseInt(get('max_pending_files_per_peer', String(MAX_PENDING_FILES_PER_PEER)), 10),
         maxPendingFilesTotal: parseInt(get('max_pending_files_total', String(MAX_PENDING_FILES_TOTAL)), 10),
+        silentRejectionThresholdGlobal: parseInt(get('silent_rejection_threshold_global', String(SILENT_REJECTION_THRESHOLD_GLOBAL)), 10),
+        silentRejectionThresholdPerPeer: parseInt(get('silent_rejection_threshold_per_peer', String(SILENT_REJECTION_THRESHOLD_PER_PEER)), 10),
       };
 
       return { success: true, config, error: null };
@@ -1252,6 +1254,8 @@ function setupChatSettingsHandlers(
         fileOfferRateLimit: Math.max(1, Math.min(20, config.fileOfferRateLimit)),
         maxPendingFilesPerPeer: Math.max(1, Math.min(20, config.maxPendingFilesPerPeer)),
         maxPendingFilesTotal: Math.max(1, Math.min(50, config.maxPendingFilesTotal)),
+        silentRejectionThresholdGlobal: Math.max(1, Math.min(100, config.silentRejectionThresholdGlobal)),
+        silentRejectionThresholdPerPeer: Math.max(1, Math.min(50, config.silentRejectionThresholdPerPeer)),
       };
 
       const db = p2pCore.database;
@@ -1262,6 +1266,8 @@ function setupChatSettingsHandlers(
       db.setSetting('file_offer_rate_limit', String(validated.fileOfferRateLimit));
       db.setSetting('max_pending_files_per_peer', String(validated.maxPendingFilesPerPeer));
       db.setSetting('max_pending_files_total', String(validated.maxPendingFilesTotal));
+      db.setSetting('silent_rejection_threshold_global', String(validated.silentRejectionThresholdGlobal));
+      db.setSetting('silent_rejection_threshold_per_peer', String(validated.silentRejectionThresholdPerPeer));
 
       return { success: true, error: null };
     } catch (error) {

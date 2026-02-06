@@ -617,6 +617,8 @@ export interface AppConfig {
   fileOfferRateLimit: number;
   maxPendingFilesPerPeer: number;
   maxPendingFilesTotal: number;
+  silentRejectionThresholdGlobal: number;
+  silentRejectionThresholdPerPeer: number;
 }
 
 export interface KeyExchangeFailedEvent {

@@ -20,6 +20,8 @@ import {
   FILE_OFFER_RATE_LIMIT,
   MAX_PENDING_FILES_PER_PEER,
   MAX_PENDING_FILES_TOTAL,
+  SILENT_REJECTION_THRESHOLD_GLOBAL,
+  SILENT_REJECTION_THRESHOLD_PER_PEER,
 } from '../../../constants';
 
 interface ConfigurationDialogProps {
@@ -35,6 +37,8 @@ interface AppConfig {
   fileOfferRateLimit: number;
   maxPendingFilesPerPeer: number;
   maxPendingFilesTotal: number;
+  silentRejectionThresholdGlobal: number;
+  silentRejectionThresholdPerPeer: number;
 }
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -45,6 +49,8 @@ const DEFAULT_CONFIG: AppConfig = {
   fileOfferRateLimit: FILE_OFFER_RATE_LIMIT,
   maxPendingFilesPerPeer: MAX_PENDING_FILES_PER_PEER,
   maxPendingFilesTotal: MAX_PENDING_FILES_TOTAL,
+  silentRejectionThresholdGlobal: SILENT_REJECTION_THRESHOLD_GLOBAL,
+  silentRejectionThresholdPerPeer: SILENT_REJECTION_THRESHOLD_PER_PEER,
 };
 
 export function ConfigurationDialog({ open, onOpenChange }: ConfigurationDialogProps) {
@@ -286,6 +292,48 @@ export function ConfigurationDialog({ open, onOpenChange }: ConfigurationDialogP
                 />
                 <p className="text-xs text-muted-foreground">
                   Maximum total pending file offers globally (1-50)
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm text-muted-foreground">
+                  Silent Rejection Threshold (Global)
+                </label>
+                <Input
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={config.silentRejectionThresholdGlobal}
+                  onChange={(e) =>
+                    setConfig({
+                      ...config,
+                      silentRejectionThresholdGlobal: parseInt(e.target.value, 10) || 1,
+                    })
+                  }
+                />
+                <p className="text-xs text-muted-foreground">
+                  After N global rejections, stop responding to save bandwidth (1-100)
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm text-muted-foreground">
+                  Silent Rejection Threshold (Per Peer)
+                </label>
+                <Input
+                  type="number"
+                  min="1"
+                  max="50"
+                  value={config.silentRejectionThresholdPerPeer}
+                  onChange={(e) =>
+                    setConfig({
+                      ...config,
+                      silentRejectionThresholdPerPeer: parseInt(e.target.value, 10) || 1,
+                    })
+                  }
+                />
+                <p className="text-xs text-muted-foreground">
+                  After N rejections to same peer, stop responding to save bandwidth (1-50)
                 </p>
               </div>
             </div>

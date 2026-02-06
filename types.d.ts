@@ -12,7 +12,8 @@ declare global {
                 fileOfferRateLimit: number;
                 maxPendingFilesPerPeer: number;
                 maxPendingFilesTotal: number;
-                databaseCleanupInterval: number;
+                silentRejectionThresholdGlobal: number;
+                silentRejectionThresholdPerPeer: number;
             };
             getAppConfig: () => Promise<{ success: boolean; config: AppConfig; error: string | null }>;
             setAppConfig: (config: AppConfig) => Promise<{ success: boolean; error: string | null }>;

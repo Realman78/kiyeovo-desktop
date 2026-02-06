@@ -10,7 +10,7 @@ import { pushable } from "it-pushable";
 import { pipe } from "it-pipe";
 import { StreamHandler } from "./stream-handler.js";
 import mime from "mime-types";
-import { CHUNK_SIZE, DOWNLOADS_DIR, FILE_ACCEPTANCE_TIMEOUT, FILE_OFFER, FILE_OFFER_RESPONSE, FILE_TRANSFER_PROTOCOL, MAX_FILE_MESSAGE_SIZE, MAX_FILE_SIZE, MAX_COPY_ATTEMPTS, CHUNK_RECEIVE_TIMEOUT, FILE_OFFER_RATE_LIMIT, FILE_OFFER_RATE_LIMIT_WINDOW, MAX_PENDING_FILES_PER_PEER, MAX_PENDING_FILES_TOTAL, FILE_REJECTION_COUNTER_RESET_INTERVAL } from "../constants.js";
+import { CHUNK_SIZE, DOWNLOADS_DIR, FILE_ACCEPTANCE_TIMEOUT, FILE_OFFER, FILE_OFFER_RESPONSE, FILE_TRANSFER_PROTOCOL, MAX_FILE_MESSAGE_SIZE, MAX_FILE_SIZE, MAX_COPY_ATTEMPTS, CHUNK_RECEIVE_TIMEOUT, FILE_OFFER_RATE_LIMIT, FILE_OFFER_RATE_LIMIT_WINDOW, MAX_PENDING_FILES_PER_PEER, MAX_PENDING_FILES_TOTAL, FILE_REJECTION_COUNTER_RESET_INTERVAL, SILENT_REJECTION_THRESHOLD_GLOBAL, SILENT_REJECTION_THRESHOLD_PER_PEER } from "../constants.js";
 import { MessageHandler } from "./message-handler.js";
 import { generalErrorHandler } from "../utils/general-error.js";
 
@@ -90,6 +90,16 @@ export class FileHandler {
   private getMaxPendingFilesTotal(): number {
     const setting = this.database.getSetting('max_pending_files_total');
     return setting ? parseInt(setting, 10) : MAX_PENDING_FILES_TOTAL;
+  }
+
+  private getSilentRejectionThresholdGlobal(): number {
+    const setting = this.database.getSetting('silent_rejection_threshold_global');
+    return setting ? parseInt(setting, 10) : SILENT_REJECTION_THRESHOLD_GLOBAL;
+  }
+
+  private getSilentRejectionThresholdPerPeer(): number {
+    const setting = this.database.getSetting('silent_rejection_threshold_per_peer');
+    return setting ? parseInt(setting, 10) : SILENT_REJECTION_THRESHOLD_PER_PEER;
   }
 
   // Reset rejection counters every 10 minutes to give users a fresh start
@@ -256,8 +266,9 @@ export class FileHandler {
             if (this.getTotalPendingFiles() >= maxPendingTotal) {
               this.globalPendingRejectionsCount++;
 
-              // After 20 rejections, switch to silent rejection (save bandwidth)
-              if (this.globalPendingRejectionsCount > 20) {
+              // After N rejections, switch to silent rejection (save bandwidth)
+              const silentThreshold = this.getSilentRejectionThresholdGlobal();
+              if (this.globalPendingRejectionsCount > silentThreshold) {
                 console.log(`Silently rejecting file offer (global pending limit, rejection #${this.globalPendingRejectionsCount})`);
                 return;
               }
@@ -281,8 +292,9 @@ export class FileHandler {
               const rejectionCount = (this.perPeerPendingRejections.get(senderPeerId) ?? 0) + 1;
               this.perPeerPendingRejections.set(senderPeerId, rejectionCount);
 
-              // After 5 rejections to this peer, switch to silent rejection (save bandwidth)
-              if (rejectionCount > 5) {
+              // After N rejections to this peer, switch to silent rejection (save bandwidth)
+              const silentThreshold = this.getSilentRejectionThresholdPerPeer();
+              if (rejectionCount > silentThreshold) {
                 console.log(`Silently rejecting file from ${senderPeerId.slice(0, 8)}... (too many pending limit hit ${rejectionCount} times)`);
                 return;
               }
