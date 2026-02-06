@@ -1,4 +1,4 @@
-import { useState, type FC } from "react";
+import { useState, useEffect, useRef, type FC } from "react";
 import { Button } from "../../ui/Button";
 import { Loader2, Paperclip, Send } from "lucide-react";
 import { Input } from "../../ui/Input";
@@ -19,6 +19,14 @@ export const ChatInput: FC = () => {
     const myPeerId = useSelector((state: RootState) => state.user.peerId);
     const myUsername = useSelector((state: RootState) => state.user.username);
     const isBlocked = activeChat?.blocked || false;
+    const inputRef = useRef<HTMLInputElement>(null);
+
+    // Auto-focus input when chat changes
+    useEffect(() => {
+        if (activeChat && !isBlocked) {
+            inputRef.current?.focus();
+        }
+    }, [activeChat?.id, isBlocked]);
 
     const handleSendMessage = async (peerIdOrUsername: string, messageContent: string) => {
         try {
@@ -34,6 +42,9 @@ export const ChatInput: FC = () => {
             toast.error(err instanceof Error ? err.message : 'Unexpected error occurred');
         } finally {
             setIsSending(false);
+            setTimeout(() => {
+                inputRef.current?.focus();
+            }, 200)
         }
     }
 
@@ -136,6 +147,7 @@ export const ChatInput: FC = () => {
                 <Paperclip className="w-4 h-4" />
             </Button>
             <Input
+                ref={inputRef}
                 placeholder={isBlocked ? "Cannot send messages to blocked users" : "Type a message..."}
                 parentClassName="flex flex-1 w-full"
                 value={inputQuery}

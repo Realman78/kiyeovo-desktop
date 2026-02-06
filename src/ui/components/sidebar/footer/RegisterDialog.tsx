@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { UserPlus, AtSign, Shield, AlertCircle, Copy, Check, Shuffle } from "lucide-react";
+import { UserPlus, AtSign, Shield, AlertCircle, Copy, Check, Shuffle, Info } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -168,8 +168,20 @@ const RegisterDialog = ({ open, onOpenChange, onRegister, backendError, isRegist
                   <p className="font-medium text-foreground mb-1">IMPORTANT NOTICE</p>
                   <p className="text-sm">
                     The username is stored on the DHT network and is used for
-                    other users to find you. The recommendation is to not use usernames
+                    other users to find you. The recommendation is to not rely on usernames
                     as they can be overwritten by anyone. Use Peer IDs or Trusted Contacts instead.
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="p-3 rounded-md bg-secondary/50 border border-border">
+              <div className="flex items-start gap-2">
+                <Info size={40} className="text-primary h-fit mt-[3px]" />
+                <div className="text-s text-muted-foreground">
+                  <p className="font-medium text-foreground mb-1">Registering is optional</p>
+                  <p className="text-sm">
+                    If you want to discover other users or let other users discover you, you MUST register.
+                    However, if you want to talk to already existing contacts, you don't have to register.
                   </p>
                 </div>
               </div>

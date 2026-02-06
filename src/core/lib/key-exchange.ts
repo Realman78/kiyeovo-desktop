@@ -258,10 +258,10 @@ export class KeyExchange {
       throw new Error('No user identity available');
     }
 
-    const currentUsername = this.usernameRegistry.getCurrentUsername();
-    if (!currentUsername) {
-      throw new Error('No current username available');
-    }
+    // Get my own username from database (last registered username) or generate fallback
+    const myPeerId = this.node.peerId.toString();
+    const myUser = this.database.getUserByPeerId(myPeerId);
+    const myUsername = myUser?.username || `user_${myPeerId.slice(-8)}`;
 
     const peerIdStr = targetPeerId.toString();
 
@@ -288,7 +288,7 @@ export class KeyExchange {
       type: 'key_exchange' as const,
       content: 'key_exchange_init' as const,
       ephemeralPublicKey: Buffer.from(ephemeralPublicKey).toString('base64'),
-      senderUsername: currentUsername,
+      senderUsername: myUsername,
       timestamp,
       messageBody: message,
     };
@@ -396,17 +396,16 @@ export class KeyExchange {
       return;
     }
 
-    const currentUsername = this.usernameRegistry.getCurrentUsername();
-    if (!currentUsername) {
-      console.error('No current username available');
-      return;
-    }
+    // Get my own username for responses
+    const myPeerId = this.node.peerId.toString();
+    const myUser = this.database.getUserByPeerId(myPeerId);
+    const myUsername = myUser?.username || `user_${myPeerId.slice(-8)}`;
 
     try {
       if (message.content === 'key_exchange_init') {
-        await this.handleKeyExchangeInit(remoteId, message, stream, userIdentity, currentUsername);
+        await this.handleKeyExchangeInit(remoteId, message, stream, userIdentity, myUsername);
       } else if (message.content === 'key_rotation') {
-        await this.handleKeyRotation(remoteId, message, userIdentity, currentUsername);
+        await this.handleKeyRotation(remoteId, message, userIdentity, myUsername);
       } else if (message.content === 'key_rotation_response') {
         await this.handleKeyRotationResponse(remoteId, message);
       }
@@ -742,7 +741,7 @@ export class KeyExchange {
   private async sendKeyExchangeResponse(
     stream: Stream,
     ephemeralPublicKey: Uint8Array,
-    currentUsername: string,
+    myUsername: string,
     userIdentity: EncryptedUserIdentity,
     remoteId: string
   ): Promise<void> {
@@ -752,7 +751,7 @@ export class KeyExchange {
       type: 'key_exchange' as const,
       content: 'key_exchange_response' as const,
       ephemeralPublicKey: Buffer.from(ephemeralPublicKey).toString('base64'),
-      senderUsername: currentUsername,
+      senderUsername: myUsername,
       timestamp: responseTimestamp,
     };
 
@@ -787,17 +786,18 @@ export class KeyExchange {
   // Send rejection response to initiator
   private async sendRejectionResponse(
     stream: Stream,
-    currentUsername: string,
-    senderUsername: string,
+    myUsername: string,
     userIdentity: EncryptedUserIdentity,
-    initiatorEphemeralPublicKey: string
+    initiatorEphemeralPublicKey: string,
+    initiatorUsername: string,
+    remoteId: string
   ): Promise<void> {
     const timestamp = Date.now();
     const messageToSign = {
       type: 'key_exchange' as const,
       content: 'key_exchange_rejected' as const,
       ephemeralPublicKey: initiatorEphemeralPublicKey,
-      senderUsername: currentUsername,
+      senderUsername: myUsername,
       timestamp: timestamp,
     };
 
@@ -811,7 +811,7 @@ export class KeyExchange {
       const responseJson = JSON.stringify(rejectionMessage);
       const encoder = new TextEncoder();
       await stream.sink([encoder.encode(responseJson)]);
-      console.log(`Sent rejection response to ${senderUsername}`);
+      console.log(`Sent rejection response to ${initiatorUsername || remoteId.slice(0, 8)}`);
     } catch (sendError: unknown) {
       generalErrorHandler(sendError);
     }
@@ -823,7 +823,7 @@ export class KeyExchange {
     message: AuthenticatedEncryptedMessage,
     stream: Stream,
     userIdentity: EncryptedUserIdentity,
-    currentUsername: string
+    myUsername: string
   ): Promise<void> {
     try {
       const ourPendingKeyExchange = this.sessionManager.getPendingKeyExchange(remoteId);
@@ -882,7 +882,7 @@ export class KeyExchange {
       await this.sendKeyExchangeResponse(
         stream,
         ephemeralPublicKey,
-        currentUsername,
+        myUsername,
         userIdentity,
         remoteId
       );
@@ -901,10 +901,11 @@ export class KeyExchange {
       if (error instanceof Error && error.message === 'REJECTION_NEEDED') {
         await this.sendRejectionResponse(
           stream,
-          currentUsername,
-          message.senderUsername,
+          myUsername,
           userIdentity,
-          message.ephemeralPublicKey ?? ''
+          message.ephemeralPublicKey ?? '',
+          message.senderUsername,
+          remoteId
         );
         return;
       }
@@ -1057,7 +1058,7 @@ export class KeyExchange {
     remoteId: string,
     message: AuthenticatedEncryptedMessage,
     userIdentity: EncryptedUserIdentity,
-    currentUsername: string
+    myUsername: string
   ): Promise<void> {
     console.log(`Received key rotation from ${remoteId.slice(0, 8)}...`);
 
@@ -1148,7 +1149,7 @@ export class KeyExchange {
       type: 'key_exchange' as const,
       content: 'key_rotation_response' as const,
       ephemeralPublicKey: Buffer.from(newEphemeralPublicKey).toString('base64'),
-      senderUsername: currentUsername,
+      senderUsername: myUsername,
       timestamp: responseTimestamp,
     };
 
@@ -1292,11 +1293,14 @@ export class KeyExchange {
     }
 
     const userIdentity = this.usernameRegistry.getUserIdentity();
-    const currentUsername = this.usernameRegistry.getCurrentUsername();
-
-    if (!userIdentity || !currentUsername) {
-      throw new Error('User identity or username not available');
+    if (!userIdentity) {
+      throw new Error('User identity not available');
     }
+
+    // Get my own username from database (last registered username) or generate fallback
+    const myPeerId = this.node.peerId.toString();
+    const myUser = this.database.getUserByPeerId(myPeerId);
+    const myUsername = myUser?.username || `user_${myPeerId.slice(-8)}`;
 
     const newEphemeralPrivateKey = x25519.utils.randomSecretKey();
     const newEphemeralPublicKey = x25519.getPublicKey(newEphemeralPrivateKey);
@@ -1318,7 +1322,7 @@ export class KeyExchange {
       type: 'key_exchange' as const,
       content: 'key_rotation' as const,
       ephemeralPublicKey: Buffer.from(newEphemeralPublicKey).toString('base64'),
-      senderUsername: currentUsername,
+      senderUsername: myUsername,
       timestamp,
     };
 

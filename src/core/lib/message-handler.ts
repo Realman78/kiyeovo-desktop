@@ -270,15 +270,17 @@ export class MessageHandler {
       const sendWithTimeout = async (): Promise<boolean> => {
         const stream = await this.node.dialProtocol(targetPeerId, CHAT_PROTOCOL);
 
-        const currentUsername = this.usernameRegistry.getCurrentUsername();
+        // Get my own username from database (last registered username) or generate fallback
+        const myPeerId = this.node.peerId.toString();
+        const myUser = this.database.getUserByPeerId(myPeerId);
+        const myUsername = myUser?.username || `user_${myPeerId.slice(-8)}`;
+
         const encryptedMessage = MessageEncryption.encryptMessage(
           message,
           session
         );
 
-        if (currentUsername) {
-          encryptedMessage.senderUsername = currentUsername;
-        }
+        encryptedMessage.senderUsername = myUsername;
 
         // Include ACK if we've read new offline messages from this peer
         if (shouldSendAck) {
@@ -352,10 +354,13 @@ export class MessageHandler {
 
   private async storeOfflineMessageDB(user: User, writeBucketKey: string, message: string): Promise<StrippedMessage> {
     try {
-      const currentUsername = this.usernameRegistry.getCurrentUsername() ?? 'unknown';
       const userIdentity = this.usernameRegistry.getUserIdentity();
-
       if (!userIdentity) throw new Error('User identity not available');
+
+      // Get my own username from database (last registered username) or generate fallback
+      const myPeerId = this.node.peerId.toString();
+      const myUser = this.database.getUserByPeerId(myPeerId);
+      const myUsername = myUser?.username || `user_${myPeerId.slice(-8)}`;
 
       // Check if we need to send an ACK for offline messages we've read
       const lastReadTimestamp = this.database.getOfflineLastReadTimestampByPeerId(user.peer_id);
@@ -366,7 +371,7 @@ export class MessageHandler {
       // The bucket key is included in the signature for DHT validation
       const offlineMessage = OfflineMessageManager.createOfflineMessage(
         this.node.peerId.toString(),
-        currentUsername,
+        myUsername,
         message,
         Buffer.from(user.offline_public_key, 'base64').toString(), // RSA public key (PEM)
         userIdentity.signingPrivateKey,
@@ -421,18 +426,21 @@ export class MessageHandler {
     console.log(`Saved message with ID: ${messageId}`);
 
     // Notify frontend so sender's UI updates
-    const currentUsername = this.usernameRegistry.getCurrentUsername();
-    if (currentUsername) {
-      this.onMessageReceived({
-        messageId,
-        chatId: chat.id,
-        senderPeerId: this.node.peerId.toString(),
-        senderUsername: currentUsername,
-        content: message,
-        timestamp: timestamp.getTime(),
-        messageSentStatus
-      });
-    }
+    // Get my own username from database (last registered username) or generate fallback
+    const myPeerId = this.node.peerId.toString();
+    const myUser = this.database.getUserByPeerId(myPeerId);
+    const myUsername = myUser?.username || `user_${myPeerId.slice(-8)}`;
+
+    this.onMessageReceived({
+      messageId,
+      chatId: chat.id,
+      senderPeerId: this.node.peerId.toString(),
+      senderUsername: myUsername,
+      content: message,
+      timestamp: timestamp.getTime(),
+      messageSentStatus
+    });
+
     return {chatId: chat.id, messageId, content: message, timestamp: timestamp.getTime(), messageType: 'text'};
   }
 
