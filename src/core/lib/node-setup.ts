@@ -136,12 +136,31 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
 
     const announceAddrs: string[] = [];
 
+    // Check for onion address in database (set by TorManager)
+    const onionAddress = database.getSetting('tor_onion_address');
+    if (torConfig.enabled && onionAddress) {
+      // Construct announce address from stored onion address
+      // Format: /onion3/<address-without-.onion>:<port>
+      const onionHost = onionAddress.replace('.onion', '');
+      const announceAddr = `/onion3/${onionHost}:${port}`;
+      try {
+        multiaddr(announceAddr);
+        announceAddrs.push(announceAddr);
+        console.log(`Using onion announce address: ${announceAddr}`);
+      } catch {
+        console.warn(`Invalid onion announce address ignored: ${announceAddr}`);
+      }
+    }
+
+    // Also check environment variable (fallback/override)
     if (process.env.ANNOUNCE_ADDRS) {
       const rawAddrs = process.env.ANNOUNCE_ADDRS.split(',').map(addr => addr.trim()).filter(Boolean);
       for (const addr of rawAddrs) {
         try {
           multiaddr(addr);
-          announceAddrs.push(addr);
+          if (!announceAddrs.includes(addr)) {
+            announceAddrs.push(addr);
+          }
         } catch {
           console.warn(`Invalid announce address ignored: ${addr}`);
         }
@@ -159,6 +178,17 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
       streamMuxers: [yamux()],
       connectionManager: {
         maxConnections: 100,
+      },
+      // Tor-friendly connection monitor settings
+      // Tor adds 3-12 seconds latency per round trip, so we need longer timeouts
+      connectionMonitor: {
+        enabled: true,
+        pingInterval: torConfig.enabled ? 120000 : 30000,  // 2 minutes for Tor, 30s for local
+        pingTimeout: {
+          minTimeout: torConfig.enabled ? 30000 : 5000,    // 30s for Tor, 5s for local
+          maxTimeout: torConfig.enabled ? 120000 : 30000,  // 2 min for Tor, 30s for local
+        },
+        abortConnectionOnPingFailure: !torConfig.enabled,  // Don't abort on Tor, do on local
       },
       connectionGater: createConnectionGater(database),
       // peerDiscovery: [mdns()],
@@ -183,7 +213,10 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
         identify: identify({
           runOnConnectionOpen: true
         }),
-        ping: ping()
+        ping: ping({
+          // Longer timeout for Tor (default is too aggressive)
+          timeout: torConfig.enabled ? 60000 : 10000,
+        })
       }
     });
 

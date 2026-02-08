@@ -605,7 +605,7 @@ export class KeyExchange {
       senderUsername: message.senderUsername,
       timestamp: message.timestamp,
     };
-    if (message.messageBody) {
+    if (message.messageBody !== undefined) {
       messageToVerify.messageBody = message.messageBody;
     }
 

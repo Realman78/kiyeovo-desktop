@@ -452,6 +452,7 @@ export const IPC_CHANNELS = {
   INIT_STATUS: 'init:status',
   INIT_COMPLETE: 'init:complete',
   INIT_ERROR: 'init:error',
+  INIT_STATE: 'init:state',
 
   // DHT connection status
   DHT_CONNECTION_STATUS: 'dht:connectionStatus',
@@ -560,6 +561,10 @@ export const IPC_CHANNELS = {
   FILE_TRANSFER_COMPLETE: 'file:complete',
   FILE_TRANSFER_FAILED: 'file:failed',
   PENDING_FILE_RECEIVED: 'file:pendingReceived',
+
+  // Tor status
+  TOR_STATUS: 'tor:status',
+  GET_TOR_STATUS: 'tor:getStatus',
 } as const;
 
 export interface PasswordRequest {
@@ -581,7 +586,15 @@ export interface PasswordResponse {
 
 export interface InitStatus {
   message: string;
-  stage: 'database' | 'identity' | 'node' | 'registry' | 'messaging' | 'complete' | 'peerId';
+  stage: 'tor' | 'database' | 'identity' | 'node' | 'registry' | 'messaging' | 'complete' | 'peerId';
+}
+
+export interface TorStatus {
+  isRunning: boolean;
+  onionAddress: string | null;
+  socksPort: number;
+  controlPort: number;
+  bootstrapProgress: number;
 }
 
 export interface KeyExchangeEvent {

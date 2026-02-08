@@ -431,11 +431,8 @@ export class ChatDatabase {
     }
 
     getEncryptedUserIdentity(): EncryptedUserIdentityDb | null {
-        // TODO if recovery phrase is used, we need to append "-recovery" to the peer_id
         const stmt = this.db.prepare(`SELECT * FROM encrypted_user_identities WHERE peer_id NOT LIKE ? ORDER BY created_at DESC LIMIT 1`);
         const row = stmt.get('%-recovery') as any;
-        // TODO remove debug log
-        console.log('[DATABASE] getEncryptedUserIdentity result:', row ? `Found identity: ${row.peer_id}` : 'No identity found');
         return row ? {
             id: row.id,
             peer_id: row.peer_id,
@@ -952,7 +949,6 @@ export class ChatDatabase {
         return this.mapChatRow(row);
     }
 
-    // TODO implement this
     deleteChatById(chatId: number): void {
         const stmt = this.db.prepare('DELETE FROM chats WHERE id = ?');
         stmt.run(chatId);
@@ -1345,6 +1341,17 @@ export class ChatDatabase {
         return result.changes ?? 0;
     }
 
+    failInProgressFileTransfers(): number {
+        const stmt = this.db.prepare(`
+            UPDATE messages
+            SET transfer_status = 'failed', transfer_error = 'Transfer interrupted'
+            WHERE message_type = 'file'
+              AND transfer_status = 'in_progress'
+        `);
+        const result = stmt.run();
+        return result.changes ?? 0;
+    }
+
     getMessagesByChatId(chatId: number, limit: number = 50, offset: number = 0): Array<Message & { sender_username?: string | undefined }> {
         const stmt = this.db.prepare(`
             SELECT * FROM (
@@ -1370,7 +1377,6 @@ export class ChatDatabase {
         }));
     }
 
-    // TODO implement this for UI
     getLatestMessageForChat(chatId: number): Message | null {
         const stmt = this.db.prepare(`
             SELECT * FROM messages 
@@ -1524,6 +1530,12 @@ export class ChatDatabase {
     }
 
     addBootstrapNode(address: string): void {
+        const existsStmt = this.db.prepare('SELECT 1 FROM bootstrap_nodes WHERE address = ? LIMIT 1');
+        const exists = existsStmt.get(address) as { 1: number } | undefined;
+        if (exists) {
+            throw new Error('Bootstrap node already exists');
+        }
+
         const stmt = this.db.prepare('INSERT INTO bootstrap_nodes (address, connected) VALUES (?, 0)');
         stmt.run(address);
     }

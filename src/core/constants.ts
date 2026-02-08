@@ -108,10 +108,19 @@ export const BOOTSTRAP_PEER_ID_FILE = './bootstrap-peer-id.bin';
 
 /**
  * Tor configuration constants
+ *
+ * Bundled Tor uses ports 9550/9551 to avoid conflicts with:
+ * - System Tor (9050/9051)
+ * - Tor Browser (9150/9151)
  */
 export const TOR_CONFIG = {
+  // Bundled Tor ports (used when we run our own Tor instance)
+  BUNDLED_SOCKS_PORT: 9550,
+  BUNDLED_CONTROL_PORT: 9551,
+
+  // Default ports (fallback, or for system Tor)
   DEFAULT_SOCKS_HOST: '127.0.0.1',
-  DEFAULT_SOCKS_PORT: 9050,
+  DEFAULT_SOCKS_PORT: 9550, // Changed to bundled port
   DEFAULT_CONNECTION_TIMEOUT: 30000, // 30 seconds
   DEFAULT_CIRCUIT_TIMEOUT: 60000,    // 60 seconds
   DEFAULT_MAX_RETRIES: 3,
@@ -164,9 +173,10 @@ export const FILE_OFFER_RESPONSE = 'file_offer_response';
 export const CHUNK_SIZE = 32 * 1024; // 32KB
 export const DOWNLOADS_DIR = '.kiyeovo/downloads';
 export const MAX_FILE_MESSAGE_SIZE = 1 * 1024 * 1024; // 1MB for JSON overhead
-export const MAX_FILE_SIZE = 128 * 1024 * 1024; // 128MB max file size
+export const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB max file size
 export const MAX_COPY_ATTEMPTS = 10; // Max number of duplicate filename attempts
-export const CHUNK_RECEIVE_TIMEOUT = 30 * 60 * 1000; // 30 minutes to receive all chunks
+export const CHUNK_RECEIVE_TIMEOUT = 30 * 60 * 1000; // 30 minutes to receive all chunks (legacy, kept for total timeout fallback)
+export const CHUNK_IDLE_TIMEOUT = 60 * 1000; // 60 seconds - if no chunk received for this long, transfer is stalled
 export const FILE_OFFER_RATE_LIMIT = 5; // Max file offers per peer in time window
 export const FILE_OFFER_RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
 export const MAX_PENDING_FILES_PER_PEER = 5; // Max unanswered file offers per peer

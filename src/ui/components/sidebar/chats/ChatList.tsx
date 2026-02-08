@@ -12,6 +12,7 @@ export const ChatList: FC = () => {
     const chats = useSelector((state: RootState) => state.chat.chats);
     const contactAttempts = useSelector((state: RootState) => state.chat.contactAttempts);
     const selectedChatId = useSelector((state: RootState) => state.chat.activeChat);
+    const isConnected = useSelector((state: RootState) => state.user.connected);
     const dispatch = useDispatch();
 
     const onSelectChat = async (chatId: number) => {
@@ -21,6 +22,9 @@ export const ChatList: FC = () => {
         // Skip offline message fetching for blocked chats
         const chat = chats.find(c => c.id === chatId);
         if (chat && !chat.fetchedOffline && !chat.isFetchingOffline && !chat.blocked) {
+            if (!isConnected) {
+                return;
+            }
             console.log(`[UI] Fetching offline messages for chat ${chatId}...`);
             dispatch(setOfflineFetchStatus({ chatId, isFetching: true }));
 

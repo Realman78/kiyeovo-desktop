@@ -88,12 +88,19 @@ const ConnectionStatusDialog = ({
   };
 
   const handleAddNode = async () => {
-    if (!newAddress.trim()) return;
+    const normalizedAddress = newAddress.trim();
+    if (!normalizedAddress) return;
+
+    const alreadyExists = nodes.some(node => node.address === normalizedAddress);
+    if (alreadyExists) {
+      setNodesError('Bootstrap node already exists');
+      return;
+    }
 
     setNodesError(null);
 
     try {
-      const result = await window.kiyeovoAPI.addBootstrapNode(newAddress.trim());
+      const result = await window.kiyeovoAPI.addBootstrapNode(normalizedAddress);
 
       if (result.success) {
         console.log('[UI] Bootstrap node added successfully');

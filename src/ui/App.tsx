@@ -12,6 +12,32 @@ function App() {
   const dispatch = useDispatch();
 
   useEffect(() => {
+    let isMounted = true;
+
+    const loadInitState = async () => {
+      try {
+        const initState = await window.kiyeovoAPI.getInitState();
+        if (!isMounted) return;
+        if (initState.status) {
+          setInitStatus(initState.status.message);
+          if (initState.status.stage === 'peerId') {
+            dispatch(setPeerId(initState.status.message as string));
+          }
+        }
+        if (initState.error) {
+          setInitStatus(initState.error);
+        }
+        if (initState.initialized) {
+          setIsInitialized(true);
+          setInitStatus('Initialized successfully!');
+        }
+      } catch {
+        // ignore and rely on live events
+      }
+    };
+
+    void loadInitState();
+
     const unsubStatus = window.kiyeovoAPI.onInitStatus((status) => {
       if (status.stage === 'peerId') {
         dispatch(setPeerId(status.message as string));
@@ -31,6 +57,7 @@ function App() {
 
 
     return () => {
+      isMounted = false;
       unsubStatus();
       unsubComplete();
       unsubError();

@@ -232,7 +232,9 @@ const chatSlice = createSlice({
     },
     removePendingKeyExchange: (state, action: PayloadAction<string>) => {
       state.pendingKeyExchanges = state.pendingKeyExchanges.filter((pk) => pk.peerId !== action.payload);
-      // TODO should I set activePendingKeyExchange to null here?
+      if (state.activePendingKeyExchange?.peerId === action.payload) {
+        state.activePendingKeyExchange = null;
+      }
     },
     setOfflineFetchStatus: (state, action: PayloadAction<{ chatId: number; isFetching: boolean }>) => {
       const chat = state.chats.find((c) => c.id === action.payload.chatId);

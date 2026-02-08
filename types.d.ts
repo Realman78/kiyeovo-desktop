@@ -25,6 +25,7 @@ declare global {
             onInitStatus: (callback: (status: InitStatus) => void) => () => void;
             onInitComplete: (callback: () => void) => () => void;
             onInitError: (callback: (error: string) => void) => () => void;
+            getInitState: () => Promise<{ initialized: boolean; status: InitStatus | null; error: string | null }>;
 
             // DHT connection status
             onDHTConnectionStatus: (callback: (status: { connected: boolean }) => void) => () => void;

@@ -10,7 +10,7 @@ import { pushable } from "it-pushable";
 import { pipe } from "it-pipe";
 import { StreamHandler } from "./stream-handler.js";
 import mime from "mime-types";
-import { CHUNK_SIZE, DOWNLOADS_DIR, FILE_ACCEPTANCE_TIMEOUT, FILE_OFFER, FILE_OFFER_RESPONSE, FILE_TRANSFER_PROTOCOL, MAX_FILE_MESSAGE_SIZE, MAX_FILE_SIZE, MAX_COPY_ATTEMPTS, CHUNK_RECEIVE_TIMEOUT, FILE_OFFER_RATE_LIMIT, FILE_OFFER_RATE_LIMIT_WINDOW, MAX_PENDING_FILES_PER_PEER, MAX_PENDING_FILES_TOTAL, FILE_REJECTION_COUNTER_RESET_INTERVAL, SILENT_REJECTION_THRESHOLD_GLOBAL, SILENT_REJECTION_THRESHOLD_PER_PEER } from "../constants.js";
+import { CHUNK_SIZE, DOWNLOADS_DIR, FILE_ACCEPTANCE_TIMEOUT, FILE_OFFER, FILE_OFFER_RESPONSE, FILE_TRANSFER_PROTOCOL, MAX_FILE_MESSAGE_SIZE, MAX_FILE_SIZE, MAX_COPY_ATTEMPTS, CHUNK_RECEIVE_TIMEOUT, CHUNK_IDLE_TIMEOUT, FILE_OFFER_RATE_LIMIT, FILE_OFFER_RATE_LIMIT_WINDOW, MAX_PENDING_FILES_PER_PEER, MAX_PENDING_FILES_TOTAL, FILE_REJECTION_COUNTER_RESET_INTERVAL, SILENT_REJECTION_THRESHOLD_GLOBAL, SILENT_REJECTION_THRESHOLD_PER_PEER } from "../constants.js";
 import { MessageHandler } from "./message-handler.js";
 import { generalErrorHandler } from "../utils/general-error.js";
 
@@ -66,6 +66,10 @@ export class FileHandler {
     const expiredCount = this.database.expirePendingFileOffers(FILE_ACCEPTANCE_TIMEOUT);
     if (expiredCount > 0) {
       console.log(`[FileHandler] Expired ${expiredCount} pending file offer(s) on startup`);
+    }
+    const failedCount = this.database.failInProgressFileTransfers();
+    if (failedCount > 0) {
+      console.log(`[FileHandler] Marked ${failedCount} in-progress file transfer(s) as failed on startup`);
     }
     this.#setupProtocolHandler();
     this.#setupRejectionCounterReset();
@@ -492,14 +496,15 @@ export class FileHandler {
             };
             writable.push(this.#encodeMessage(response));
 
-            // Set timeout for receiving all chunks
+            // Set per-chunk idle timeout (resets after each chunk received)
+            // If no chunk is received for CHUNK_IDLE_TIMEOUT, transfer is stalled
             chunkTimeout = setTimeout(() => {
               try {
-                stream.abort(new Error('Chunk receive timeout'));
+                stream.abort(new Error('Chunk receive timeout - no data received for 60 seconds'));
               } catch (error: unknown) {
                 generalErrorHandler(error, 'Error aborting stream');
               }
-            }, CHUNK_RECEIVE_TIMEOUT);
+            }, CHUNK_IDLE_TIMEOUT);
 
           } else if (message.type === 'file_chunk') {
             if (!offer) throw new Error('Received chunk before offer');
@@ -530,6 +535,19 @@ export class FileHandler {
 
             receivedChunks.set(fileChunk.index, decrypted);
             console.log(`Received chunk ${fileChunk.index + 1}/${offer.totalChunks}`);
+
+            if (chunkTimeout) {
+              clearTimeout(chunkTimeout);
+              const currentChunk = fileChunk.index + 1;
+              const totalChunks = offer.totalChunks;
+              chunkTimeout = setTimeout(() => {
+                try {
+                  stream.abort(new Error(`Chunk receive timeout - stalled at chunk ${currentChunk}/${totalChunks}`));
+                } catch (error: unknown) {
+                  generalErrorHandler(error, 'Error aborting stream');
+                }
+              }, CHUNK_IDLE_TIMEOUT);
+            }
 
             // Emit progress event (throttled: first 5 chunks, then every 10%)
             if (this.onFileTransferProgress) {

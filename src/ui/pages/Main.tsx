@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import Sidebar from '../components/sidebar/Sidebar';
 import ChatWrapper from '../components/chat/ChatWrapper';
-import { setChats, addChat, removePendingKeyExchange, setActiveChat, markOfflineFetched, updateFileTransferProgress, updateFileTransferStatus, updateFileTransferError, setPendingFileStatus, updateChat, setActivePendingKeyExchange } from '../state/slices/chatSlice';
+import { setChats, addChat, removePendingKeyExchange, setActiveChat, markOfflineFetched, updateFileTransferProgress, updateFileTransferStatus, updateFileTransferError, setPendingFileStatus, updateChat, setActivePendingKeyExchange, setOfflineFetchStatus } from '../state/slices/chatSlice';
 import { removeContactAttempt, setActiveContactAttempt, addMessage, type Chat } from '../state/slices/chatSlice';
 import { useToast } from '../components/ui/use-toast';
 import type { RootState } from '../state/store';
@@ -13,6 +13,7 @@ export const Main = () => {
   const dispatch = useDispatch();
   const { toast } = useToast();
   const myPeerId = useSelector((state: RootState) => state.user.peerId);
+  const isConnected = useSelector((state: RootState) => state.user.connected);
 
   useNotifications();
 
@@ -218,12 +219,15 @@ export const Main = () => {
           dispatch(setChats(mappedChats));
 
           // After loading chats, check for offline messages for top 10 most recent
-          if (mappedChats.length > 0) {
+          if (mappedChats.length > 0 && isConnected) {
             // Sort by most recent activity (latest message) and take top 10
             const sortedChats = [...mappedChats].sort((a, b) => b.lastMessageTimestamp - a.lastMessageTimestamp);
             const top10ChatIds = sortedChats.slice(0, 10).map(chat => chat.id);
 
             console.log(`[UI] Checking offline messages for ${top10ChatIds.length} most recent chats (IDs: ${top10ChatIds.join(', ')})...`);
+            top10ChatIds.forEach((chatId) => {
+              dispatch(setOfflineFetchStatus({ chatId, isFetching: true }));
+            });
             try {
               const result = await window.kiyeovoAPI.checkOfflineMessages(top10ChatIds);
               if (result.success && result.checkedChatIds.length > 0) {
@@ -257,9 +261,15 @@ export const Main = () => {
                 }
               } else if (!result.success) {
                 console.error('[UI] Failed to check offline messages:', result.error);
+                top10ChatIds.forEach((chatId) => {
+                  dispatch(setOfflineFetchStatus({ chatId, isFetching: false }));
+                });
               }
             } catch (error) {
               console.error('[UI] Failed to check offline messages:', error);
+              top10ChatIds.forEach((chatId) => {
+                dispatch(setOfflineFetchStatus({ chatId, isFetching: false }));
+              });
             }
           }
         } else {
@@ -271,7 +281,7 @@ export const Main = () => {
     };
 
     fetchChats();
-  }, [dispatch]);
+  }, [dispatch, isConnected]);
 
   return (
     <div className='h-screen w-screen flex overflow-hidden'>

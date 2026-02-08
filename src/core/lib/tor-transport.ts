@@ -92,13 +92,8 @@ class SocksMultiaddrConnection implements MultiaddrConnection {
       }
     };
 
-    const debug = true; //process.env.DEBUG?.includes('tor') ?? false
-    const logFn = debug ? ((...args: any[]) => { console.log('[TorTransport]', ...args); }) : () => {}
-    ;(logFn as any).enabled = debug
-    ;(logFn as any).trace = debug ? ((...args: any[]) => { console.trace('[TorTransport]', ...args); }) : () => {}
-    ;(logFn as any).error = debug ? ((...args: any[]) => { console.error('[TorTransport]', ...args); }) : () => {};
-
-    this.log = logFn as unknown as Logger;
+    const debug = false; //process.env.DEBUG?.includes('tor') ?? false
+    this.log = this.createLogger('[TorTransport:Conn]', debug);
 
     // Socket lifecycle logging to diagnose premature closes
     try {
@@ -110,6 +105,30 @@ class SocksMultiaddrConnection implements MultiaddrConnection {
         if (debug) console.error('[TorTransport] SOCKS socket error:', err);
       });
     } catch {}
+  }
+
+  /**
+   * Create a logger that satisfies the libp2p Logger interface
+   */
+  private createLogger(prefix: string, debug: boolean): Logger {
+    const logFn = debug
+      ? (formatter: string, ...args: any[]) => { console.log(`${prefix}`, formatter, ...args); }
+      : () => {};
+
+    (logFn as any).enabled = debug;
+    (logFn as any).trace = debug
+      ? (formatter: string, ...args: any[]) => { console.trace(`${prefix}`, formatter, ...args); }
+      : () => {};
+    (logFn as any).error = debug
+      ? (formatter: string, ...args: any[]) => { console.error(`${prefix}`, formatter, ...args); }
+      : () => {};
+
+    // Add newScope method that libp2p's upgrader expects
+    (logFn as any).newScope = (scope: string) => {
+      return this.createLogger(`${prefix}:${scope}`, debug);
+    };
+
+    return logFn as unknown as Logger;
   }
 
   async close(): Promise<void> {
@@ -166,12 +185,34 @@ export class TorTransport implements Transport {
     this.options = options;
     this.tcpTransportFactory = tcp();
 
-    const debug = true; // process.env.DEBUG?.includes('tor') ?? false
-    const logFn = debug ? ((...args: any[]) => { console.log('[TorTransport]', ...args); }) : () => {}
-    ;(logFn as any).enabled = debug
-    ;(logFn as any).trace = debug ? ((...args: any[]) => { console.trace('[TorTransport]', ...args); }) : () => {}
-    ;(logFn as any).error = debug ? ((...args: any[]) => { console.error('[TorTransport]', ...args); }) : () => {};
-    this.log = logFn as unknown as Logger;
+    // Set to true for verbose logging, or use DEBUG=tor environment variable
+    const debug = process.env.DEBUG?.includes('tor') ?? false;
+    this.log = this.createLogger('[TorTransport]', debug);
+  }
+
+  /**
+   * Create a logger that satisfies the libp2p Logger interface
+   */
+  private createLogger(prefix: string, debug: boolean): Logger {
+    const self = this;
+    const logFn = debug
+      ? (formatter: string, ...args: any[]) => { console.log(`${prefix}`, formatter, ...args); }
+      : () => {};
+
+    (logFn as any).enabled = debug;
+    (logFn as any).trace = debug
+      ? (formatter: string, ...args: any[]) => { console.trace(`${prefix}`, formatter, ...args); }
+      : () => {};
+    (logFn as any).error = debug
+      ? (formatter: string, ...args: any[]) => { console.error(`${prefix}`, formatter, ...args); }
+      : () => {};
+
+    // Add newScope method that libp2p's upgrader expects
+    (logFn as any).newScope = (scope: string) => {
+      return self.createLogger(`${prefix}:${scope}`, debug);
+    };
+
+    return logFn as unknown as Logger;
   }
 
   /**

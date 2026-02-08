@@ -1,5 +1,3 @@
-0. Registration with only peer ID
-
 1. 
 The real problem (and what I’d fix)
 What is problematic is that app initialization is blocked waiting for a user response even during the lockout window, and the UI forces the user to wait and prevents pre-typing.
@@ -23,8 +21,6 @@ Cons
 Still “startup blocked” (by design) until the user submits; but at least it feels responsive.
 
 
-2. recovery phrase
-
 3. Animations!
 
 4. drag and drop bootstrap nodeova za redoslijed spajanja
@@ -46,4 +42,114 @@ Should I save the information about a message being "offline" to show for later?
 
 7.  Offline message desync after "Delete chat & user"
 
-8. DIGNI TIMEOUTE
+8. Deprecated paeketi
+
+9. npx electron-rebuild jer je bettersqlite na nekoj staroj verziji
+
+10. prva poruka u sesiji nemore bit file - Also, I found a bug where I cant send a file as a first message in a session because it says "key exchange init signature verification failed" - remember, the key exchange happens at the beginning of every session, not just the first ever contact
+
+11. dok alice ceka boba da prihvati file exchange dok je prva poruka, nemore slat poruke
+
+12. kada pukne file transfer, download ostane zauvik na 0
+
+13. Ikona i naziv aplikacije
+
+14. relay nodeove
+Hybrid = 2 Networks?
+
+  Not necessarily. libp2p supports multiple addresses per peer. A single peer can be reachable via:
+
+  Peer QmAlice:
+    - /onion3/abc...xyz:9001/p2p/QmAlice           (Tor)
+    - /ip4/1.2.3.4/tcp/4001/p2p/QmRelay/p2p-circuit/p2p/QmAlice  (Relay)
+    - /ip4/5.6.7.8/tcp/9001/p2p/QmAlice            (Direct, if public)
+
+  Same DHT, multiple transports. The question is: can different modes talk to each other?
+
+  ---
+  Architecture Options
+
+  Option A: Isolated Modes (Simpler)
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │                      Tor Network                             │
+  │  ┌───────┐      ┌───────────┐      ┌───────┐                │
+  │  │ Alice │◄────►│ Bootstrap │◄────►│  Bob  │                │
+  │  │ (Tor) │      │   (Tor)   │      │ (Tor) │                │
+  │  └───────┘      └───────────┘      └───────┘                │
+  └─────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │                     Relay Network                            │
+  │  ┌───────┐      ┌───────────┐      ┌───────┐                │
+  │  │ Carol │◄────►│ Bootstrap │◄────►│ David │                │
+  │  │(Relay)│      │  (Relay)  │      │(Relay)│                │
+  │  └───────┘      └───────────┘      └───────┘                │
+  └─────────────────────────────────────────────────────────────┘
+
+  Alice ✗ cannot reach Carol (different networks)
+
+  Pros: Simple, clean separation, strong anonymity for Tor users
+  Cons: Network fragmentation - Tor users can't message Relay users
+
+  ---
+  Option B: Bridge via Bootstrap (More Complex)
+
+                      ┌─────────────────────┐
+                      │   Bootstrap Node    │
+                      │  ┌───────────────┐  │
+      Tor Network ────┼──│ Tor Hidden Svc│  │
+                      │  └───────┬───────┘  │
+                      │          │          │
+                      │  ┌───────▼───────┐  │
+    Relay Network ────┼──│ Circuit Relay │  │
+                      │  └───────────────┘  │
+                      └─────────────────────┘
+
+  Alice (Tor) ──► Bootstrap ──► Carol (Relay)
+
+  Pros: All users can communicate
+  Cons:
+  - Bootstrap sees message metadata (who talks to whom)
+  - Adds latency for cross-mode messages
+  - More trust in bootstrap operators
+
+  ---
+  Option C: User Choice per Conversation
+
+  Alice has both Tor and Relay enabled:
+    - Announces both addresses
+    - Talks to Bob (Tor-only) via Tor
+    - Talks to Carol (Relay-only) via Relay
+    - Talks to David (both) via Relay (faster) or Tor (user choice)
+
+  Pros: Maximum flexibility
+  Cons: More complexity, resource usage (running both Tor and relay client)
+
+  ---
+  My Recommendation
+
+  Start with Option A (Isolated) with path to Option C:
+
+  1. Phase 1: Add Relay mode as alternative to Tor
+    - User picks mode at setup: "Privacy (Tor)" vs "Performance (Relay)"
+    - Separate networks, no cross-talk
+    - Simple to implement
+  2. Phase 2: Allow dual-mode for power users
+    - Run both Tor and Relay simultaneously
+    - Announce both addresses
+    - Can reach anyone
+  3. File transfers:
+    - Tor mode: 5MB limit
+    - Relay mode: No limit
+
+  ---
+  What Changes Are Needed?
+
+  | Component     | Tor Mode (Existing) | Relay Mode (New)   |
+  |---------------|---------------------|--------------------|
+  | Transport     | TorTransport + TCP  | TCP + CircuitRelay |
+  | NAT Traversal | Hidden Service      | Circuit Relay v2   |
+  | Bootstrap     | Onion address       | Relay address      |
+  | Announce      | /onion3/...         | /p2p-circuit/...   |
+  | File limit    | 5MB                 | Unlimited          |

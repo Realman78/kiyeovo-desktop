@@ -17,11 +17,18 @@ export interface P2PCore {
   cleanup: () => Promise<void>;
 }
 
+export interface TorConfig {
+  enabled: boolean;
+  socksPort: number;
+  onionAddress: string | null; // null means Tor is disabled or not yet started
+}
+
 export interface P2PCoreConfig {
   dataDir: string;
   port: number;
+  torConfig?: TorConfig; // Optional Tor configuration from TorManager
   passwordPrompt: (prompt: string, isNew: boolean, recoveryPhrase?: string, prefilledPassword?: string, errorMessage?: string, cooldownSeconds?: number, showRecoveryOption?: boolean, keychainAvailable?: boolean) => Promise<PasswordResponse>;
-  onStatus: (message: string, stage: 'database' | 'identity' | 'node' | 'registry' | 'messaging' | 'complete' | 'peerId') => void;
+  onStatus: (message: string, stage: 'tor' | 'database' | 'identity' | 'node' | 'registry' | 'messaging' | 'complete' | 'peerId') => void;
   onDHTConnectionStatus: (status: { connected: boolean }) => void;
   onKeyExchangeSent: (data: KeyExchangeEvent) => void;
   onContactRequestReceived: (data: ContactRequestEvent) => void;
@@ -83,6 +90,21 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
   const dbPath = path.join(config.dataDir, 'chat.db');
   const database = new ChatDatabase(dbPath);
   sendStatus(`Database initialized at: ${dbPath}`, 'database');
+
+  // Store Tor configuration in database for node-setup to read
+  if (config.torConfig) {
+    console.log('[P2P Core] Storing Tor configuration in database...');
+    database.setSetting('tor_enabled', config.torConfig.enabled ? 'true' : 'false');
+    database.setSetting('tor_socks_port', config.torConfig.socksPort.toString());
+    if (config.torConfig.onionAddress) {
+      // Store the announce address for node-setup to use
+      // Format: /onion3/<address-without-.onion>:<port>
+      const onionHost = config.torConfig.onionAddress.replace('.onion', '');
+      // The full announce address will be constructed in node-setup with peerId
+      database.setSetting('tor_onion_address', config.torConfig.onionAddress);
+      console.log(`[P2P Core] Tor onion address stored: ${config.torConfig.onionAddress}`);
+    }
+  }
 
   // Load or create encrypted user identity
   sendStatus('Loading user identity...', 'identity');

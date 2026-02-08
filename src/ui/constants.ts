@@ -1,6 +1,6 @@
 export const MAX_FILE_MESSAGE_SIZE = 1 * 1024 * 1024; // 1MB for JSON overhead
-export const MAX_FILE_SIZE = 128 * 1024 * 1024; // 128MB max file size
-export const FILE_ACCEPTANCE_TIMEOUT = 2 * 60 * 1000;
+export const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB max file size
+export const FILE_ACCEPTANCE_TIMEOUT = 5 * 60 * 1000; // 5 minutes
 export const SHOW_TIMESTAMP_INTERVAL = 15 * 60 * 1000;
 
 export const TOR_CONFIG = {

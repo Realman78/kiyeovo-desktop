@@ -1,9 +1,26 @@
 {
     "appId": "com.marin-dedic.kiyeovo",
     "files": ["dist-electron/**", "dist-ui/**", "package.json"],
+    "extraResources": [
+        {
+            "from": "resources/tor/${os}-${arch}",
+            "to": "tor/${os}-${arch}",
+            "filter": ["**/*"]
+        }
+    ],
+    "asarUnpack": [
+        "resources/tor/**"
+    ],
     "productName": "Kiyeovo",
     "linux": {
         "target": "AppImage",
-        "category": "Utility"
+        "category": "Network"
+    },
+    "mac": {
+        "target": ["dmg", "zip"],
+        "category": "public.app-category.social-networking"
+    },
+    "win": {
+        "target": ["nsis", "portable"]
     }
 }

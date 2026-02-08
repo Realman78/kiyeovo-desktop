@@ -2,16 +2,38 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { isDev } from './util.js';
-import { initializeP2PCore, InitStatus, IPC_CHANNELS, KeyExchangeEvent, type P2PCore, type ContactRequestEvent, type ChatCreatedEvent, type KeyExchangeFailedEvent, type MessageReceivedEvent, type FileTransferProgressEvent, type FileTransferCompleteEvent, type FileTransferFailedEvent, type PendingFileReceivedEvent } from '../core/index.js';
+import { initializeP2PCore, InitStatus, IPC_CHANNELS, KeyExchangeEvent, type P2PCore, type ContactRequestEvent, type ChatCreatedEvent, type KeyExchangeFailedEvent, type MessageReceivedEvent, type FileTransferProgressEvent, type FileTransferCompleteEvent, type FileTransferFailedEvent, type PendingFileReceivedEvent, type TorConfig } from '../core/index.js';
 import { ensureAppDataDir } from '../core/utils/miscellaneous.js';
 import { requestPasswordFromUI } from './password-prompt.js';
 import { setupIPCHandlers } from './ipc-handlers.js';
+import { TorManager, getTorBinaryPath, BUNDLED_TOR_SOCKS_PORT } from '../core/lib/tor-manager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 let mainWindow: BrowserWindow | null = null;
 let p2pCore: P2PCore | null = null;
+let torManager: TorManager | null = null;
+let lastInitStatus: InitStatus | null = null;
+let initError: string | null = null;
+let isCoreInitialized = false;
+
+// Enforce single instance
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  console.log('[Electron] Another instance is already running. Exiting.');
+  app.quit();
+} else {
+  // Focus existing window when second instance is attempted
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) {
+        mainWindow.restore();
+      }
+      mainWindow.focus();
+    }
+  });
+}
 
 function createMainWindow() {
   const win = new BrowserWindow({
@@ -41,6 +63,7 @@ function createMainWindow() {
 }
 
 function sendInitStatus(message: string, stage: InitStatus['stage']) {
+  lastInitStatus = { message, stage };
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(IPC_CHANNELS.INIT_STATUS, { message, stage });
   }
@@ -137,17 +160,59 @@ async function initializeP2PAfterWindow() {
     }
 
     console.log('[Electron] Starting P2P initialization...');
-    sendInitStatus('Getting data directory...', 'database');
 
     const dataDir = ensureAppDataDir();
     console.log(`[Electron] Data directory: ${dataDir}`);
 
-    sendInitStatus('Initializing P2P core...', 'node');
+    const libp2pPort = 9001; // TODO: Make this configurable
+    let torConfig: TorConfig | undefined;
+
+    // Start bundled Tor
+    sendInitStatus('Starting Tor daemon...', 'tor');
+    try {
+      const torBinaryPath = getTorBinaryPath(
+        process.resourcesPath,
+        app.getAppPath(),
+        app.isPackaged
+      );
+
+      torManager = new TorManager({
+        dataDir,
+        libp2pPort,
+        torBinaryPath,
+        onStatus: (message, stage) => {
+          console.log(`[TorManager] ${message}`);
+          sendInitStatus(message, 'tor');
+        },
+      });
+
+      const onionAddress = await torManager.start();
+      console.log(`[Electron] Tor started with onion address: ${onionAddress}`);
+
+      torConfig = {
+        enabled: true,
+        socksPort: BUNDLED_TOR_SOCKS_PORT,
+        onionAddress,
+      };
+    } catch (torError) {
+      console.error('[Electron] Failed to start Tor:', torError);
+      sendInitStatus('Warning: Tor failed to start. Running in local mode.', 'tor');
+
+      // Continue without Tor (local mode)
+      torConfig = {
+        enabled: false,
+        socksPort: BUNDLED_TOR_SOCKS_PORT,
+        onionAddress: null,
+      };
+    }
+
+    sendInitStatus('Getting data directory...', 'database');
 
     // Initialize P2P core with custom password prompt
     p2pCore = await initializeP2PCore({
       dataDir,
-      port: 9001, // TODO: Make this configurable
+      port: libp2pPort,
+      torConfig,
       passwordPrompt: async (prompt: string, isNew: boolean, recoveryPhrase?: string, prefilledPassword?: string, errorMessage?: string, cooldownSeconds?: number, showRecoveryOption?: boolean, keychainAvailable?: boolean) => {
         console.log('[Electron] Requesting password from UI...');
         const response = await requestPasswordFromUI(mainWindow!, prompt, isNew, recoveryPhrase, prefilledPassword, errorMessage, cooldownSeconds, showRecoveryOption, keychainAvailable);
@@ -198,6 +263,7 @@ async function initializeP2PAfterWindow() {
 
     console.log('[Electron] P2P core initialized successfully');
     sendInitStatus('P2P node ready!', 'complete');
+    isCoreInitialized = true;
 
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(IPC_CHANNELS.INIT_COMPLETE);
@@ -206,6 +272,7 @@ async function initializeP2PAfterWindow() {
   } catch (error) {
     console.error('[Electron] Failed to initialize P2P core:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    initError = errorMessage;
 
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(IPC_CHANNELS.INIT_ERROR, errorMessage);
@@ -220,6 +287,9 @@ async function initializeApp() {
     // Setup IPC handlers
     setupIPCHandlers(ipcMain, () => p2pCore, () => mainWindow);
     console.log('[Electron] IPC handlers registered');
+    ipcMain.handle(IPC_CHANNELS.INIT_STATE, () => {
+      return { initialized: isCoreInitialized, status: lastInitStatus, error: initError };
+    });
 
     // Create window first
     mainWindow = createMainWindow();
@@ -255,18 +325,36 @@ app.on('activate', () => {
 
 // Graceful shutdown
 app.on('before-quit', async (event) => {
-  if (p2pCore) {
+  if (p2pCore || torManager) {
     event.preventDefault();
-    console.log('[Electron] Shutting down P2P core...');
-    try {
-      await p2pCore.cleanup();
-      console.log('[Electron] P2P core shutdown complete');
-    } catch (error) {
-      console.error('[Electron] Error during P2P shutdown:', error);
-    } finally {
-      p2pCore = null;
-      app.exit(0);
+
+    // Shutdown P2P core first
+    if (p2pCore) {
+      console.log('[Electron] Shutting down P2P core...');
+      try {
+        await p2pCore.cleanup();
+        console.log('[Electron] P2P core shutdown complete');
+      } catch (error) {
+        console.error('[Electron] Error during P2P shutdown:', error);
+      } finally {
+        p2pCore = null;
+      }
     }
+
+    // Then shutdown Tor
+    if (torManager) {
+      console.log('[Electron] Shutting down Tor daemon...');
+      try {
+        await torManager.stop();
+        console.log('[Electron] Tor daemon shutdown complete');
+      } catch (error) {
+        console.error('[Electron] Error during Tor shutdown:', error);
+      } finally {
+        torManager = null;
+      }
+    }
+
+    app.exit(0);
   }
 });
 
