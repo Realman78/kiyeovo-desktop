@@ -90,7 +90,7 @@ Hybrid = 2 Networks?
   Alice ✗ cannot reach Carol (different networks)
 
   Pros: Simple, clean separation, strong anonymity for Tor users
-  Cons: Network fragmentation - Tor users can't message Relay users
+  Cons: Network fragmentation - Tor users can not message Relay users
 
   ---
   Option B: Bridge via Bootstrap (More Complex)
@@ -153,3 +153,23 @@ Hybrid = 2 Networks?
   | Bootstrap     | Onion address       | Relay address      |
   | Announce      | /onion3/...         | /p2p-circuit/...   |
   | File limit    | 5MB                 | Unlimited          |
+
+
+
+15. app security
+1. sandbox: false (line 122)
+sandbox: false // Need to disable sandbox for IPC to work properly
+This comment is outdated. With modern Electron (v20+), contextIsolation: true + preload script works fine WITH sandbox enabled. Sandbox adds an extra layer of OS-level isolation. You should test with sandbox: true - it should work.
+
+2. No CSP for production
+
+For production builds, you should add a CSP. Options:
+- Add <meta> tag in your index.html
+- Or set it programmatically via Electron session API
+
+Example strict CSP for production:
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
+
+3. DevTools in production?
+
+Line 139 opens DevTools in dev mode - that is fine. Just make sure isDev() correctly returns false in packaged builds.

@@ -25,14 +25,16 @@ declare global {
             onInitStatus: (callback: (status: InitStatus) => void) => () => void;
             onInitComplete: (callback: () => void) => () => void;
             onInitError: (callback: (error: string) => void) => () => void;
-            getInitState: () => Promise<{ initialized: boolean; status: InitStatus | null; error: string | null }>;
+            getInitState: () => Promise<{ initialized: boolean; status: InitStatus | null; error: string | null; pendingPasswordRequest?: PasswordRequest | null }>;
 
             // DHT connection status
             onDHTConnectionStatus: (callback: (status: { connected: boolean }) => void) => () => void;
 
             // Register
             register: (username: string, rememberMe: boolean) => Promise<{ success: boolean; error?: string }>;
-            getUserState: () => Promise<{ username: string | null; isRegistered: boolean }>;
+            getUserState: () => Promise<{ peerId: string | null; username: string | null; isRegistered: boolean }>;
+            getLastUsername: () => Promise<{ username: string | null }>;
+            attemptAutoRegister: () => Promise<{ success: boolean; username: string | null; error?: string }>;
             getAutoRegister: () => Promise<{ autoRegister: boolean }>;
             setAutoRegister: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
             onRestoreUsername: (callback: (username: string) => void) => () => void;

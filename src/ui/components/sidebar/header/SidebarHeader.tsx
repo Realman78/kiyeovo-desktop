@@ -5,7 +5,7 @@ import { Button } from "../../ui/Button";
 import ConnectionStatusDialog from "./ConnectionStatusDialog";
 import { KiyeovoDialog } from "./KiyeovoDialog";
 import { useDispatch, useSelector } from "react-redux";
-import { setConnected } from "../../../state/slices/userSlice";
+import { setConnected, setRegistered, setUsername } from "../../../state/slices/userSlice";
 import NewConversationDialog from "./NewConversationDialog";
 import ImportTrustedUserDialog from "./ImportTrustedUserDialog";
 import { addPendingKeyExchange, setActivePendingKeyExchange, setActiveChat, addChat, type Chat } from "../../../state/slices/chatSlice";
@@ -13,9 +13,11 @@ import type { RootState } from "../../../state/store";
 import { DropdownMenu, DropdownMenuItem } from "../../ui/DropdownMenu";
 import { useToast } from "../../ui/use-toast";
 
-type SidebarHeaderProps = {};
+type SidebarHeaderProps = {
+    collapsed?: boolean;
+};
 
-export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
+export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => {
     const [dhtDialogOpen, setDhtDialogOpen] = useState(false);
     const [kiyeovoDialogOpen, setKiyeovoDialogOpen] = useState(false);
     const [isDHTConnected, setIsDHTConnected] = useState<boolean | null>(null);
@@ -25,12 +27,14 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
     const [error, setError] = useState<string | undefined>(undefined);
     const [isTorEnabled, setIsTorEnabled] = useState<boolean>(false);
     const isConnected = useSelector((state: RootState) => state.user.connected);
+    const isRegistered = useSelector((state: RootState) => state.user.registered);
 
     const dispatch = useDispatch();
     const { toast } = useToast();
 
     // Ref to track latest newConversationDialogOpen value without recreating listeners
     const newConversationDialogOpenRef = useRef(newConversationDialogOpen);
+    const attemptedAutoRegisterRef = useRef(false);
 
     // Keep ref in sync with state
     useEffect(() => {
@@ -61,6 +65,19 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
             console.log('DHT connection status:', status.connected);
             setIsDHTConnected(status.connected);
             dispatch(setConnected(status.connected));
+            if (!status.connected) {
+                attemptedAutoRegisterRef.current = false;
+                return;
+            }
+            if (status.connected && !isRegistered && !attemptedAutoRegisterRef.current) {
+                attemptedAutoRegisterRef.current = true;
+                void window.kiyeovoAPI.attemptAutoRegister().then((result) => {
+                    if (result.success && result.username) {
+                        dispatch(setUsername(result.username));
+                        dispatch(setRegistered(true));
+                    }
+                });
+            }
         });
 
         // Listen for key exchange sent event (to close dialog immediately)
@@ -78,7 +95,7 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
             unsubStatus();
             unsubSent();
         };
-    }, [dispatch]);
+    }, [dispatch, isRegistered]);
 
     useEffect(() => {
         if (isConnected) {
@@ -159,23 +176,35 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ }) => {
     }
 
     return <>
-        <div className="w-full p-4 flex">
-            <div className="w-full flex items-center justify-between">
+        <div className={collapsed ? "w-full p-3 flex flex-col items-center gap-3" : "w-full p-4 flex"}>
+            <div className={collapsed ? "flex flex-col items-center gap-3" : "w-full flex items-center justify-between"}>
                 <div className="w-10 h-10 cursor-pointer rounded-full border border-primary/50 flex items-center justify-center glow-border" onClick={handleShowKiyeovoDialog}>
                     <Logo version="2" />
                 </div>
-                <button
-                    onClick={handleShowDhtDialog}
-                    className={`flex cursor-pointer items-center gap-2 px-2 py-1 rounded-md transition-colors hover:bg-sidebar-accent group ${isDHTConnected === null ? "text-muted-foreground" : isDHTConnected ? "text-success" : "text-destructive"}`}
-                >
-                    <span className="font-mono text-xs uppercase tracking-wider">
-                        {isDHTConnected === null ? "Connecting..." : isDHTConnected ? `Connected (${isTorEnabled ? 'tor' : 'local'})` : "Offline"}
-                    </span>
-                    <span className={`w-2 h-2 rounded-full mb-0.5 ${isDHTConnected === null ? "bg-muted-foreground" : isDHTConnected ? "bg-success pulse-online" : "bg-destructive"}`} />
-                </button>
+                {collapsed ? (
+                    <button
+                        onClick={handleShowDhtDialog}
+                        className="flex cursor-pointer items-center justify-center w-8 h-8 rounded-md transition-colors hover:bg-sidebar-accent"
+                        title={isDHTConnected === null ? "Connecting..." : isDHTConnected ? `Connected (${isTorEnabled ? 'tor' : 'local'})` : "Offline"}
+                        aria-label="DHT status"
+                    >
+                        <span className={`w-2.5 h-2.5 rounded-full ${isDHTConnected === null ? "bg-muted-foreground" : isDHTConnected ? "bg-success pulse-online" : "bg-destructive"}`} />
+                    </button>
+                ) : (
+                    <button
+                        onClick={handleShowDhtDialog}
+                        className={`flex cursor-pointer items-center gap-2 px-2 py-1 rounded-md transition-colors hover:bg-sidebar-accent group ${isDHTConnected === null ? "text-muted-foreground" : isDHTConnected ? "text-success" : "text-destructive"}`}
+                    >
+                        <span className="font-mono text-xs uppercase tracking-wider">
+                            {isDHTConnected === null ? "Connecting..." : isDHTConnected ? `Connected (${isTorEnabled ? 'tor' : 'local'})` : "Offline"}
+                        </span>
+                        <span className={`w-2 h-2 rounded-full mb-0.5 ${isDHTConnected === null ? "bg-muted-foreground" : isDHTConnected ? "bg-success pulse-online" : "bg-destructive"}`} />
+                    </button>
+                )}
                 <DropdownMenu
                     open={dropdownOpen}
                     onOpenChange={setDropdownOpen}
+                    align={collapsed ? "start" : "end"}
                     trigger={
                         <Button
                             variant="ghost"

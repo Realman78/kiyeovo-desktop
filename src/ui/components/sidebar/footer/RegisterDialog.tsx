@@ -23,9 +23,17 @@ interface RegisterDialogProps {
   onRegister: (username: string, rememberMe: boolean) => Promise<void>;
   backendError?: string;
   isRegistering?: boolean;
+  initialUsername?: string;
 }
 
-const RegisterDialog = ({ open, onOpenChange, onRegister, backendError, isRegistering }: RegisterDialogProps) => {
+const RegisterDialog = ({
+  open,
+  onOpenChange,
+  onRegister,
+  backendError,
+  isRegistering,
+  initialUsername
+}: RegisterDialogProps) => {
   const [username, setUsername] = useState("");
   const [validationError, setValidationError] = useState("");
   const [isCopied, setIsCopied] = useState(false);
@@ -62,9 +70,33 @@ const RegisterDialog = ({ open, onOpenChange, onRegister, backendError, isRegist
   };
 
   useEffect(() => {
-    if (!open) {
+    if (open) {
+      const initial = initialUsername || "";
+      setUsername(initial);
+      setValidationError("");
+      if (!initial) {
+        void window.kiyeovoAPI.getLastUsername().then((result) => {
+          if (result.username) {
+            setUsername(result.username);
+          }
+        });
+      }
+      return;
+    }
+
+    if (!isRegistering) {
       setUsername("");
       setValidationError("");
+    }
+  }, [open, isRegistering, initialUsername]);
+
+  useEffect(() => {
+    if (open) {
+      const loadAutoRegister = async () => {
+        const result = await window.kiyeovoAPI.getAutoRegister();
+        setRememberMe(result.autoRegister);
+      };
+      loadAutoRegister();
     }
   }, [open]);
 
@@ -72,7 +104,7 @@ const RegisterDialog = ({ open, onOpenChange, onRegister, backendError, isRegist
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-w-2xl">
         <DialogHeader>
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-primary/20 border border-primary/50 flex items-center justify-center">
@@ -88,7 +120,7 @@ const RegisterDialog = ({ open, onOpenChange, onRegister, backendError, isRegist
         </DialogHeader>
 
         <form onSubmit={handleSubmit}>
-          <DialogBody className="space-y-4">
+          <DialogBody className="space-y-4 max-h-[60vh] overflow-y-auto">
             <div>
               <label className="block text-sm font-bold text-foreground mb-2">
                 Peer ID
@@ -194,7 +226,7 @@ const RegisterDialog = ({ open, onOpenChange, onRegister, backendError, isRegist
               variant="outline"
               onClick={() => onOpenChange(false)}
             >
-              Cancel
+              Close
             </Button>
             <Button type="submit" disabled={isRegistering || !isConnected || !username || !!validateUsername(username, peerId)}>
               {isRegistering ? 'Registering...' : 'Register'}

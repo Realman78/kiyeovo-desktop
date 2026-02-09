@@ -164,7 +164,7 @@ export const FILE_ACCEPTANCE_TIMEOUT = 5 * 60 * 1000; // 5 minutes
 export const DATABASE_CLEANUP_INTERVAL = 30 * 60 * 1000; // 30 minutes
 export const MAX_MESSAGES_PER_STORE = 20;
 export const MESSAGE_TTL = 7 * 24 * 60 * 60 * 1000;
-
+export const DECRYPTION_TIMEOUT = 60 * 1000; // 60 seconds
 /**
  * Other
  */

@@ -10,8 +10,10 @@ import { generateKeyPairSync } from 'crypto';
 import { generalErrorHandler } from '../utils/general-error.js';
 import { generateMnemonic, mnemonicToSeedSync, validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
+import { Worker } from 'worker_threads';
 import type { ChatDatabase, EncryptedUserIdentityDb } from './db/database.js';
 import type { PasswordResponse } from '../types.js';
+import { DECRYPTION_TIMEOUT } from '../constants.js';
 
 // Try to import keytar for OS keychain support
 let keytar: any = null;
@@ -55,6 +57,12 @@ interface ScryptParams {
 interface PasswordValidationResult {
     valid: boolean
     message?: string
+}
+
+interface IdentityDecryptWorkerResponse {
+    ok: boolean
+    decrypted?: Uint8Array
+    error?: string
 }
 
 export class EncryptedUserIdentity {
@@ -197,7 +205,6 @@ export class EncryptedUserIdentity {
         database: ChatDatabase
     ): Promise<EncryptedUserIdentity> {
         let passwordBytes: Uint8Array | null = null;
-        let key: Uint8Array | null = null;
         let decryptedBytes: Uint8Array | null = null;
         let errorMessage: string | undefined = undefined;
         let showRecoveryOption = false;
@@ -249,11 +256,11 @@ export class EncryptedUserIdentity {
                 // Normal password attempt
                 passwordBytes = new TextEncoder().encode(response.password);
                 console.log('Decrypting identity (this may take a moment)...');
-                sendStatus('Decrypting identity (this may take a moment)...', 'loadEncrypted');
-                key = scrypt(passwordBytes, encryptedUserIdentity.salt, EncryptedUserIdentity.SCRYPT_PARAMS);
-
-                const aes = gcm(key, encryptedUserIdentity.nonce);
-                decryptedBytes = aes.decrypt(encryptedUserIdentity.encrypted_data);
+                sendStatus('Decrypting identity...', 'loadEncrypted');
+                decryptedBytes = await EncryptedUserIdentity.decryptIdentityPayloadInWorker(
+                    passwordBytes,
+                    encryptedUserIdentity
+                );
                 const decryptedJson = new TextDecoder().decode(decryptedBytes);
                 const parsedData = JSON.parse(decryptedJson);
 
@@ -277,7 +284,6 @@ export class EncryptedUserIdentity {
 
                 // Clear sensitive data and login attempts
                 if (passwordBytes) passwordBytes.fill(0);
-                if (key) key.fill(0);
                 if (decryptedBytes) decryptedBytes.fill(0);
                 database.clearLoginAttempts(encryptedUserIdentity.peer_id);
 
@@ -285,7 +291,6 @@ export class EncryptedUserIdentity {
             } catch (error: unknown) {
                 // Clean up sensitive data
                 if (passwordBytes) passwordBytes.fill(0);
-                if (key) key.fill(0);
                 if (decryptedBytes) decryptedBytes.fill(0);
 
                 if (!(error instanceof Error)) {
@@ -318,6 +323,69 @@ export class EncryptedUserIdentity {
         throw new Error('Failed to load encrypted identity after 100 attempts');
     }
 
+    private static async decryptIdentityPayloadInWorker(
+        passwordBytes: Uint8Array,
+        encryptedUserIdentity: EncryptedUserIdentityDb
+    ): Promise<Uint8Array> {
+        return await new Promise((resolve, reject) => {
+            const worker = new Worker(
+                new URL('../workers/identity-decrypt-worker.js', import.meta.url)
+            );
+            let settled = false;
+
+            const timeout = setTimeout(() => {
+                if (settled) return;
+                settled = true;
+                void worker.terminate();
+                reject(new Error('Identity decryption timed out'));
+            }, DECRYPTION_TIMEOUT); // if 60 seconds is not enough, brother, buy a new computer
+
+            const finish = (callback: () => void): void => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timeout);
+                callback();
+            };
+
+            worker.once('message', (message: IdentityDecryptWorkerResponse) => {
+                finish(() => {
+                    void worker.terminate();
+                    if (!message.ok) {
+                        reject(new Error(message.error || 'Failed to decrypt identity'));
+                        return;
+                    }
+                    if (!message.decrypted) {
+                        reject(new Error('Identity worker returned empty payload'));
+                        return;
+                    }
+                    resolve(new Uint8Array(message.decrypted));
+                });
+            });
+
+            worker.once('error', (error: Error) => {
+                finish(() => {
+                    void worker.terminate();
+                    reject(error);
+                });
+            });
+
+            worker.once('exit', (code: number) => {
+                if (settled || code === 0) return;
+                finish(() => {
+                    reject(new Error(`Identity worker exited with code ${code}`));
+                });
+            });
+
+            worker.postMessage({
+                password: passwordBytes,
+                salt: encryptedUserIdentity.salt,
+                nonce: encryptedUserIdentity.nonce,
+                encryptedData: encryptedUserIdentity.encrypted_data,
+                scryptParams: EncryptedUserIdentity.SCRYPT_PARAMS
+            });
+        });
+    }
+
     async saveEncrypted(database: ChatDatabase, password: Uint8Array, sendStatus: (message: string, stage: any) => void, recoveryPhrase?: string): Promise<void> {
         let key: Uint8Array | null = null;
         let plaintext: Uint8Array | null = null;
@@ -328,7 +396,7 @@ export class EncryptedUserIdentity {
             const nonce = randomBytes(12);
 
             console.log('Encrypting identity (this may take a moment)...');
-            sendStatus("Encrypting identity (this may take a moment)...", "Save encrypted")
+            sendStatus("Encrypting identity...", "Save encrypted")
             key = scrypt(password, salt, EncryptedUserIdentity.SCRYPT_PARAMS);
 
             password.fill(0);

@@ -211,6 +211,32 @@ export class UsernameRegistry {
     return true;
   }
 
+  async attemptAutoRegister(): Promise<string | null> {
+    const autoRegister = this.database.getSetting('auto_register');
+    if (autoRegister !== 'true') {
+      return null;
+    }
+
+    const userDb = this.database.getUserByPeerId(this.node.peerId.toString());
+    const lastUsername = this.database.getLastUsername(this.node.peerId.toString());
+
+    if (!lastUsername || !userDb) {
+      return null;
+    }
+
+    if (this.currentUsername === lastUsername) {
+      return lastUsername;
+    }
+
+    const peers = this.node.getConnections();
+    if (peers.length === 0) {
+      return null;
+    }
+
+    const success = await this.register(lastUsername, true);
+    return success ? lastUsername : null;
+  }
+
   // Use this when you want to go offline or stop using a username temporarily
   async unregister(username: string): Promise<{ usernameUnregistered: boolean; peerIdUnregistered: boolean }> {
     if (!this.userIdentity) {

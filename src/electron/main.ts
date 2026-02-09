@@ -1,8 +1,9 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu } from 'electron';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { isDev } from './util.js';
-import { initializeP2PCore, InitStatus, IPC_CHANNELS, KeyExchangeEvent, type P2PCore, type ContactRequestEvent, type ChatCreatedEvent, type KeyExchangeFailedEvent, type MessageReceivedEvent, type FileTransferProgressEvent, type FileTransferCompleteEvent, type FileTransferFailedEvent, type PendingFileReceivedEvent, type TorConfig } from '../core/index.js';
+import { initializeP2PCore, InitStatus, IPC_CHANNELS, KeyExchangeEvent, type P2PCore, type ContactRequestEvent, type ChatCreatedEvent, type KeyExchangeFailedEvent, type MessageReceivedEvent, type FileTransferProgressEvent, type FileTransferCompleteEvent, type FileTransferFailedEvent, type PendingFileReceivedEvent, type TorConfig, type PasswordRequest } from '../core/index.js';
 import { ensureAppDataDir } from '../core/utils/miscellaneous.js';
 import { requestPasswordFromUI } from './password-prompt.js';
 import { setupIPCHandlers } from './ipc-handlers.js';
@@ -17,6 +18,7 @@ let torManager: TorManager | null = null;
 let lastInitStatus: InitStatus | null = null;
 let initError: string | null = null;
 let isCoreInitialized = false;
+let pendingPasswordRequest: PasswordRequest | null = null;
 
 // Enforce single instance
 const gotTheLock = app.requestSingleInstanceLock();
@@ -35,10 +37,84 @@ if (!gotTheLock) {
   });
 }
 
+// Window bounds persistence
+interface WindowBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  isMaximized: boolean;
+}
+
+function getWindowBoundsPath(): string {
+  const dataDir = ensureAppDataDir();
+  return path.join(dataDir, 'window-bounds.json');
+}
+
+function loadWindowBounds(): WindowBounds | null {
+  try {
+    const boundsPath = getWindowBoundsPath();
+    if (fs.existsSync(boundsPath)) {
+      const data = fs.readFileSync(boundsPath, 'utf-8');
+      return JSON.parse(data) as WindowBounds;
+    }
+  } catch (error) {
+    console.error('[Electron] Failed to load window bounds:', error);
+  }
+  return null;
+}
+
+function saveWindowBounds(win: BrowserWindow): void {
+  try {
+    const bounds = win.getBounds();
+    const data: WindowBounds = {
+      ...bounds,
+      isMaximized: win.isMaximized()
+    };
+    fs.writeFileSync(getWindowBoundsPath(), JSON.stringify(data));
+  } catch (error) {
+    console.error('[Electron] Failed to save window bounds:', error);
+  }
+}
+
+function setupMinimalMenu() {
+  const template: Electron.MenuItemConstructorOptions[] = [
+    ...(process.platform === 'darwin' ? [{
+      label: app.name,
+      submenu: [
+        { role: 'quit' as const }
+      ]
+    }] : []),
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' as const },
+        { role: 'redo' as const },
+        { type: 'separator' as const },
+        { role: 'cut' as const },
+        { role: 'copy' as const },
+        { role: 'paste' as const },
+        { role: 'selectAll' as const }
+      ]
+    }
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 function createMainWindow() {
+  const savedBounds = loadWindowBounds();
+
   const win = new BrowserWindow({
-    width: 1200,
-    height: 800,
+    // Use saved bounds if available, otherwise Electron will use defaults (centered)
+    ...(savedBounds && {
+      width: savedBounds.width,
+      height: savedBounds.height,
+      x: savedBounds.x,
+      y: savedBounds.y,
+    }),
+    minWidth: 880,
+    minHeight: 600,
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -46,6 +122,16 @@ function createMainWindow() {
       sandbox: false // Need to disable sandbox for IPC to work properly
     }
   });
+
+  // Restore maximized state or maximize on first run
+  if (savedBounds?.isMaximized || !savedBounds) {
+    win.maximize();
+  }
+
+  // Save bounds when window is resized, moved, or closed
+  win.on('resize', () => saveWindowBounds(win));
+  win.on('move', () => saveWindowBounds(win));
+  win.on('close', () => saveWindowBounds(win));
 
   // Load UI
   if (isDev()) {
@@ -215,7 +301,20 @@ async function initializeP2PAfterWindow() {
       torConfig,
       passwordPrompt: async (prompt: string, isNew: boolean, recoveryPhrase?: string, prefilledPassword?: string, errorMessage?: string, cooldownSeconds?: number, showRecoveryOption?: boolean, keychainAvailable?: boolean) => {
         console.log('[Electron] Requesting password from UI...');
-        const response = await requestPasswordFromUI(mainWindow!, prompt, isNew, recoveryPhrase, prefilledPassword, errorMessage, cooldownSeconds, showRecoveryOption, keychainAvailable);
+        const response = await requestPasswordFromUI(
+          mainWindow!,
+          prompt,
+          isNew,
+          recoveryPhrase,
+          prefilledPassword,
+          errorMessage,
+          cooldownSeconds,
+          showRecoveryOption,
+          keychainAvailable,
+          (request) => {
+            pendingPasswordRequest = request;
+          }
+        );
         return response;
       },
       onStatus: (message: string, stage: InitStatus['stage']) => {
@@ -284,11 +383,19 @@ async function initializeApp() {
   try {
     console.log('[Electron] Starting Kiyeovo Desktop...');
 
+    // Setup minimal menu (keeps keyboard shortcuts working)
+    setupMinimalMenu();
+
     // Setup IPC handlers
     setupIPCHandlers(ipcMain, () => p2pCore, () => mainWindow);
     console.log('[Electron] IPC handlers registered');
     ipcMain.handle(IPC_CHANNELS.INIT_STATE, () => {
-      return { initialized: isCoreInitialized, status: lastInitStatus, error: initError };
+      return {
+        initialized: isCoreInitialized,
+        status: lastInitStatus,
+        error: initError,
+        pendingPasswordRequest,
+      };
     });
 
     // Create window first
@@ -300,6 +407,11 @@ async function initializeApp() {
       console.log('[Electron] Window loaded, starting P2P initialization...');
       // Start P2P initialization after window is ready
       void initializeP2PAfterWindow();
+    });
+    mainWindow.webContents.on('did-finish-load', () => {
+      if (pendingPasswordRequest && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(IPC_CHANNELS.PASSWORD_REQUEST, pendingPasswordRequest);
+      }
     });
 
   } catch (error) {
@@ -354,7 +466,20 @@ app.on('before-quit', async (event) => {
       }
     }
 
+    const restartRequested = Boolean((app as typeof app & { __kiyeovoRestartRequested?: boolean }).__kiyeovoRestartRequested);
+    if (restartRequested) {
+      (app as typeof app & { __kiyeovoRestartRequested?: boolean }).__kiyeovoRestartRequested = false;
+      app.relaunch();
+    }
+
     app.exit(0);
+    return;
+  }
+
+  const restartRequested = Boolean((app as typeof app & { __kiyeovoRestartRequested?: boolean }).__kiyeovoRestartRequested);
+  if (restartRequested) {
+    (app as typeof app & { __kiyeovoRestartRequested?: boolean }).__kiyeovoRestartRequested = false;
+    app.relaunch();
   }
 });
 

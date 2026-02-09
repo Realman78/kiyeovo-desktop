@@ -164,6 +164,13 @@ export const FileMessage: React.FC<FileMessageProps> = ({
     return iconMap[extension || ''] || '📎';
   };
 
+  const specificErrorText = () => {
+    if (transferError?.includes('dial request has no valid addresses')) {
+      return "User offline or not reachable"
+    }
+    return transferError;
+  };
+
   return (
     <div className="flex flex-col gap-2 w-[250px]">
       <div className="flex items-center justify-between gap-3">
@@ -197,7 +204,7 @@ export const FileMessage: React.FC<FileMessageProps> = ({
 
       {transferStatus === 'failed' && (
         <div className="text-xs">
-          {transferError || 'Transfer failed'}
+          {specificErrorText() || 'Transfer failed'}
         </div>
       )}
 

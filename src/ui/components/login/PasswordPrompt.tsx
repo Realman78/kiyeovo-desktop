@@ -54,14 +54,27 @@ type PasswordPromptProps = {
   rememberMe: boolean;
   setRememberMe: React.Dispatch<React.SetStateAction<boolean>>;
   isSubmitting: boolean;
+  initStatus: string;
 }
 
-export function PasswordPrompt({ passwordRequest, handleSubmit, password, setPassword, confirmPassword, setConfirmPassword, rememberMe, setRememberMe, isSubmitting }: PasswordPromptProps) {
+export function PasswordPrompt({
+  passwordRequest,
+  handleSubmit,
+  password,
+  setPassword,
+  confirmPassword,
+  setConfirmPassword,
+  rememberMe,
+  setRememberMe,
+  isSubmitting,
+  initStatus
+}: PasswordPromptProps) {
   const [showPassword, setShowPassword] = useState(false);
   const [validationError, setValidationError] = useState<string>('');
   const [showRecoveryDialog, setShowRecoveryDialog] = useState(false);
   const [pendingEvent, setPendingEvent] = useState<React.FormEvent | null>(null);
   const [cooldownRemaining, setCooldownRemaining] = useState<number>(0);
+  const [cooldownUntilMs, setCooldownUntilMs] = useState<number | null>(null);
   const [showAlternativeMethods, setShowAlternativeMethods] = useState(false);
   const [showRecoveryPhraseDialog, setShowRecoveryPhraseDialog] = useState(false);
   const [recoveryPhraseInput, setRecoveryPhraseInput] = useState('');
@@ -86,26 +99,32 @@ export function PasswordPrompt({ passwordRequest, handleSubmit, password, setPas
   }, [passwordRequest]);
 
   useEffect(() => {
-    if (passwordRequest.cooldownSeconds !== undefined) {
-      setCooldownRemaining(passwordRequest.cooldownSeconds);
+    if (passwordRequest.cooldownUntil !== undefined) {
+      setCooldownUntilMs(passwordRequest.cooldownUntil);
+      return;
     }
-  }, [passwordRequest.cooldownSeconds]);
+    if (passwordRequest.cooldownSeconds !== undefined) {
+      setCooldownUntilMs(Date.now() + passwordRequest.cooldownSeconds * 1000);
+      return;
+    }
+    setCooldownUntilMs(null);
+  }, [passwordRequest.cooldownSeconds, passwordRequest.cooldownUntil]);
 
   useEffect(() => {
-    if (cooldownRemaining <= 0) return;
+    if (!cooldownUntilMs) {
+      setCooldownRemaining(0);
+      return;
+    }
 
-    const timer = setInterval(() => {
-      setCooldownRemaining(prev => {
-        if (prev <= 1) {
-          clearInterval(timer);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
+    const tick = () => {
+      const remaining = Math.max(0, Math.ceil((cooldownUntilMs - Date.now()) / 1000));
+      setCooldownRemaining(remaining);
+    };
 
+    tick();
+    const timer = setInterval(tick, 1000);
     return () => clearInterval(timer);
-  }, [cooldownRemaining]);
+  }, [cooldownUntilMs]);
 
   useEffect(() => {
     if (isNewPassword && password.length > 0) {
@@ -311,7 +330,7 @@ export function PasswordPrompt({ passwordRequest, handleSubmit, password, setPas
           {isSubmitting ? (
             <>
               <Loader2 className="w-4 h-4 animate-spin" />
-              Processing...
+              {initStatus || 'Processing...'}
             </>
           ) : isLocked ? (
             <>
@@ -321,7 +340,7 @@ export function PasswordPrompt({ passwordRequest, handleSubmit, password, setPas
           ) : (
             <>
               <Shield className="w-4 h-4" />
-              {isNewPassword ? 'Create Identity' : 'Log In'}
+              {isNewPassword ? 'Create Identity' : 'Decrypt & Access'}
             </>
           )}
         </Button>

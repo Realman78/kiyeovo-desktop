@@ -11,6 +11,11 @@ import { homedir } from 'os';
 import { basename, join } from 'path';
 import { copyFile, stat } from 'fs/promises';
 
+function requestAppRestart(): void {
+  (app as typeof app & { __kiyeovoRestartRequested?: boolean }).__kiyeovoRestartRequested = true;
+  app.quit();
+}
+
 /**
  * Setup all IPC handlers for communication between renderer and main process
  */
@@ -101,17 +106,51 @@ function setupRegistrationHandlers(
     try {
       const p2pCore = getP2PCore();
       if (!p2pCore) {
-        return { username: null, isRegistered: false };
+        return { peerId: null, username: null, isRegistered: false };
       }
 
+      const peerId = p2pCore.node.peerId.toString();
       const username = p2pCore.usernameRegistry.getCurrentUsername();
       return { 
+        peerId,
         username: username || null, 
         isRegistered: !!username 
       };
     } catch (error) {
       console.error('[IPC] Failed to get user state:', error);
-      return { username: null, isRegistered: false };
+      return { peerId: null, username: null, isRegistered: false };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.GET_LAST_USERNAME, async () => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { username: null };
+      }
+      const peerId = p2pCore.node.peerId.toString();
+      const username = p2pCore.database.getLastUsername(peerId);
+      return { username: username ?? null };
+    } catch (error) {
+      console.error('[IPC] Failed to get last username:', error);
+      return { username: null };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.ATTEMPT_AUTO_REGISTER, async () => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, username: null, error: 'P2P core not initialized' };
+      }
+      const username = await p2pCore.usernameRegistry.attemptAutoRegister();
+      if (username) {
+        return { success: true, username };
+      }
+      return { success: false, username: null };
+    } catch (error) {
+      console.error('[IPC] Failed to attempt auto-register:', error);
+      return { success: false, username: null, error: error instanceof Error ? error.message : 'Failed to auto-register' };
     }
   });
 
@@ -1280,8 +1319,7 @@ function setupChatSettingsHandlers(
 function setupAppHandlers(ipcMain: IpcMain, getP2PCore: () => P2PCore | null): void {
   ipcMain.handle(IPC_CHANNELS.RESTART_APP, async () => {
     try {
-      app.relaunch();
-      app.exit(0);
+      requestAppRestart();
       return { success: true, error: null };
     } catch (error) {
       console.error('[IPC] Failed to restart app:', error);
@@ -1302,8 +1340,7 @@ function setupAppHandlers(ipcMain: IpcMain, getP2PCore: () => P2PCore | null): v
 
       console.log('[IPC] Database wiped. Restarting app...');
 
-      app.relaunch();
-      app.exit(0);
+      requestAppRestart();
 
       return { success: true, error: null };
     } catch (error) {
@@ -1347,9 +1384,7 @@ function setupAppHandlers(ipcMain: IpcMain, getP2PCore: () => P2PCore | null): v
 
       console.log('[IPC] Database restored. Restarting app...');
 
-      // Restart the app
-      app.relaunch();
-      app.exit(0);
+      requestAppRestart();
 
       return { success: true, error: null };
     } catch (error) {
@@ -1395,8 +1430,7 @@ function setupAppHandlers(ipcMain: IpcMain, getP2PCore: () => P2PCore | null): v
       console.log('[IPC] Database file verified');
 
       console.log('[IPC] Database restored. Restarting app...');
-      app.relaunch();
-      app.exit(0);
+      requestAppRestart();
 
       return { success: true, error: null };
     } catch (error) {

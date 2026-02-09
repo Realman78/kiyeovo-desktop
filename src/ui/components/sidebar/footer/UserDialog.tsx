@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { AtSign, Shield, AlertCircle, Copy, Check, User, Edit2, X, Download, Lock, Key, ChevronDown, CheckCircle } from "lucide-react";
+import { AtSign, Shield, AlertCircle, Copy, Check, User, Edit2, X, Download, Lock, Key, ChevronDown, CheckCircle, Loader2 } from "lucide-react";
 import {
     Dialog,
     DialogContent,
@@ -31,6 +31,7 @@ const UserDialog = ({ open, onOpenChange, onRegister, backendError, isRegisterin
     const [isEditingUsername, setIsEditingUsername] = useState(false);
     const [autoRegister, setAutoRegister] = useState(false);
     const [isExporting, setIsExporting] = useState(false);
+    const [isUnregistering, setIsUnregistering] = useState(false);
     const [isExportExpanded, setIsExportExpanded] = useState(false);
     const [exportPassword, setExportPassword] = useState("");
     const [exportPasswordConfirm, setExportPasswordConfirm] = useState("");
@@ -73,21 +74,27 @@ const UserDialog = ({ open, onOpenChange, onRegister, backendError, isRegisterin
             setUnregisterError("Username not found");
             return;
         }
-        const result = await window.kiyeovoAPI.unregister(user.username);
-        if (result.usernameUnregistered && result.peerIdUnregistered) {
-            onOpenChange(false);
-            toast.info("Username and peer ID unregistered successfully");
-        } else if (result.usernameUnregistered) {
-            toast.info("Username unregistered successfully. Peer ID is still registered");
-        } else if (result.peerIdUnregistered) {
-            toast.info("Peer ID unregistered successfully. Username is still registered");
-        } else {
-            setUnregisterError("Failed to unregister username and peer ID");
-        }
+        setIsUnregistering(true);
+        setUnregisterError("");
+        try {
+            const result = await window.kiyeovoAPI.unregister(user.username);
+            if (result.usernameUnregistered && result.peerIdUnregistered) {
+                onOpenChange(false);
+                toast.info("Username and peer ID unregistered successfully");
+            } else if (result.usernameUnregistered) {
+                toast.info("Username unregistered successfully. Peer ID is still registered");
+            } else if (result.peerIdUnregistered) {
+                toast.info("Peer ID unregistered successfully. Username is still registered");
+            } else {
+                setUnregisterError("Failed to unregister username and peer ID");
+            }
 
-        if (result.usernameUnregistered || result.peerIdUnregistered) {
-            dispatch(setUsername(""));
-            dispatch(setRegistered(false));
+            if (result.usernameUnregistered || result.peerIdUnregistered) {
+                dispatch(setUsername(""));
+                dispatch(setRegistered(false));
+            }
+        } finally {
+            setIsUnregistering(false);
         }
     };
 
@@ -499,8 +506,16 @@ const UserDialog = ({ open, onOpenChange, onRegister, backendError, isRegisterin
                                 type="button"
                                 variant="destructive"
                                 onClick={() => handleUnregister()}
+                                disabled={isUnregistering}
                             >
-                                Unregister
+                                {isUnregistering ? (
+                                    <>
+                                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                        Unregistering...
+                                    </>
+                                ) : (
+                                    "Unregister"
+                                )}
                             </Button>
                             <Button
                                 type="button"

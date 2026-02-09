@@ -1,4 +1,5 @@
 import { type FC, useState, useEffect, useCallback } from 'react'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { SidebarHeader } from './header/SidebarHeader'
 import { ChatList } from './chats/ChatList'
 import { SidebarFooter } from './footer/SidebarFooter'
@@ -8,11 +9,12 @@ import { addContactAttempt, removeContactAttempt, setContactAttempts } from '../
 import type { RootState } from '../../state/store'
 import { ContactAttemptList } from './contact-attempts/ContactAttemptList'
 import { PendingKeyExchangeList } from './pending-key-exchange/PendingKeyExchangeList'
-import { setConnected, setRegistered, setUsername } from '../../state/slices/userSlice'
+import { setConnected, setPeerId, setRegistered, setUsername } from '../../state/slices/userSlice'
 
 export const Sidebar: FC = () => {
   const [isLoadingContactAttempts, setIsLoadingContactAttempts] = useState(true);
   const [contactAttemptsError, setContactAttemptsError] = useState<string | null>(null);
+  const [isCollapsed, setIsCollapsed] = useState(false);
   const contactAttempts = useSelector((state: RootState) => state.chat.contactAttempts)
   const dispatch = useDispatch();
 
@@ -46,6 +48,9 @@ export const Sidebar: FC = () => {
     // Pull current user state on mount (solves race condition)
     const checkUserState = async () => {
       const userState = await window.kiyeovoAPI.getUserState();
+      if (userState.peerId) {
+        dispatch(setPeerId(userState.peerId));
+      }
       if (userState.username && userState.isRegistered) {
         console.log('[UI] Restored username from state:', userState.username);
         dispatch(setUsername(userState.username));
@@ -75,13 +80,28 @@ export const Sidebar: FC = () => {
   }, []);
 
   return (
-    <div className='w-96 h-full bg-sidebar border-r border-sidebar-border flex flex-col'>
-      <SidebarHeader />
+    <div className={`relative h-full bg-sidebar border-r border-sidebar-border flex flex-col transition-[width] duration-300 ease-in-out ${isCollapsed ? 'w-16' : 'w-96'}`}>
+      <SidebarHeader collapsed={isCollapsed} />
 
-      {contactAttempts.length > 0 && <ContactAttemptList isLoadingContactAttempts={isLoadingContactAttempts} contactAttemptsError={contactAttemptsError} handleContactAttemptExpired={handleContactAttemptExpired} />}
-      <PendingKeyExchangeList />
-      <ChatList />
-      <SidebarFooter />
+      {!isCollapsed && contactAttempts.length > 0 && (
+        <ContactAttemptList
+          isLoadingContactAttempts={isLoadingContactAttempts}
+          contactAttemptsError={contactAttemptsError}
+          handleContactAttemptExpired={handleContactAttemptExpired}
+        />
+      )}
+      {!isCollapsed && <PendingKeyExchangeList />}
+      {!isCollapsed && <ChatList />}
+      {isCollapsed && <div className="flex-1" />}
+      <SidebarFooter collapsed={isCollapsed} />
+      <button
+        type="button"
+        onClick={() => setIsCollapsed((prev) => !prev)}
+        className="absolute cursor-pointer top-1/2 right-0 -translate-y-1/2 translate-x-1/2 w-6 h-6 rounded-full border border-sidebar-border bg-sidebar-accent/70 hover:bg-sidebar-accent text-primary/80 hover:text-primary flex items-center justify-center transition-colors duration-200"
+        aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+      >
+        {isCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+      </button>
     </div>
   )
 }

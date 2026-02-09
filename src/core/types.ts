@@ -463,6 +463,8 @@ export const IPC_CHANNELS = {
   // Register
   REGISTER_REQUEST: 'register:request',
   GET_USER_STATE: 'user:getState',
+  GET_LAST_USERNAME: 'user:getLastUsername',
+  ATTEMPT_AUTO_REGISTER: 'user:attemptAutoRegister',
   GET_AUTO_REGISTER: 'user:getAutoRegister',
   SET_AUTO_REGISTER: 'user:setAutoRegister',
   UNREGISTER_REQUEST: 'user:unregister',
@@ -577,6 +579,7 @@ export interface PasswordRequest {
   prefilledPassword?: string;
   errorMessage?: string;
   cooldownSeconds?: number;
+  cooldownUntil?: number;
   showRecoveryOption?: boolean;
   keychainAvailable?: boolean;
 }

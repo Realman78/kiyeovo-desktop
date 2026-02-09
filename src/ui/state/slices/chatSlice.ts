@@ -172,6 +172,8 @@ const chatSlice = createSlice({
         if (lastMessage) {
           state.chats[chatIndex].lastMessage = lastMessage.content;
           state.chats[chatIndex].lastMessageTimestamp = lastMessage.timestamp;
+        } else {
+          state.chats[chatIndex].lastMessage = 'SYSTEM: No messages yet';
         }
       }
     },

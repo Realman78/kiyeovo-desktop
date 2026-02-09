@@ -97,10 +97,7 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
     database.setSetting('tor_enabled', config.torConfig.enabled ? 'true' : 'false');
     database.setSetting('tor_socks_port', config.torConfig.socksPort.toString());
     if (config.torConfig.onionAddress) {
-      // Store the announce address for node-setup to use
-      // Format: /onion3/<address-without-.onion>:<port>
-      const onionHost = config.torConfig.onionAddress.replace('.onion', '');
-      // The full announce address will be constructed in node-setup with peerId
+      // Store onion host; node-setup constructs full announce multiaddr later.
       database.setSetting('tor_onion_address', config.torConfig.onionAddress);
       console.log(`[P2P Core] Tor onion address stored: ${config.torConfig.onionAddress}`);
     }

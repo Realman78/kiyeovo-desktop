@@ -6,14 +6,14 @@ import { useToast } from "../../ui/use-toast";
 import { useDispatch, useSelector } from "react-redux";
 import type { RootState } from "../../../state/store";
 import { SendFileDialog } from "./SendFileDialog";
-import { addMessage, updateFileTransferStatus } from "../../../state/slices/chatSlice";
+import { addMessage, removeMessageById, updateChat, updateFileTransferStatus } from "../../../state/slices/chatSlice";
 import { FILE_ACCEPTANCE_TIMEOUT } from "../../../constants";
 
 export const ChatInput: FC = () => {
     const { toast } = useToast();
     const dispatch = useDispatch();
-    const [inputQuery, setInputQuery] = useState("");
-    const [isSending, setIsSending] = useState(false);
+    const [draftByChatId, setDraftByChatId] = useState<Record<number, string>>({});
+    const [isSendingByChatId, setIsSendingByChatId] = useState<Record<number, boolean>>({});
     const [fileDialogOpen, setFileDialogOpen] = useState(false);
     const activeChat = useSelector((state: RootState) => state.chat.activeChat);
     const myPeerId = useSelector((state: RootState) => state.user.peerId);
@@ -28,7 +28,19 @@ export const ChatInput: FC = () => {
         }
     }, [activeChat?.id, isBlocked]);
 
-    const handleSendMessage = async (peerIdOrUsername: string, messageContent: string) => {
+    const activeChatId = activeChat?.id;
+    const inputQuery = activeChatId ? (draftByChatId[activeChatId] ?? "") : "";
+    const isSending = activeChatId ? Boolean(isSendingByChatId[activeChatId]) : false;
+
+    const setSendingForChat = (chatId: number, isSendingNow: boolean) => {
+        setIsSendingByChatId((prev) => ({ ...prev, [chatId]: isSendingNow }));
+    };
+
+    const setDraftForChat = (chatId: number, value: string) => {
+        setDraftByChatId((prev) => ({ ...prev, [chatId]: value }));
+    };
+
+    const handleSendMessage = async (peerIdOrUsername: string, messageContent: string, chatId: number) => {
         try {
             const { success, error } = await window.kiyeovoAPI.sendMessage(peerIdOrUsername, messageContent);
 
@@ -41,12 +53,14 @@ export const ChatInput: FC = () => {
             console.error('Failed to send message:', err);
             toast.error(err instanceof Error ? err.message : 'Unexpected error occurred');
         } finally {
-            setIsSending(false);
+            setSendingForChat(chatId, false);
             setTimeout(() => {
-                inputRef.current?.focus();
+                if (activeChat?.id === chatId) {
+                    inputRef.current?.focus();
+                }
             }, 200)
         }
-    }
+    };
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -62,11 +76,12 @@ export const ChatInput: FC = () => {
         if (!inputQuery.trim()) {
             return;
         }
-        setIsSending(true);
+        const chatId = activeChat.id;
+        setSendingForChat(chatId, true);
 
-        await handleSendMessage(activeChat.peerId, inputQuery);
-        setInputQuery('');
-    }
+        await handleSendMessage(activeChat.peerId, inputQuery, chatId);
+        setDraftForChat(chatId, '');
+    };
 
     const handleSendFile = async (filePath: string, fileName: string, fileSize: number) => {
         if (!activeChat?.peerId) {
@@ -74,12 +89,15 @@ export const ChatInput: FC = () => {
             return;
         }
 
+        const previousLastMessage = activeChat.lastMessage;
+        const previousLastMessageTimestamp = activeChat.lastMessageTimestamp;
+        const chatId = activeChat.id;
         const pendingMessageId = `pending-file-${Date.now()}-${Math.random().toString(36).slice(2)}`;
         const transferExpiresAt = Date.now() + FILE_ACCEPTANCE_TIMEOUT;
         try {
             dispatch(addMessage({
                 id: pendingMessageId,
-                chatId: activeChat.id,
+                chatId,
                 senderPeerId: myPeerId || '',
                 senderUsername: myUsername || 'You',
                 content: `${fileName} (${fileSize} bytes)`,
@@ -98,10 +116,22 @@ export const ChatInput: FC = () => {
             if (!result.success) {
                 const errorText = result.error?.toLowerCase() || '';
                 console.log("RESULT ERROR:", result.error);
-                if (errorText.includes('dial request has no valid addresses')) {
+                const failedBeforePersist = errorText.includes('dial request has no valid addresses');
+                if (failedBeforePersist) {
                     toast.error('Cannot send file to offline user');
                 } else if (!errorText.includes('timeout waiting for file acceptance') && !errorText.includes('rejected')) {
                     toast.error(result.error || 'Failed to send file');
+                }
+                if (failedBeforePersist) {
+                    dispatch(removeMessageById({ messageId: pendingMessageId, chatId }));
+                    dispatch(updateChat({
+                        id: chatId,
+                        updates: {
+                            lastMessage: previousLastMessage,
+                            lastMessageTimestamp: previousLastMessageTimestamp
+                        }
+                    }));
+                    return;
                 }
                 const status =
                     errorText.includes('timeout waiting for file acceptance') ? 'expired' :
@@ -119,6 +149,18 @@ export const ChatInput: FC = () => {
             console.error('Error sending file:', error);
             toast.error(error instanceof Error ? error.message : 'Failed to send file');
             const errorText = error instanceof Error ? error.message.toLowerCase() : '';
+            const failedBeforePersist = errorText.includes('dial request has no valid addresses');
+            if (failedBeforePersist) {
+                dispatch(removeMessageById({ messageId: pendingMessageId, chatId }));
+                dispatch(updateChat({
+                    id: chatId,
+                    updates: {
+                        lastMessage: previousLastMessage,
+                        lastMessageTimestamp: previousLastMessageTimestamp
+                    }
+                }));
+                return;
+            }
             const status =
                 errorText.includes('timeout waiting for file acceptance') ? 'expired' :
                 errorText.includes('rejected') ? 'rejected' :
@@ -152,7 +194,10 @@ export const ChatInput: FC = () => {
                 parentClassName="flex flex-1 w-full"
                 value={inputQuery}
                 disabled={isSending || isBlocked}
-                onChange={(e) => setInputQuery(e.target.value)}
+                onChange={(e) => {
+                    if (!activeChat) return;
+                    setDraftForChat(activeChat.id, e.target.value);
+                }}
             />
             <Button
                 type="submit"

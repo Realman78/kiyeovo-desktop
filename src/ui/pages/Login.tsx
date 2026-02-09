@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import type { PasswordRequest } from "../types";
 import { PasswordPrompt } from "../components/login/PasswordPrompt";
 import { Logo } from "../components/icons/Logo";
@@ -13,13 +13,35 @@ export const Login = ({ initStatus }: LoginProps) => {
     const [confirmPassword, setConfirmPassword] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false)
     const [rememberMe, setRememberMe] = useState(false)
+    const previousPasswordRequestRef = useRef<PasswordRequest | null>(null);
 
     useEffect(() => {
+        const restorePendingPasswordRequest = async () => {
+            try {
+                const initState = await window.kiyeovoAPI.getInitState();
+                if (initState.pendingPasswordRequest) {
+                    setPasswordRequest(initState.pendingPasswordRequest);
+                    setIsSubmitting(false);
+                }
+            } catch {
+                // ignore and rely on live password events
+            }
+        };
+        void restorePendingPasswordRequest();
+
         const unsubscribe = window.kiyeovoAPI.onPasswordRequest((request) => {
+            const previousRequest = previousPasswordRequestRef.current;
+            const modeChanged = previousRequest?.isNewPassword !== request.isNewPassword;
+            const isRetryWithError = Boolean(request.errorMessage);
+
+            // Keep typed password on failed retries; reset only on fresh flow/mode changes.
+            if (!isRetryWithError || modeChanged) {
+                setPassword('');
+                setConfirmPassword('');
+            }
             setPasswordRequest(request);
-            setPassword('');
-            setConfirmPassword('');
             setIsSubmitting(false);
+            previousPasswordRequestRef.current = request;
         });
 
         return unsubscribe;
@@ -45,7 +67,8 @@ export const Login = ({ initStatus }: LoginProps) => {
             setConfirmPassword={setConfirmPassword}
             rememberMe={rememberMe}
             setRememberMe={setRememberMe}
-            isSubmitting={isSubmitting} />
+            isSubmitting={isSubmitting}
+            initStatus={initStatus} />
             : <div>{initStatus}</div>}
     </div>
 }

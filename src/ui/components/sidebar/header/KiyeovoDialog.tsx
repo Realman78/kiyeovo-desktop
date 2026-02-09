@@ -73,7 +73,7 @@ export const KiyeovoDialog: FC<KiyeovoDialogProps> = ({ open, onOpenChange }) =>
 
                     {/* Footer */}
                     <div className="pt-4 border-t border-border text-center text-sm text-muted-foreground">
-                        <p>Built with by Marin Dedic</p>
+                        <p>Built by Marin Dedic</p>
                         <p className="text-xs mt-1">© 2026 Kiyeovo. All rights reserved.</p>
                     </div>
                 </DialogBody>

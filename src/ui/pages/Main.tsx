@@ -12,7 +12,6 @@ import { store } from '../state/store';
 export const Main = () => {
   const dispatch = useDispatch();
   const { toast } = useToast();
-  const myPeerId = useSelector((state: RootState) => state.user.peerId);
   const isConnected = useSelector((state: RootState) => state.user.connected);
 
   useNotifications();
@@ -47,6 +46,7 @@ export const Main = () => {
     const unsubMessageReceived = window.kiyeovoAPI.onMessageReceived((data) => {
       console.log(`Message received`);
       console.log(data);
+      const currentPeerId = store.getState().user.peerId;
 
       dispatch(addMessage({
         id: data.messageId,
@@ -57,7 +57,7 @@ export const Main = () => {
         timestamp: data.timestamp,
         messageType: data.messageType || 'text',
         messageSentStatus: data.messageSentStatus,
-        currentUserPeerId: myPeerId,
+        currentUserPeerId: currentPeerId,
         // File transfer fields (if present)
         fileName: data.fileName,
         fileSize: data.fileSize,
@@ -72,13 +72,20 @@ export const Main = () => {
     const unsubChatCreated = window.kiyeovoAPI.onChatCreated((data) => {
       console.log(`[UI] Chat created: ${data.chatId} for ${data.username} (peerId: ${data.peerId})`);
 
+      // Read current state first so we can carry contact-attempt message into the new chat preview/UI.
+      const currentState = store.getState();
+      const sourceContactAttempt = currentState.chat.contactAttempts.find((attempt) => attempt.peerId === data.peerId);
+      const sourcePendingExchange = currentState.chat.pendingKeyExchanges.find((pending) => pending.peerId === data.peerId);
+      const initialMessage = sourceContactAttempt?.messageBody || sourceContactAttempt?.message || sourcePendingExchange?.messageContent || '';
+      const now = Date.now();
+
       const newChat: Chat = {
         id: data.chatId,
         type: 'direct',
         name: data.username,
         peerId: data.peerId,
-        lastMessage: '',
-        lastMessageTimestamp: Date.now(),
+        lastMessage: initialMessage,
+        lastMessageTimestamp: now,
         unreadCount: 0,
         status: 'active',
         justCreated: true,
@@ -86,12 +93,24 @@ export const Main = () => {
         isFetchingOffline: false,
       };
 
-      // Read current state to check if user was viewing this contact/pending
-      const currentState = store.getState();
       const wasViewingContact = currentState.chat.activeContactAttempt?.peerId === data.peerId;
       const wasViewingPending = currentState.chat.activePendingKeyExchange?.peerId === data.peerId;
 
       dispatch(addChat(newChat));
+      if (initialMessage) {
+        const currentPeerId = store.getState().user.peerId;
+        dispatch(addMessage({
+          id: `contact-attempt-${data.chatId}-${now}`,
+          chatId: data.chatId,
+          senderPeerId: data.peerId,
+          senderUsername: data.username,
+          content: initialMessage,
+          timestamp: now,
+          messageType: 'text',
+          messageSentStatus: 'online',
+          currentUserPeerId: currentPeerId
+        }));
+      }
       dispatch(removeContactAttempt(data.peerId));
       dispatch(removePendingKeyExchange(data.peerId));
 
@@ -134,6 +153,7 @@ export const Main = () => {
 
     const unsubPendingFileReceived = window.kiyeovoAPI.onPendingFileReceived((data) => {
       console.log(`[UI] Pending file received: ${data.filename} from ${data.senderUsername}`);
+      const currentPeerId = store.getState().user.peerId;
       dispatch(addMessage({
         id: data.fileId,
         chatId: data.chatId,
@@ -143,7 +163,7 @@ export const Main = () => {
         timestamp: Date.now(),
         messageType: 'file',
         messageSentStatus: 'online',
-        currentUserPeerId: myPeerId,
+        currentUserPeerId: currentPeerId,
         fileName: data.filename,
         fileSize: data.size,
         transferStatus: 'pending',
