@@ -265,7 +265,7 @@ const ImportTrustedUserDialog = ({ open, onOpenChange, onSuccess }: ImportTruste
                 variant="outline"
                 onClick={() => onOpenChange(false)}
               >
-                Cancel
+                Close
               </Button>
               <Button type="submit" disabled={isImporting}>
                 {isImporting ? "Importing..." : "Import"}

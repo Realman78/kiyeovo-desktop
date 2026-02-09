@@ -321,7 +321,7 @@ export function PasswordPrompt({ passwordRequest, handleSubmit, password, setPas
           ) : (
             <>
               <Shield className="w-4 h-4" />
-              {isNewPassword ? 'Create Identity' : 'Decrypt & Access'}
+              {isNewPassword ? 'Create Identity' : 'Log In'}
             </>
           )}
         </Button>

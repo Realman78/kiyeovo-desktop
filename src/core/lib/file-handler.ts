@@ -13,6 +13,7 @@ import mime from "mime-types";
 import { CHUNK_SIZE, DOWNLOADS_DIR, FILE_ACCEPTANCE_TIMEOUT, FILE_OFFER, FILE_OFFER_RESPONSE, FILE_TRANSFER_PROTOCOL, MAX_FILE_MESSAGE_SIZE, MAX_FILE_SIZE, MAX_COPY_ATTEMPTS, CHUNK_RECEIVE_TIMEOUT, CHUNK_IDLE_TIMEOUT, FILE_OFFER_RATE_LIMIT, FILE_OFFER_RATE_LIMIT_WINDOW, MAX_PENDING_FILES_PER_PEER, MAX_PENDING_FILES_TOTAL, FILE_REJECTION_COUNTER_RESET_INTERVAL, SILENT_REJECTION_THRESHOLD_GLOBAL, SILENT_REJECTION_THRESHOLD_PER_PEER } from "../constants.js";
 import { MessageHandler } from "./message-handler.js";
 import { generalErrorHandler } from "../utils/general-error.js";
+import { EncryptedUserIdentity } from "./encrypted-user-identity.js";
 
 interface FileMetadata {
   buffer: Buffer
@@ -137,6 +138,29 @@ export class FileHandler {
     }
 
     return { shouldEmit: false, newPercentage: lastEmittedPercentage };
+  }
+
+  private buildSignedFileOfferPayload(offer: FileOffer): object {
+    return {
+      type: offer.type,
+      fileId: offer.fileId,
+      filename: offer.filename,
+      mimeType: offer.mimeType,
+      size: offer.size,
+      checksum: offer.checksum,
+      totalChunks: offer.totalChunks,
+      timestamp: offer.timestamp,
+      expiresAt: offer.expiresAt,
+    };
+  }
+
+  private isFileOfferSignatureValid(offer: FileOffer, signingPublicKey: string): boolean {
+    if (!offer.signature || !offer.timestamp || !offer.expiresAt) {
+      return false;
+    }
+
+    const payload = this.buildSignedFileOfferPayload(offer);
+    return EncryptedUserIdentity.verifyKeyExchangeSignature(offer.signature, payload, signingPublicKey);
   }
 
   // Check if peer has exceeded file offer rate limit
@@ -401,6 +425,29 @@ export class FileHandler {
               return;
             }
 
+            // Drop silently on malformed/unsigned offers to avoid helping attackers.
+            if (!offerMsg.signature || !offerMsg.timestamp || !offerMsg.expiresAt) {
+              return;
+            }
+
+            // Reject stale/replayed offers before any expensive work.
+            const now = Date.now();
+            if (offerMsg.expiresAt <= now || offerMsg.timestamp > now + 60_000) {
+              return;
+            }
+
+            if (this.database.messageExists(offerMsg.fileId)) {
+              return;
+            }
+
+            if (!sender.signing_public_key) {
+              return;
+            }
+
+            if (!this.isFileOfferSignatureValid(offerMsg, sender.signing_public_key)) {
+              return;
+            }
+
             // Persist pending offer as a message (single row per file)
             await this.database.createMessage({
               id: offerMsg.fileId,
@@ -416,7 +463,7 @@ export class FileHandler {
             });
 
             // Emit pending file received event
-            const expiresAt = Date.now() + FILE_ACCEPTANCE_TIMEOUT;
+            const expiresAt = offerMsg.expiresAt ?? (Date.now() + FILE_ACCEPTANCE_TIMEOUT);
             if (this.onPendingFileReceived) {
               this.onPendingFileReceived({
                 chatId: chat.id,
@@ -449,13 +496,14 @@ export class FileHandler {
             });
 
             const timeoutPromise = new Promise<boolean>((resolve) => {
+              const msUntilExpire = Math.max(0, expiresAt - Date.now());
               setTimeout(() => {
                 const pending = this.pendingFileAcceptances.get(offerMsg.fileId);
                 if (pending) {
                   pending.decision = 'expired';
                 }
                 resolve(false);
-              }, FILE_ACCEPTANCE_TIMEOUT);
+              }, msUntilExpire);
             });
 
             // eslint-disable-next-line no-await-in-loop
@@ -797,7 +845,16 @@ export class FileHandler {
           size: metadata.size,
           checksum: metadata.checksum,
           totalChunks: metadata.totalChunks,
+          timestamp: Date.now(),
+          expiresAt: Date.now() + FILE_ACCEPTANCE_TIMEOUT,
         };
+        const userIdentity = this.messageHandler.getUserIdentity();
+        if (!userIdentity) {
+          throw new Error('No user identity available');
+        }
+        const offerPayload = this.buildSignedFileOfferPayload(offer);
+        const signature = userIdentity.sign(JSON.stringify(offerPayload));
+        offer.signature = Buffer.from(signature).toString('base64');
         writable.push(this.#encodeMessage(offer));
         console.log(`Sent file offer, waiting for response...`);
 

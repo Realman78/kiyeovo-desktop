@@ -257,6 +257,9 @@ export interface FileOffer {
   size: number
   checksum: string      // BLAKE3 of full file
   totalChunks: number
+  timestamp?: number
+  expiresAt?: number
+  signature?: string
 }
 
 export interface FileOfferResponse {

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Wifi, WifiOff, Plus, Trash2, RefreshCw, Loader2 } from "lucide-react";
+import { Wifi, WifiOff, Plus, Trash2, RefreshCw, Loader2, Copy, Check } from "lucide-react";
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../ui/Dialog";
 import { Button } from "../../ui/Button";
 import { Input } from "../../ui/Input";
@@ -26,6 +26,7 @@ const ConnectionStatusDialog = ({
   const [isLoadingNodes, setIsLoadingNodes] = useState(true);
   const [nodesError, setNodesError] = useState<string | null>(null);
   const [isRetrying, setIsRetrying] = useState(false);
+  const [isCopied, setIsCopied] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -144,11 +145,19 @@ const ConnectionStatusDialog = ({
     }
   };
 
+  const handleCopy = (peerId: string) => {
+    setIsCopied(true);
+    navigator.clipboard.writeText(peerId);
+    setTimeout(() => {
+      setIsCopied(false);
+    }, 2000);
+  }
+
   const connectedCount = nodes.filter(n => n.connected).length;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             {isConnected === null ? (
@@ -193,26 +202,36 @@ const ConnectionStatusDialog = ({
             ) : (
               <div className="space-y-2 max-h-48 overflow-y-auto">
                 {nodes.map((node) => (
-                <div
-                  key={node.id}
-                  className="flex items-center gap-2 p-2 rounded-md bg-secondary/50 border border-border"
-                >
-                  <div className={`w-2 h-2 rounded-full ${node.connected ? 'bg-success' : 'bg-muted-foreground'}`} />
-                  <span
-                    className="flex-1 text-sm font-mono text-foreground truncate"
-                    title={node.address}
+                  <div
+                    key={node.id}
+                    className="flex items-center gap-2 p-2 rounded-md bg-secondary/50 border border-border"
                   >
-                    {node.address}
-                  </span>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => handleRemoveNode(node.id)}
-                    className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                  </Button>
-                </div>
+                    <div className={`w-2 h-2 rounded-full ${node.connected ? 'bg-success' : 'bg-muted-foreground'}`} />
+                    <span
+                      className="flex-1 text-sm font-mono text-foreground truncate"
+                      title={node.address}
+                    >
+                      {node.address}
+                    </span>
+                    <div>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleCopy(node.address)}
+                        className="h-7 w-7 text-muted-foreground"
+                      >
+                        {isCopied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleRemoveNode(node.id)}
+                        className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                      >
+                        <Trash2 className="w-3 h-3 hover:text-destructive" />
+                      </Button>
+                    </div>
+                  </div>
                 ))}
               </div>
             )}

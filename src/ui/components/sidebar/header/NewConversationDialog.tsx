@@ -206,7 +206,7 @@ const NewConversationDialog = ({ open, onOpenChange, onNewConversation, backendE
               variant="outline"
               onClick={() => onOpenChange(false)}
             >
-              Cancel
+              Close
             </Button>
             <Button type="submit" disabled={!isConnected || !!usernameValidationError || !!messageValidationError || isSending}>
               {isSending ? 'Sending...' : 'Send'}

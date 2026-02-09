@@ -695,6 +695,10 @@ export class MessageHandler {
     return this.sessionManager;
   }
 
+  getUserIdentity() {
+    return this.usernameRegistry.getUserIdentity();
+  }
+
   getKeyExchange(): KeyExchange {
     return this.keyExchange;
   }

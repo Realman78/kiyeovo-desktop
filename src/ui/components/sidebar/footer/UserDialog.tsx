@@ -278,7 +278,7 @@ const UserDialog = ({ open, onOpenChange, onRegister, backendError, isRegisterin
                                             }}
                                         >
                                             <X className="w-3 h-3 mr-1" />
-                                            Cancel
+                                            Close
                                         </Button>
                                         <Button
                                             type="submit"
@@ -474,6 +474,12 @@ const UserDialog = ({ open, onOpenChange, onRegister, backendError, isRegisterin
                                         The username is stored on the DHT network and is used for
                                         other users to find you. The recommendation is to not use usernames
                                         as they can be overwritten by anyone. Use Peer IDs or Trusted Contacts instead.
+                                    </p>
+                                    <p className="text-sm">
+                                        In the profile exporting section, the export password encrypts the profile file. 
+                                        The shared secret will be used to create an offline bucket until you 
+                                        and the recipient make contact while both are online - make sure the recipient matches that Shared 
+                                        secret and make sure that it is as globally unique as possible!
                                     </p>
                                 </div>
                             </div>

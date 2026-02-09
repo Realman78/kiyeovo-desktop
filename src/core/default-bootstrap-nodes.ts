@@ -1,1 +1,1 @@
-export const DEFAULT_BOOTSTRAP_NODES = ["/ip4/192.168.1.170/tcp/9000/p2p/12D3KooWDvF8tkCqW9CdWhJ9UKFQNGYd8QcgnBHxjTPfobfyFgAi"]
+export const DEFAULT_BOOTSTRAP_NODES = ["/onion3/zzvhf52loj267us32iou32j54kgm64cwmbcp6phkpfysqsk625i3ohid:9000/p2p/12D3KooWDvF8tkCqW9CdWhJ9UKFQNGYd8QcgnBHxjTPfobfyFgAi", "/ip4/192.168.1.170/tcp/9000/p2p/12D3KooWDvF8tkCqW9CdWhJ9UKFQNGYd8QcgnBHxjTPfobfyFgAi"]

@@ -134,7 +134,7 @@ export const SendFileDialog: React.FC<SendFileDialogProps> = ({ open, onOpenChan
             variant="outline"
             disabled={isLoading}
           >
-            Cancel
+            Close
           </Button>
           <Button
             onClick={handleSend}
