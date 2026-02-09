@@ -348,6 +348,7 @@ export function PasswordPrompt({
         <div className="mt-4 pt-4 border-t border-border">
           <button
             type="button"
+            disabled={isSubmitting}
             onClick={() => setShowAlternativeMethods(!showAlternativeMethods)}
             className="w-fit flex items-center justify-left cursor-pointer gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors mb-3"
           >

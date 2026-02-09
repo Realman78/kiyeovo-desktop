@@ -13,7 +13,7 @@ import { wordlist } from '@scure/bip39/wordlists/english.js';
 import { Worker } from 'worker_threads';
 import type { ChatDatabase, EncryptedUserIdentityDb } from './db/database.js';
 import type { PasswordResponse } from '../types.js';
-import { DECRYPTION_TIMEOUT } from '../constants.js';
+import { CRYPTO_TIMEOUT } from '../constants.js';
 
 // Try to import keytar for OS keychain support
 let keytar: any = null;
@@ -62,6 +62,7 @@ interface PasswordValidationResult {
 interface IdentityDecryptWorkerResponse {
     ok: boolean
     decrypted?: Uint8Array
+    encrypted?: Uint8Array
     error?: string
 }
 
@@ -329,7 +330,7 @@ export class EncryptedUserIdentity {
     ): Promise<Uint8Array> {
         return await new Promise((resolve, reject) => {
             const worker = new Worker(
-                new URL('../workers/identity-decrypt-worker.js', import.meta.url)
+                new URL('../workers/identity-workers.js', import.meta.url)
             );
             let settled = false;
 
@@ -338,7 +339,7 @@ export class EncryptedUserIdentity {
                 settled = true;
                 void worker.terminate();
                 reject(new Error('Identity decryption timed out'));
-            }, DECRYPTION_TIMEOUT); // if 60 seconds is not enough, brother, buy a new computer
+            }, CRYPTO_TIMEOUT); // if 60 seconds is not enough, brother, buy a new computer
 
             const finish = (callback: () => void): void => {
                 if (settled) return;
@@ -377,6 +378,7 @@ export class EncryptedUserIdentity {
             });
 
             worker.postMessage({
+                operation: 'decrypt',
                 password: passwordBytes,
                 salt: encryptedUserIdentity.salt,
                 nonce: encryptedUserIdentity.nonce,
@@ -386,9 +388,75 @@ export class EncryptedUserIdentity {
         });
     }
 
+    private static async encryptIdentityPayloadInWorker(
+        passwordBytes: Uint8Array,
+        plaintext: Uint8Array,
+        salt: Uint8Array,
+        nonce: Uint8Array
+    ): Promise<Uint8Array> {
+        return await new Promise((resolve, reject) => {
+            const worker = new Worker(
+                new URL('../workers/identity-workers.js', import.meta.url)
+            );
+            let settled = false;
+
+            const timeout = setTimeout(() => {
+                if (settled) return;
+                settled = true;
+                void worker.terminate();
+                reject(new Error('Identity encryption timed out'));
+            }, CRYPTO_TIMEOUT);
+
+            const finish = (callback: () => void): void => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timeout);
+                callback();
+            };
+
+            worker.once('message', (message: IdentityDecryptWorkerResponse) => {
+                finish(() => {
+                    void worker.terminate();
+                    if (!message.ok) {
+                        reject(new Error(message.error || 'Failed to encrypt identity'));
+                        return;
+                    }
+                    if (!message.encrypted) {
+                        reject(new Error('Identity worker returned empty encrypted payload'));
+                        return;
+                    }
+                    resolve(new Uint8Array(message.encrypted));
+                });
+            });
+
+            worker.once('error', (error: Error) => {
+                finish(() => {
+                    void worker.terminate();
+                    reject(error);
+                });
+            });
+
+            worker.once('exit', (code: number) => {
+                if (settled || code === 0) return;
+                finish(() => {
+                    reject(new Error(`Identity worker exited with code ${code}`));
+                });
+            });
+
+            worker.postMessage({
+                operation: 'encrypt',
+                password: passwordBytes,
+                salt,
+                nonce,
+                plaintextData: plaintext,
+                scryptParams: EncryptedUserIdentity.SCRYPT_PARAMS
+            });
+        });
+    }
+
     async saveEncrypted(database: ChatDatabase, password: Uint8Array, sendStatus: (message: string, stage: any) => void, recoveryPhrase?: string): Promise<void> {
-        let key: Uint8Array | null = null;
         let plaintext: Uint8Array | null = null;
+        let ciphertext: Uint8Array | null = null;
         let recoveryPassword: Uint8Array | null = null;
 
         try {
@@ -397,9 +465,6 @@ export class EncryptedUserIdentity {
 
             console.log('Encrypting identity (this may take a moment)...');
             sendStatus("Encrypting identity...", "Save encrypted")
-            key = scrypt(password, salt, EncryptedUserIdentity.SCRYPT_PARAMS);
-
-            password.fill(0);
 
             const identityData: DecryptedUserIdentityData = {
                 id: this.id,
@@ -415,8 +480,13 @@ export class EncryptedUserIdentity {
             };
 
             plaintext = new TextEncoder().encode(JSON.stringify(identityData));
-            const aes = gcm(key, nonce);
-            const ciphertext = aes.encrypt(plaintext);
+            ciphertext = await EncryptedUserIdentity.encryptIdentityPayloadInWorker(
+                password,
+                plaintext,
+                salt,
+                nonce
+            );
+            password.fill(0);
 
             // Store as Buffers (BLOB in SQLite) - no base64 encoding needed
             const encryptedUserIdentity = {
@@ -438,25 +508,27 @@ export class EncryptedUserIdentity {
             throw error;
         } finally {
             if (password) password.fill(0);
-            if (key) key.fill(0);
             if (plaintext) plaintext.fill(0);
+            if (ciphertext) ciphertext.fill(0);
             if (recoveryPassword) recoveryPassword.fill(0);
         }
     }
 
     private async saveRecoveryCopy(database: ChatDatabase, recoveryPassword: Uint8Array, identityData: DecryptedUserIdentityData): Promise<void> {
-        let key: Uint8Array | null = null;
         let plaintext: Uint8Array | null = null;
+        let ciphertext: Uint8Array | null = null;
 
         try {
             const salt = randomBytes(32);
             const nonce = randomBytes(12);
 
-            key = scrypt(recoveryPassword, salt, EncryptedUserIdentity.SCRYPT_PARAMS);
-
             plaintext = new TextEncoder().encode(JSON.stringify(identityData));
-            const aes = gcm(key, nonce);
-            const ciphertext = aes.encrypt(plaintext);
+            ciphertext = await EncryptedUserIdentity.encryptIdentityPayloadInWorker(
+                recoveryPassword,
+                plaintext,
+                salt,
+                nonce
+            );
 
             const recoveryIdentity = {
                 peer_id: `${this.id}-recovery`,
@@ -468,8 +540,8 @@ export class EncryptedUserIdentity {
             database.createEncryptedUserIdentity(recoveryIdentity);
             console.log('Recovery copy saved');
         } finally {
-            if (key) key.fill(0);
             if (plaintext) plaintext.fill(0);
+            if (ciphertext) ciphertext.fill(0);
         }
     }
 
