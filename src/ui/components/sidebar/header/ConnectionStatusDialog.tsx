@@ -182,6 +182,9 @@ const ConnectionStatusDialog = ({
         <DialogBody className="space-y-4">
           {/* Node list */}
           <div className="space-y-2">
+            {!!nodesError && <div className="p-4 rounded-md bg-destructive/10 border border-destructive/20">
+              <span className="text-sm text-destructive">{nodesError}</span>
+            </div>}
             <label className="text-xs font-mono text-muted-foreground uppercase tracking-wider">
               Bootstrap Nodes
             </label>
@@ -190,10 +193,6 @@ const ConnectionStatusDialog = ({
               <div className="flex items-center justify-center p-4">
                 <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
                 <span className="ml-2 text-sm text-muted-foreground">Loading nodes...</span>
-              </div>
-            ) : nodesError ? (
-              <div className="p-4 rounded-md bg-destructive/10 border border-destructive/20">
-                <span className="text-sm text-destructive">{nodesError}</span>
               </div>
             ) : nodes.length === 0 ? (
               <div className="p-4 rounded-md bg-secondary/50 border border-border">

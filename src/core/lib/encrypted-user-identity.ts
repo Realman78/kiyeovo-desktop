@@ -13,7 +13,7 @@ import { wordlist } from '@scure/bip39/wordlists/english.js';
 import { Worker } from 'worker_threads';
 import type { ChatDatabase, EncryptedUserIdentityDb } from './db/database.js';
 import type { PasswordResponse } from '../types.js';
-import { CRYPTO_TIMEOUT } from '../constants.js';
+import { CRYPTO_TIMEOUT, IDENTITY_SCRYPT_N } from '../constants.js';
 
 // Try to import keytar for OS keychain support
 let keytar: any = null;
@@ -78,7 +78,7 @@ export class EncryptedUserIdentity {
     public readonly notificationsPrivateKey: string;
 
     private static readonly SCRYPT_PARAMS: ScryptParams = {
-        N: 2 ** 20,  // 1048576 - reasonable security vs performance balance
+        N: IDENTITY_SCRYPT_N,
         r: 8,        // standard value
         p: 1,        // single thread
         dkLen: 32    // 256-bit key for AES-256-GCM

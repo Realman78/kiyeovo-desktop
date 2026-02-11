@@ -111,31 +111,37 @@ export class TorManager {
       this.torProcess = null;
     });
 
-    // Wait for bootstrap
-    await this.waitForBootstrap();
+    try {
+      // Wait for bootstrap
+      await this.waitForBootstrap();
 
-    // Create hidden service via control port
-    this.sendStatus('Creating hidden service...', 'creating_hidden_service');
-    this.onionAddress = await this.createHiddenService();
+      // Create hidden service via control port
+      this.sendStatus('Creating hidden service...', 'creating_hidden_service');
+      this.onionAddress = await this.createHiddenService();
 
-    // Save the hidden service key for persistence
-    if (this.hiddenServiceKey) {
-      fs.writeFileSync(keyPath, this.hiddenServiceKey, { mode: 0o600 });
-      console.log('[TorManager] Saved hidden service key');
+      // Save the hidden service key for persistence
+      if (this.hiddenServiceKey) {
+        fs.writeFileSync(keyPath, this.hiddenServiceKey, { mode: 0o600 });
+        console.log('[TorManager] Saved hidden service key');
+      }
+
+      this.isRunning = true;
+      this.sendStatus('Tor ready', 'ready');
+
+      console.log(`[TorManager] Tor started successfully. Onion address: ${this.onionAddress}`);
+      return this.onionAddress;
+    } catch (error) {
+      // Bootstrap/create-onion failure can leave a live Tor process; always clean it up.
+      await this.stop();
+      throw error;
     }
-
-    this.isRunning = true;
-    this.sendStatus('Tor ready', 'ready');
-
-    console.log(`[TorManager] Tor started successfully. Onion address: ${this.onionAddress}`);
-    return this.onionAddress;
   }
 
   /**
    * Stop the Tor daemon gracefully
    */
   async stop(): Promise<void> {
-    if (!this.isRunning || !this.torProcess) {
+    if (!this.torProcess) {
       return;
     }
 
@@ -173,6 +179,7 @@ export class TorManager {
 
     this.isRunning = false;
     this.torProcess = null;
+    this.onionAddress = null;
     console.log('[TorManager] Tor daemon stopped');
   }
 

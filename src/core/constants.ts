@@ -165,13 +165,14 @@ export const DATABASE_CLEANUP_INTERVAL = 30 * 60 * 1000; // 30 minutes
 export const MAX_MESSAGES_PER_STORE = 20;
 export const MESSAGE_TTL = 7 * 24 * 60 * 60 * 1000;
 export const CRYPTO_TIMEOUT = 60 * 1000; // 60 seconds
+export const IDENTITY_SCRYPT_N = 2 ** 18; // SET THIS TO 19 OR 20 IF YOU HAVE A MORE POWERFUL PC
 /**
  * Other
  */
 export const FILE_OFFER = 'file_offer';
 export const FILE_OFFER_RESPONSE = 'file_offer_response';
 export const CHUNK_SIZE = 32 * 1024; // 32KB
-export const DOWNLOADS_DIR = '.kiyeovo/downloads';
+export const DOWNLOADS_DIR = 'kiyeovo-downloads';
 export const MAX_FILE_MESSAGE_SIZE = 1 * 1024 * 1024; // 1MB for JSON overhead
 export const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB max file size
 export const MAX_COPY_ATTEMPTS = 10; // Max number of duplicate filename attempts

@@ -54,6 +54,8 @@ Should I save the information about a message being "offline" to show for later?
 
 13. Ikona i naziv aplikacije
 
+13.5 Stavi u README da se poveca SCRYPTN_N
+
 14. relay nodeove
 Hybrid = 2 Networks?
 
@@ -173,3 +175,5 @@ Example strict CSP for production:
 3. DevTools in production?
 
 Line 139 opens DevTools in dev mode - that is fine. Just make sure isDev() correctly returns false in packaged builds.
+
+

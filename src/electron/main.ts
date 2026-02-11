@@ -103,6 +103,9 @@ function setupMinimalMenu() {
 
 function createMainWindow() {
   const savedBounds = loadWindowBounds();
+  const windowIconPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'icons', 'app-icon.png')
+    : path.join(__dirname, '..', '..', 'resources', 'icons', 'app-icon.png');
 
   const win = new BrowserWindow({
     // Use saved bounds if available, otherwise Electron will use defaults (centered)
@@ -115,6 +118,7 @@ function createMainWindow() {
     minWidth: 880,
     minHeight: 600,
     autoHideMenuBar: true,
+    icon: windowIconPath,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -283,6 +287,15 @@ async function initializeP2PAfterWindow() {
     } catch (torError) {
       console.error('[Electron] Failed to start Tor:', torError);
       sendInitStatus('Warning: Tor failed to start. Running in local mode.', 'tor');
+      if (torManager) {
+        try {
+          await torManager.stop();
+        } catch (stopError) {
+          console.error('[Electron] Failed to stop Tor after startup error:', stopError);
+        } finally {
+          torManager = null;
+        }
+      }
 
       // Continue without Tor (local mode)
       torConfig = {

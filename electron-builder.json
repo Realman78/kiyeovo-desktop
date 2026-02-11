@@ -6,6 +6,11 @@
             "from": "resources/tor/${os}-${arch}",
             "to": "tor/${os}-${arch}",
             "filter": ["**/*"]
+        },
+        {
+            "from": "resources/icons",
+            "to": "icons",
+            "filter": ["**/*"]
         }
     ],
     "asarUnpack": [
@@ -14,13 +19,16 @@
     "productName": "Kiyeovo",
     "linux": {
         "target": "AppImage",
-        "category": "Network"
+        "category": "Network",
+        "icon": "resources/icons"
     },
     "mac": {
         "target": ["dmg", "zip"],
-        "category": "public.app-category.social-networking"
+        "category": "public.app-category.social-networking",
+        "icon": "resources/icons/app-icon.png"
     },
     "win": {
-        "target": ["nsis", "portable"]
+        "target": ["nsis", "portable"],
+        "icon": "resources/icons/app-icon.ico"
     }
 }
