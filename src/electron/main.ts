@@ -394,7 +394,7 @@ async function initializeP2PAfterWindow() {
 
 async function initializeApp() {
   try {
-    console.log('[Electron] Starting Kiyeovo Desktop...');
+    console.log('[Electron] Starting Kiyeovo...');
 
     // Setup minimal menu (keeps keyboard shortcuts working)
     setupMinimalMenu();

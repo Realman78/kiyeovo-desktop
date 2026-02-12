@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Download Tor Expert Bundle for Kiyeovo Desktop
+# Download Tor Expert Bundle for Kiyeovo
 # This script downloads the Tor binary for the current platform
 # and places it in the resources/tor directory
 
@@ -19,7 +19,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-echo -e "${GREEN}Kiyeovo Desktop - Tor Binary Downloader${NC}"
+echo -e "${GREEN}Kiyeovo - Tor Binary Downloader${NC}"
 echo "=========================================="
 echo ""
 

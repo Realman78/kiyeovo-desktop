@@ -20,8 +20,15 @@ Still secure: brute force is still blocked by submit lockout.
 Cons
 Still “startup blocked” (by design) until the user submits; but at least it feels responsive.
 
+2. Timestamp forgery - ca ako korisnici sami mijenjaju timestamp
+
+2.5 what if a user changes public keys
+
+2.75 if Alice set the expiration to Thursday and she isnt online from wendesday to Saturday, what stops Bob from accepting the invite on Friday and just setting the timestamp (in the acceptance message) to a timestamp from Thursday when it wasnt expired? Alice will log in on Saturday and see the invitation timestamp is from Thursday. But wait, the invitation will be in the offline bucket -> does the bucket provide the actual timestamp of when the message arrived? if yes, then that could work. If no, maybe we can add logic to the validator that checks if the timestamp being put into the DHT is less than 60 seconds apart from the current timestamp (to account for latency) 
+
 
 3. Animations!
+3.1 paginacija poruka
 
 4. drag and drop bootstrap nodeova za redoslijed spajanja
 
