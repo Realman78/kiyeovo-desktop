@@ -2,25 +2,56 @@
 
 ## The Problem
 
-In libp2p's kad-dht, the **validator** and **selector** have separate responsibilities:
+In libp2p's kad-dht, the PUT_VALUE RPC handler **blindly overwrites** stored records.
 
-- **Validator** `(key, value) → valid/invalid` — checks if a record is valid on its own (signature, format, etc.). Has no access to the locally stored record.
-- **Selector** `(key, [records]) → index` — picks the best record when a node holds multiple valid records for the same key.
+Verified against the actual source (`node_modules/@libp2p/kad-dht/src/rpc/handlers/put-value.ts`):
 
-This creates a vulnerability: when a DHT node receives a PUT for a key it has **no existing record for**, the validator accepts any correctly signed value — even if it's an old version. The selector never runs because there's nothing to compare against.
+```typescript
+// Actual PUT_VALUE handler — complete logic:
+const deserializedRecord = Libp2pRecord.deserialize(msg.record)
+await verifyRecord(this.validators, deserializedRecord)     // only checks signature/format
+deserializedRecord.timeReceived = new Date()
+const recordKey = bufferToRecordKey(this.datastorePrefix, deserializedRecord.key)
+await this.components.datastore.put(recordKey, deserializedRecord.serialize().subarray())
+// ^ unconditional overwrite — no comparison with existing record
+```
+
+There is:
+- **No `datastore.get()` call** to check the existing record before writing.
+- **No selector invocation** in the PUT path.
+- **No version comparison** of any kind.
+
+### Where Selectors Actually Run
+
+Selectors are only used **client-side** in `ContentFetching.get()` (`src/content-fetching/index.ts`).
+When a DHT client queries multiple peers, it collects responses, uses `bestRecord()` with the
+selector to pick the best one, and sends corrections to peers with stale records via
+`sendCorrectionRecord()`. But this is reactive — it doesn't prevent the overwrite on the
+receiving node.
+
+The PutValueHandler constructor doesn't even accept selectors:
+```typescript
+export interface PutValueHandlerInit {
+  validators: Validators    // ← only validators
+  logPrefix: string
+  datastorePrefix: string
+  // NO selectors field
+}
+```
 
 ### Why This Matters
 
-All mutable DHT records in Kiyeovo (offline buckets, group-info pointers, group offline buckets) are signed by their owner and include a monotonically increasing `version` field. The selector already picks the highest version when both old and new records exist on the same node.
+All mutable DHT records in Kiyeovo (offline buckets, group-info pointers, group offline buckets)
+are signed by their owner and include a monotonically increasing `version` field.
 
-But a **malicious user who holds a valid old signed record** can exploit the gap:
+A **malicious user who holds a valid old signed record** can trivially overwrite newer records:
 
 1. Attacker has a legitimately signed record at version 3 (obtained when they were a group member, or just from normal DHT participation).
 2. The legitimate owner has since published version 7.
 3. Attacker re-publishes version 3 aggressively — much more frequently than the legitimate owner re-publishes version 7.
-4. DHT nodes that already hold version 7 are safe — the selector picks 7 over 3.
-5. But DHT nodes that have **never seen version 7** (new nodes, nodes that restarted, nodes that evicted the record) accept version 3 because the validator only checks the signature, which is valid.
-6. Over time, if the attacker re-publishes faster than the owner, the majority of DHT nodes end up holding the stale version 3. Version 7 becomes increasingly rare in the network.
+4. **Every DHT node that receives the stale PUT overwrites its stored record**, even if it previously held version 7. There is no protection at all on the PUT path.
+5. Over time, the majority of DHT nodes end up holding version 3. Version 7 only survives on nodes that haven't received the attacker's PUT yet.
+6. The client-side selector (GET path) can still pick version 7 if at least one queried peer has it, but as more nodes are overwritten, this becomes less likely.
 
 This is not a theoretical attack. It's straightforward to execute: just call `dht.put()` in a loop with the old signed bytes. No cryptographic break needed.
 
@@ -32,16 +63,22 @@ The countermeasure without a fork is for the owner (and friendly recipients) to 
 
 Fork `@libp2p/kad-dht` to make the **validator version-aware** by giving it access to the existing locally stored record.
 
-### Current Flow (unmodified)
+### Current Flow (unmodified, verified from source)
 
 ```
-PUT arrives for key K with value V_new
-  → validator(K, V_new) → valid?
-    → yes → is there an existing V_old for K?
-      → yes → selector(K, [V_old, V_new]) → pick winner → store
-      → no  → store V_new (VULNERABLE: stale records accepted here)
-    → no → reject
+PUT_VALUE RPC arrives for key K with value V_new
+  → validator(K, V_new) → valid signature/format?
+    → yes → unconditionally overwrite datastore[K] = V_new
+            (NO comparison with existing record, NO selector)
+    → no  → reject
+
+GET (client-side, separate path)
+  → query N peers → collect responses
+  → selector picks best from responses (client-side only)
+  → send corrections to peers with stale records (reactive, not preventive)
 ```
+
+The entire PUT path is: validate signature → overwrite. That's it.
 
 ### Proposed Flow (forked)
 
@@ -61,38 +98,36 @@ PUT arrives for key K with value V_new
 Each DHT node already stores records locally via a `Datastore` (injected through libp2p's
 component system). Records live at key paths like `/dht/records/<base32-encoded-key>`.
 
-The PUT_VALUE handler (`rpc/handlers/put-value.ts` in `@libp2p/kad-dht`) already reads
-from this datastore after validation to run the selector. The existing flow in the source:
+The PUT_VALUE handler (`rpc/handlers/put-value.ts`) has access to the datastore via
+`this.components.datastore` but currently does NOT read from it before writing.
+The actual source:
 
 ```typescript
-// put-value.ts (simplified from actual source)
-async handle(peerId, msg) {
+// put-value.ts (actual source, lines 37-62)
+async handle (peerId: PeerId, msg: Message): Promise<Message> {
   const key = msg.key
-  const incoming = msg.record
 
-  // Step 1: validate incoming record (no access to local store)
-  await this.validators[prefix](key, incoming.value)
-
-  // Step 2: check if we already have a record for this key
-  const recordKey = new Key(`/dht/records/${base32encode(key)}`)
-  try {
-    const existingRaw = await this.datastore.get(recordKey)
-    const existing = Libp2pRecord.deserialize(existingRaw)
-
-    // Step 3: selector picks winner
-    const winner = this.selectors[prefix](key, [existing.value, incoming.value])
-    if (winner === 0) return  // existing wins, discard incoming
-  } catch (err) {
-    // No existing record — fall through to store
+  if (msg.record == null) {
+    throw new InvalidMessageError(`Empty record from: ${peerId.toString()}`)
   }
 
-  // Step 4: store incoming
-  await this.datastore.put(recordKey, incoming.serialize())
+  try {
+    const deserializedRecord = Libp2pRecord.deserialize(msg.record)
+    await verifyRecord(this.validators, deserializedRecord)
+    deserializedRecord.timeReceived = new Date()
+    const recordKey = bufferToRecordKey(this.datastorePrefix, deserializedRecord.key)
+    await this.components.datastore.put(recordKey, deserializedRecord.serialize().subarray())
+    // ^ blind overwrite — no datastore.get() before this
+  } catch (err: any) {
+    this.log('did not put record for key %b into datastore %o', key, err)
+  }
+
+  return msg
 }
 ```
 
-The datastore is **right there** in the same handler scope. The validator doesn't receive
-it only because the API was designed as a pure function. No new storage mechanism is needed.
+The datastore is **right there** via `this.components.datastore`. It just isn't used for
+comparison — only for the final write. No new storage mechanism is needed for the fork.
 
 ### What Changes in the DHT Code
 
@@ -104,36 +139,42 @@ it only because the API was designed as a pure function. No new storage mechanis
 The concrete change in `put-value.ts`:
 
 ```typescript
-// BEFORE (current)
-await this.validators[prefix](key, incoming.value)
-try {
-  const existingRaw = await this.datastore.get(recordKey)
-  const existing = Libp2pRecord.deserialize(existingRaw)
-  const winner = this.selectors[prefix](key, [existing.value, incoming.value])
-  if (winner === 0) return
-} catch {}
-await this.datastore.put(recordKey, incoming.serialize())
+// BEFORE (current — blind overwrite)
+const deserializedRecord = Libp2pRecord.deserialize(msg.record)
+await verifyRecord(this.validators, deserializedRecord)
+deserializedRecord.timeReceived = new Date()
+const recordKey = bufferToRecordKey(this.datastorePrefix, deserializedRecord.key)
+await this.components.datastore.put(recordKey, deserializedRecord.serialize().subarray())
 
-// AFTER (fork) — ~5 lines added
-await this.validators[prefix](key, incoming.value)
-try {
-  const existingRaw = await this.datastore.get(recordKey)
-  const existing = Libp2pRecord.deserialize(existingRaw)
+// AFTER (fork — version-aware)
+const deserializedRecord = Libp2pRecord.deserialize(msg.record)
+await verifyRecord(this.validators, deserializedRecord)
+deserializedRecord.timeReceived = new Date()
+const recordKey = bufferToRecordKey(this.datastorePrefix, deserializedRecord.key)
 
-  // NEW: version-aware rejection before selector
-  if (this.validateUpdate?.[prefix]) {
-    await this.validateUpdate[prefix](key, existing.value, incoming.value)
-    // throws if incoming is stale → PUT rejected, never reaches selector or store
+// NEW: check existing record before overwriting
+if (this.validateUpdate != null) {
+  try {
+    const existingRaw = await this.components.datastore.get(recordKey)
+    const existing = Libp2pRecord.deserialize(existingRaw)
+    // throws if incoming version < existing version
+    await this.validateUpdate(deserializedRecord.key, existing.value, deserializedRecord.value)
+  } catch (err: any) {
+    if (err.message === 'stale record rejected') {
+      this.log('rejected stale record for %b (version too old)', key)
+      return msg  // reject the PUT, keep existing record
+    }
+    // datastore.get threw "not found" — no existing record, continue to store
   }
-
-  const winner = this.selectors[prefix](key, [existing.value, incoming.value])
-  if (winner === 0) return
-} catch (err) {
-  if (err.message === 'stale record rejected') return  // NEW: don't store
-  // No existing record — fall through to store
 }
-await this.datastore.put(recordKey, incoming.serialize())
+
+await this.components.datastore.put(recordKey, deserializedRecord.serialize().subarray())
 ```
+
+Changes needed to support this:
+1. Add `validateUpdate` to `PutValueHandlerInit` interface (optional callback).
+2. Store it as `this.validateUpdate` in the constructor.
+3. The ~15 lines of version-check logic shown above, inserted before `datastore.put()`.
 
 ### What Kiyeovo Registers
 
@@ -156,10 +197,10 @@ validateUpdate: {
 
 ### Properties
 
-- **Nodes that have the latest record are immune.** No amount of attacker re-publishing can downgrade them.
+- **Nodes that have the latest record become immune.** Without the fork, ANY node can be downgraded by a stale PUT. With the fork, once a node stores version N, it rejects all PUTs with version < N.
 - **Nodes with no record still accept the first valid value they see** (could be stale). This is unavoidable — you can't compare against nothing.
-- **Combined with aggressive re-publishing**, this makes the attack window very narrow: the attacker can only "win" on nodes that have never seen the latest version, and once those nodes receive the latest version, they become permanently immune.
-- **The selector is still needed** as a fallback for edge cases (e.g., two records arrive near-simultaneously before either is stored), but the heavy lifting moves to `validateUpdate`.
+- **Combined with aggressive re-publishing**, this makes the attack window very narrow: the attacker can only "win" on nodes that have never seen the latest version, and once those nodes receive the latest version via a legitimate PUT, they become permanently immune.
+- **The client-side selector still helps** as a secondary defense: when a client GETs from multiple peers, it picks the best response and sends corrections. But this is reactive — the fork provides proactive protection at the storage layer.
 
 ### Maintenance Burden
 

@@ -11,7 +11,7 @@ import type { Transport } from '@libp2p/interface';
 import type { ChatNode } from '../types.js';
 
 import { EncryptedUserIdentity } from './encrypted-user-identity.js';
-import { offlineMessageValidator, offlineMessageSelector } from './offline-message-validator.js';
+import { offlineMessageValidator, offlineMessageSelector, offlineMessageValidateUpdate } from './offline-message-validator.js';
 import dotenv from 'dotenv';
 import {
   DHT_PROTOCOL,
@@ -179,8 +179,6 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
       connectionManager: {
         maxConnections: 100,
       },
-      // Tor-friendly connection monitor settings
-      // Tor adds 3-12 seconds latency per round trip, so we need longer timeouts
       connectionMonitor: {
         enabled: true,
         pingInterval: torConfig.enabled ? 120000 : 30000,  // 2 minutes for Tor, 30s for local
@@ -191,7 +189,6 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
         abortConnectionOnPingFailure: !torConfig.enabled,  // Don't abort on Tor, do on local
       },
       connectionGater: createConnectionGater(database),
-      // peerDiscovery: [mdns()],
       services: {
         // TODO research kad dodes na grupe
         pubsub: gossipsub(),
@@ -208,6 +205,14 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
           // DHT selectors: choose best record when multiple exist
           selectors: {
             'kiyeovo-offline': offlineMessageSelector
+          },
+          // DHT validateUpdate: reject stale record overwrites (forked kad-dht feature)
+          validateUpdate: async (key, existing, incoming) => {
+            const keyStr = new TextDecoder().decode(key);
+            if (keyStr.startsWith('/kiyeovo-offline/')) {
+              return offlineMessageValidateUpdate(key, existing, incoming);
+            }
+            // Unknown prefix — allow the write
           }
         }),
         identify: identify({

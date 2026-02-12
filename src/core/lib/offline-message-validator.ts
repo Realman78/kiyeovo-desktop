@@ -243,6 +243,43 @@ function validateSingleMessage(
 }
 
 /**
+ * DHT validateUpdate for offline message buckets
+ *
+ * Called by the forked kad-dht PUT_VALUE handler when a record already exists
+ * for the same key. Rejects the incoming record if its version is lower than
+ * the existing one, preventing stale record overwrites.
+ *
+ * @throws Error with message 'stale record rejected' if incoming version < existing version
+ */
+export async function offlineMessageValidateUpdate(
+  _key: Uint8Array,
+  existing: Uint8Array,
+  incoming: Uint8Array
+): Promise<void> {
+  const existingStore = decompressStore(existing);
+  const incomingStore = decompressStore(incoming);
+
+  if (incomingStore.version < existingStore.version) {
+    throw new Error('stale record rejected');
+  }
+
+  if (
+    incomingStore.version === existingStore.version &&
+    incomingStore.last_updated < existingStore.last_updated
+  ) {
+    throw new Error('stale record rejected');
+  }
+}
+
+/**
+ * Decompress and parse a gzipped OfflineMessageStoreDHT record
+ */
+function decompressStore(value: Uint8Array): OfflineMessageStoreDHT {
+  const decompressedBuffer = gunzipSync(Buffer.from(value));
+  return JSON.parse(decompressedBuffer.toString('utf8'));
+}
+
+/**
  * DHT Selector for offline message buckets
  *
  * When multiple records are found for the same key, select the one with:
@@ -272,9 +309,7 @@ export function offlineMessageSelector(
       const record = records[i];
       if (!record) continue;
 
-      // Decompress before parsing (synchronous - DHT selector must be sync)
-      const decompressedBuffer = gunzipSync(Buffer.from(record));
-      const store: OfflineMessageStoreDHT = JSON.parse(decompressedBuffer.toString('utf8'));
+      const store = decompressStore(record);
 
       // Prefer higher version, then more recent timestamp
       if (

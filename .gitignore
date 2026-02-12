@@ -25,3 +25,6 @@ dist-ssr
 
 dist-ui
 dist-electron
+
+.env
+bootstrap-peer-id.bin
