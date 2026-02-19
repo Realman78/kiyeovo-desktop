@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { generalErrorHandler } from '../../utils/general-error.js';
 import type { ContactMode, OfflineMessage } from '../../types.js';
+import type { AckMessageType } from '../group/types.js';
 import { DEFAULT_BOOTSTRAP_NODES } from '../../default-bootstrap-nodes.js';
 import { PENDING_KEY_EXCHANGE_EXPIRATION } from '../../constants.js';
 
@@ -42,6 +43,10 @@ export interface Chat {
     offline_last_ack_sent: number // Last ACK timestamp we sent to this peer (to avoid sending redundant ACKs)
     trusted_out_of_band: boolean // Whether chat was established via out-of-band profile import (uses default inbox)
     muted: boolean // Whether notifications and sounds are muted for this chat
+    key_version: number
+    group_creator_peer_id?: string
+    group_info_dht_key?: string
+    group_status?: string // GroupStatus from group/types.ts
     created_at: Date
     updated_at: Date
 }
@@ -129,6 +134,38 @@ export interface BootstrapNode {
     updated_at: Date
 }
 
+export interface GroupKeyHistory {
+    group_id: string
+    key_version: number
+    encrypted_key: string
+    state_hash: string | null
+    used_until: number | null
+    created_at: string
+}
+
+export interface GroupOfflineCursor {
+    group_id: string
+    sender_peer_id: string
+    last_read_timestamp: number
+    last_read_message_id: string
+    updated_at: string
+}
+
+export interface GroupPendingAck {
+    group_id: string
+    target_peer_id: string
+    message_type: AckMessageType
+    message_payload: string
+    created_at: string
+    last_published_at: string
+}
+
+export interface GroupSenderSeq {
+    group_id: string
+    key_version: number
+    next_seq: number
+}
+
 export class ChatDatabase {
     private db: Database.Database;
     private dbPath: string;
@@ -170,7 +207,11 @@ export class ChatDatabase {
             created_at: new Date(row.created_at),
             updated_at: new Date(row.updated_at),
             trusted_out_of_band: Boolean(row.trusted_out_of_band),
-            muted: Boolean(row.muted)
+            muted: Boolean(row.muted),
+            key_version: row.key_version ?? 0,
+            group_creator_peer_id: row.group_creator_peer_id ?? undefined,
+            group_info_dht_key: row.group_info_dht_key ?? undefined,
+            group_status: row.group_status ?? undefined,
         };
     }
 
@@ -208,6 +249,10 @@ export class ChatDatabase {
                 offline_last_ack_sent INTEGER DEFAULT 0,
                 trusted_out_of_band INTEGER DEFAULT 0,
                 muted INTEGER DEFAULT 0,
+                key_version INTEGER DEFAULT 0,
+                group_creator_peer_id TEXT,
+                group_info_dht_key TEXT,
+                group_status TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (created_by) REFERENCES users (peer_id)
@@ -362,6 +407,65 @@ export class ChatDatabase {
             }
             this.db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('bootstrap_nodes_initialized', 'true');
         }
+
+        // Group key history — stores encrypted group keys per epoch for decrypting old messages
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS group_key_history (
+                group_id TEXT NOT NULL,
+                key_version INTEGER NOT NULL,
+                encrypted_key TEXT NOT NULL,
+                state_hash TEXT,
+                used_until INTEGER,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (group_id, key_version)
+            )
+        `);
+
+        // Group offline cursors — tracks last-read position per sender per group
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS group_offline_cursors (
+                group_id TEXT NOT NULL,
+                sender_peer_id TEXT NOT NULL,
+                last_read_timestamp INTEGER NOT NULL DEFAULT 0,
+                last_read_message_id TEXT NOT NULL DEFAULT '',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (group_id, sender_peer_id)
+            )
+        `);
+
+        // Group pending ACKs — tracks key-bearing control messages awaiting ACK for re-publish
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS group_pending_acks (
+                group_id TEXT NOT NULL,
+                target_peer_id TEXT NOT NULL,
+                message_type TEXT NOT NULL CHECK(message_type IN ('GROUP_INVITE', 'GROUP_INVITE_RESPONSE', 'GROUP_WELCOME', 'GROUP_STATE_UPDATE')),
+                message_payload TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                last_published_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (group_id, target_peer_id, message_type)
+            )
+        `);
+
+        // Group sender sequence — tracks sender's own monotonic seq per group per keyVersion
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS group_sender_seq (
+                group_id TEXT NOT NULL,
+                key_version INTEGER NOT NULL,
+                next_seq INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY (group_id, key_version)
+            )
+        `);
+
+        // Group member seq — tracks highest observed seq from each member per group per keyVersion
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS group_member_seq (
+                group_id TEXT NOT NULL,
+                key_version INTEGER NOT NULL,
+                sender_peer_id TEXT NOT NULL,
+                highest_seq INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (group_id, key_version, sender_peer_id)
+            )
+        `);
     }
 
     private createIndexes(): void {
@@ -379,6 +483,11 @@ export class ChatDatabase {
       -- Indexes for cleanup queries
       CREATE INDEX IF NOT EXISTS idx_failed_key_exchanges_timestamp ON failed_key_exchanges(timestamp);
       CREATE INDEX IF NOT EXISTS idx_notifications_status_created ON notifications(status, created_at);
+
+      -- Group indexes
+      CREATE INDEX IF NOT EXISTS idx_group_key_history_group ON group_key_history(group_id);
+      CREATE INDEX IF NOT EXISTS idx_group_pending_acks_group ON group_pending_acks(group_id);
+      CREATE INDEX IF NOT EXISTS idx_chats_group_id ON chats(group_id);
         `);
     }
 
@@ -1035,22 +1144,7 @@ export class ChatDatabase {
         const chatIds = rows.map((row: ChatParticipant) => row.chat_id);
 
         const chats = this.getChats(chatIds);
-        const singleChat = chats.find((chat: Chat) => chat.type === 'direct');
-        return singleChat ? {
-            id: singleChat.id,
-            type: singleChat.type,
-            name: singleChat.name,
-            created_by: singleChat.created_by,
-            offline_bucket_secret: singleChat.offline_bucket_secret,
-            notifications_bucket_key: singleChat.notifications_bucket_key,
-            status: singleChat.status,
-            offline_last_read_timestamp: singleChat.offline_last_read_timestamp,
-            offline_last_ack_sent: singleChat.offline_last_ack_sent,
-            trusted_out_of_band: singleChat.trusted_out_of_band,
-            created_at: new Date(singleChat.created_at),
-            updated_at: new Date(singleChat.updated_at),
-            muted: singleChat.muted,
-        } : null;
+        return chats.find((chat: Chat) => chat.type === 'direct') ?? null;
     }
 
     getAllOfflineBucketSecrets(includeGroupChats: boolean = true, limit: number = 25): string[] {
@@ -1684,6 +1778,203 @@ export class ChatDatabase {
         // Return new muted status
         const chat = this.db.prepare('SELECT muted FROM chats WHERE id = ?').get(chatId) as { muted: number } | undefined;
         return Boolean(chat?.muted);
+    }
+
+    // --- Group key history ---
+
+    insertGroupKeyHistory(groupId: string, keyVersion: number, encryptedKey: string): void {
+        const stmt = this.db.prepare(`
+            INSERT OR REPLACE INTO group_key_history (group_id, key_version, encrypted_key)
+            VALUES (?, ?, ?)
+        `);
+        stmt.run(groupId, keyVersion, encryptedKey);
+    }
+
+    getGroupKeyForEpoch(groupId: string, keyVersion: number): string | null {
+        const stmt = this.db.prepare('SELECT encrypted_key FROM group_key_history WHERE group_id = ? AND key_version = ?');
+        const row = stmt.get(groupId, keyVersion) as { encrypted_key: string } | undefined;
+        return row?.encrypted_key ?? null;
+    }
+
+    getGroupKeyHistory(groupId: string): GroupKeyHistory[] {
+        const stmt = this.db.prepare('SELECT * FROM group_key_history WHERE group_id = ? ORDER BY key_version ASC');
+        return stmt.all(groupId) as GroupKeyHistory[];
+    }
+
+    deleteGroupKeyHistory(groupId: string): void {
+        this.db.prepare('DELETE FROM group_key_history WHERE group_id = ?').run(groupId);
+    }
+
+    updateGroupKeyStateHash(groupId: string, keyVersion: number, stateHash: string): void {
+        this.db.prepare('UPDATE group_key_history SET state_hash = ? WHERE group_id = ? AND key_version = ?')
+            .run(stateHash, groupId, keyVersion);
+    }
+
+    getGroupKeyStateHash(groupId: string, keyVersion: number): string | null {
+        const row = this.db.prepare('SELECT state_hash FROM group_key_history WHERE group_id = ? AND key_version = ?')
+            .get(groupId, keyVersion) as { state_hash: string | null } | undefined;
+        return row?.state_hash ?? null;
+    }
+
+    markGroupKeyUsedUntil(groupId: string, keyVersion: number, usedUntil: number): void {
+        this.db.prepare('UPDATE group_key_history SET used_until = ? WHERE group_id = ? AND key_version = ?')
+            .run(usedUntil, groupId, keyVersion);
+    }
+
+    // --- Group offline cursors ---
+
+    upsertGroupOfflineCursor(groupId: string, senderPeerId: string, timestamp: number, messageId: string): void {
+        const stmt = this.db.prepare(`
+            INSERT INTO group_offline_cursors (group_id, sender_peer_id, last_read_timestamp, last_read_message_id, updated_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(group_id, sender_peer_id) DO UPDATE SET
+                last_read_timestamp = excluded.last_read_timestamp,
+                last_read_message_id = excluded.last_read_message_id,
+                updated_at = CURRENT_TIMESTAMP
+        `);
+        stmt.run(groupId, senderPeerId, timestamp, messageId);
+    }
+
+    getGroupOfflineCursor(groupId: string, senderPeerId: string): GroupOfflineCursor | null {
+        const stmt = this.db.prepare('SELECT * FROM group_offline_cursors WHERE group_id = ? AND sender_peer_id = ?');
+        const row = stmt.get(groupId, senderPeerId) as GroupOfflineCursor | undefined;
+        return row ?? null;
+    }
+
+    getGroupOfflineCursors(groupId: string): GroupOfflineCursor[] {
+        const stmt = this.db.prepare('SELECT * FROM group_offline_cursors WHERE group_id = ?');
+        return stmt.all(groupId) as GroupOfflineCursor[];
+    }
+
+    deleteGroupOfflineCursors(groupId: string): void {
+        this.db.prepare('DELETE FROM group_offline_cursors WHERE group_id = ?').run(groupId);
+    }
+
+    // --- Group pending ACKs ---
+
+    insertPendingAck(groupId: string, targetPeerId: string, messageType: AckMessageType, payload: string): void {
+        const stmt = this.db.prepare(`
+            INSERT INTO group_pending_acks (group_id, target_peer_id, message_type, message_payload)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(group_id, target_peer_id, message_type) DO UPDATE SET
+                message_payload = excluded.message_payload,
+                last_published_at = CURRENT_TIMESTAMP
+        `);
+        stmt.run(groupId, targetPeerId, messageType, payload);
+    }
+
+    removePendingAck(groupId: string, targetPeerId: string, messageType: AckMessageType): void {
+        const stmt = this.db.prepare('DELETE FROM group_pending_acks WHERE group_id = ? AND target_peer_id = ? AND message_type = ?');
+        stmt.run(groupId, targetPeerId, messageType);
+    }
+
+    removePendingAcksForMember(groupId: string, targetPeerId: string): void {
+        const stmt = this.db.prepare('DELETE FROM group_pending_acks WHERE group_id = ? AND target_peer_id = ?');
+        stmt.run(groupId, targetPeerId);
+    }
+
+    removePendingAcksForGroup(groupId: string): void {
+        this.db.prepare('DELETE FROM group_pending_acks WHERE group_id = ?').run(groupId);
+    }
+
+    getAllPendingAcks(): GroupPendingAck[] {
+        const stmt = this.db.prepare('SELECT * FROM group_pending_acks');
+        return stmt.all() as GroupPendingAck[];
+    }
+
+    getPendingAcksForGroup(groupId: string): GroupPendingAck[] {
+        const stmt = this.db.prepare('SELECT * FROM group_pending_acks WHERE group_id = ?');
+        return stmt.all(groupId) as GroupPendingAck[];
+    }
+
+    updatePendingAckLastPublished(groupId: string, targetPeerId: string, messageType: AckMessageType): void {
+        const stmt = this.db.prepare('UPDATE group_pending_acks SET last_published_at = CURRENT_TIMESTAMP WHERE group_id = ? AND target_peer_id = ? AND message_type = ?');
+        stmt.run(groupId, targetPeerId, messageType);
+    }
+
+    // --- Group sender sequence ---
+
+    getNextSeqAndIncrement(groupId: string, keyVersion: number): number {
+        const upsert = this.db.prepare(`
+            INSERT INTO group_sender_seq (group_id, key_version, next_seq) VALUES (?, ?, 2)
+            ON CONFLICT(group_id, key_version) DO UPDATE SET next_seq = next_seq + 1
+        `);
+        const select = this.db.prepare('SELECT next_seq - 1 AS seq FROM group_sender_seq WHERE group_id = ? AND key_version = ?');
+
+        const txn = this.db.transaction((gId: string, kv: number) => {
+            upsert.run(gId, kv);
+            const row = select.get(gId, kv) as { seq: number };
+            return row.seq;
+        });
+
+        return txn(groupId, keyVersion);
+    }
+
+    getCurrentSeq(groupId: string, keyVersion: number): number {
+        const row = this.db.prepare('SELECT next_seq FROM group_sender_seq WHERE group_id = ? AND key_version = ?')
+            .get(groupId, keyVersion) as { next_seq: number } | undefined;
+        return row ? row.next_seq - 1 : 0;
+    }
+
+    deleteGroupSenderSeqs(groupId: string): void {
+        this.db.prepare('DELETE FROM group_sender_seq WHERE group_id = ?').run(groupId);
+    }
+
+    // --- Group member seq (observed seqs from all members) ---
+
+    updateMemberSeq(groupId: string, keyVersion: number, senderPeerId: string, seq: number): void {
+        this.db.prepare(`
+            INSERT INTO group_member_seq (group_id, key_version, sender_peer_id, highest_seq) VALUES (?, ?, ?, ?)
+            ON CONFLICT(group_id, key_version, sender_peer_id) DO UPDATE SET
+                highest_seq = MAX(highest_seq, excluded.highest_seq)
+        `).run(groupId, keyVersion, senderPeerId, seq);
+    }
+
+    getMemberSeq(groupId: string, keyVersion: number, senderPeerId: string): number {
+        const row = this.db.prepare('SELECT highest_seq FROM group_member_seq WHERE group_id = ? AND key_version = ? AND sender_peer_id = ?')
+            .get(groupId, keyVersion, senderPeerId) as { highest_seq: number } | undefined;
+        return row?.highest_seq ?? 0;
+    }
+
+    getAllMemberSeqs(groupId: string, keyVersion: number): Record<string, number> {
+        const rows = this.db.prepare('SELECT sender_peer_id, highest_seq FROM group_member_seq WHERE group_id = ? AND key_version = ?')
+            .all(groupId, keyVersion) as Array<{ sender_peer_id: string; highest_seq: number }>;
+        const result: Record<string, number> = {};
+        for (const row of rows) {
+            result[row.sender_peer_id] = row.highest_seq;
+        }
+        return result;
+    }
+
+    deleteGroupMemberSeqs(groupId: string): void {
+        this.db.prepare('DELETE FROM group_member_seq WHERE group_id = ?').run(groupId);
+    }
+
+    // --- Group chat column helpers ---
+
+    updateChatGroupStatus(chatId: number, groupStatus: string): void {
+        this.db.prepare('UPDATE chats SET group_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+            .run(groupStatus, chatId);
+    }
+
+    updateChatKeyVersion(chatId: number, keyVersion: number): void {
+        this.db.prepare('UPDATE chats SET key_version = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+            .run(keyVersion, chatId);
+    }
+
+    updateChatGroupInfoDhtKey(chatId: number, dhtKey: string): void {
+        this.db.prepare('UPDATE chats SET group_info_dht_key = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+            .run(dhtKey, chatId);
+    }
+
+    updateGroupParticipants(chatId: number, peerIds: string[]): void {
+        this.db.prepare('DELETE FROM chat_participants WHERE chat_id = ?').run(chatId);
+        const insert = this.db.prepare(
+            'INSERT INTO chat_participants (chat_id, peer_id, role, joined_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)'
+        );
+        for (const peerId of peerIds) {
+            insert.run(chatId, peerId, 'member');
+        }
     }
 
     // Close database connection

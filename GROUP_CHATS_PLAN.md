@@ -345,6 +345,40 @@ against rollback attacks.
 - Group offline buckets (owner = sender, recipients = all group members)
 - Username registry records, notification buckets, etc.
 
+### Bucket Nudge (Real-Time Hint for Online Peers)
+
+Offline buckets are only checked on startup. If a peer is already online when a control
+message (invite, welcome, state update, etc.) is written to their bucket, they won't see
+it until restart. This adds unnecessary latency for the most common case (both peers online).
+
+**Solution: best-effort BUCKET_NUDGE over direct libp2p stream.**
+
+Flow:
+1. Sender writes control message to offline bucket first (source of truth, crash-safe).
+2. If the sender has an active libp2p connection to the recipient, send a lightweight
+   `BUCKET_NUDGE` message over the existing direct stream.
+3. Recipient on nudge does a targeted bucket fetch for that specific peer only.
+4. If nudge fails or is lost (peer offline, connection dropped), the normal startup/offline
+   check flow handles it. ACK/dedupe logic remains unchanged.
+
+Guardrails:
+- **Untrusted hint only.** The nudge payload contains no message content — just a signal
+  to check. Never trust nudge payload content beyond "go check your bucket."
+- **No secrets in nudge.** Do not include bucket secrets, group IDs, or message IDs in
+  the nudge payload. The receiver already knows which buckets to check for a given peer.
+- **Rate-limit and debounce per peer.** Prevent spam/DoS by limiting nudges to at most
+  one per peer per N seconds (e.g., 5 seconds). If multiple control messages are written
+  in quick succession, a single nudge covers all of them.
+- **Delayed fetch with retry.** The nudge can arrive before the DHT PUT propagates.
+  Receiver waits a short delay (e.g., 3-5 seconds) after receiving the nudge before
+  fetching, and retries once after ~30 seconds if the first fetch returns stale data.
+- **Only nudge if already connected.** Do not force-dial a peer just to send a nudge.
+  If there's no active connection, skip the nudge silently — the offline path handles it.
+
+Applies to group control messages (invites, welcomes, state updates) delivered via
+pairwise offline buckets. 1:1 messages have no alternative delivery path — they only
+use offline buckets checked on startup, so the nudge is group-specific.
+
 ---
 
 ## Implementation Plan

@@ -186,3 +186,19 @@ export const FILE_REJECTION_COUNTER_RESET_INTERVAL = 10 * 60 * 1000; // Reset re
 export const SILENT_REJECTION_THRESHOLD_GLOBAL = 20; // After N global rejections, stop responding (bandwidth optimization)
 export const SILENT_REJECTION_THRESHOLD_PER_PEER = 5; // After N rejections to same peer, stop responding (bandwidth optimization)
 export const CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES = 10;
+
+/**
+ * Group chat constants
+ */
+export const GROUP_INVITE_LIFETIME = 14 * 24 * 60 * 60 * 1000; // 14 days
+export const GROUP_MAX_MEMBERS = 10;
+export const GROUP_MAX_MESSAGES_PER_SENDER = 50;
+export const GROUP_ACK_REPUBLISH_INTERVAL = 30 * 60 * 1000; // 30 minutes
+export const GROUP_ACK_REPUBLISH_JITTER = 5 * 60 * 1000; // ±5 minutes
+export const GROUP_GOSSIPSUB_HEARTBEAT_INTERVAL = 90 * 1000; // 90 seconds
+export const GROUP_ROTATION_GRACE_WINDOW_MS = 60 * 1000; // 60 seconds - grace period after rotation for late messages
+export const GROUP_OFFLINE_BUCKET_PREFIX = '/kiyeovo-group-offline';
+export const GROUP_INFO_LATEST_PREFIX = '/kiyeovo-group-info-latest';
+export const GROUP_INFO_VERSION_PREFIX = '/kiyeovo-group-info-v';
+export const GROUP_DHT_REPUBLISH_INTERVAL = 30 * 60 * 1000; // 30 minutes
+export const GROUP_DHT_REPUBLISH_JITTER = 5 * 60 * 1000; // ±5 minutes

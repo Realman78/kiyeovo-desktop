@@ -12,6 +12,11 @@ import type { ChatNode } from '../types.js';
 
 import { EncryptedUserIdentity } from './encrypted-user-identity.js';
 import { offlineMessageValidator, offlineMessageSelector, offlineMessageValidateUpdate } from './offline-message-validator.js';
+import {
+  groupOfflineMessageValidator, groupOfflineMessageSelector, groupOfflineValidateUpdate,
+  groupInfoLatestValidator, groupInfoLatestSelector, groupInfoLatestValidateUpdate,
+  groupInfoVersionedValidator, groupInfoVersionedValidateUpdate,
+} from './group/group-dht-validator.js';
 import dotenv from 'dotenv';
 import {
   DHT_PROTOCOL,
@@ -198,21 +203,31 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
           clientMode: false,
           kBucketSize: K_BUCKET_SIZE,
           prefixLength: PREFIX_LENGTH,
-          // DHT validators: verify write authorization for offline message buckets
           validators: {
-            'kiyeovo-offline': offlineMessageValidator
+            'kiyeovo-offline': offlineMessageValidator,
+            'kiyeovo-group-offline': groupOfflineMessageValidator,
+            'kiyeovo-group-info-latest': groupInfoLatestValidator,
+            'kiyeovo-group-info-v': groupInfoVersionedValidator,
           },
-          // DHT selectors: choose best record when multiple exist
           selectors: {
-            'kiyeovo-offline': offlineMessageSelector
+            'kiyeovo-offline': offlineMessageSelector,
+            'kiyeovo-group-offline': groupOfflineMessageSelector,
+            'kiyeovo-group-info-latest': groupInfoLatestSelector,
           },
-          // DHT validateUpdate: reject stale record overwrites (forked kad-dht feature)
           validateUpdate: async (key, existing, incoming) => {
             const keyStr = new TextDecoder().decode(key);
             if (keyStr.startsWith('/kiyeovo-offline/')) {
               return offlineMessageValidateUpdate(key, existing, incoming);
             }
-            // Unknown prefix — allow the write
+            if (keyStr.startsWith('/kiyeovo-group-offline/')) {
+              return groupOfflineValidateUpdate(key, existing, incoming);
+            }
+            if (keyStr.startsWith('/kiyeovo-group-info-latest/')) {
+              return groupInfoLatestValidateUpdate(key, existing, incoming);
+            }
+            if (keyStr.startsWith('/kiyeovo-group-info-v/')) {
+              return groupInfoVersionedValidateUpdate(key, existing, incoming);
+            }
           }
         }),
         identify: identify({

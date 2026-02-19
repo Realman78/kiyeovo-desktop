@@ -20,6 +20,10 @@ Still secure: brute force is still blocked by submit lockout.
 Cons
 Still “startup blocked” (by design) until the user submits; but at least it feels responsive.
 
+1.2 High: createGroup can leave partial state on failure (chat created + some invites sent) with no rollback/transaction boundary.
+If one invite send fails mid-loop, IPC returns failure even though earlier invites may already be delivered.
+
+
 2. Timestamp forgery - ca ako korisnici sami mijenjaju timestamp
 
 2.5 what if a user changes public keys
@@ -184,3 +188,4 @@ Example strict CSP for production:
 Line 139 opens DevTools in dev mode - that is fine. Just make sure isDev() correctly returns false in packaged builds.
 
 
+marin
