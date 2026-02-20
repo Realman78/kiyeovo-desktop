@@ -900,7 +900,7 @@ export class ChatDatabase {
                 chat.type === 'group' ? chat.name : chat.created_by,
                 chat.offline_bucket_secret,
                 chat.notifications_bucket_key,
-                chat.type === 'group' ? 'pending' : 'active',
+                chat.status ?? (chat.type === 'group' ? 'pending' : 'active'),
                 chat.type === 'group' && chat?.group_id ? chat.group_id : null,
                 chat.type === 'group' && chat?.group_key ? chat.group_key : null,
                 chat.type === 'group' && chat?.permanent_key ? chat.permanent_key : null,

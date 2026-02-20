@@ -153,7 +153,7 @@ const RegisterDialog = ({
                   onChange={handleChange}
                   icon={<AtSign className="w-4 h-4" />}
                   autoFocus
-                  disabled={!isConnected}
+                  disabled={!isConnected || isRegistering}
                   spellCheck={false}
                   className="pr-10"
                 />
