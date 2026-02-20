@@ -1112,7 +1112,7 @@ export class ChatDatabase {
     updateGroupPermanentKey(chatId: number, permanentKey: string, participants: string[], adminPeerId: string): void {
         const updateChatStmt = this.db.prepare(`
             UPDATE chats
-            SET permanent_key = ?, status = 'active', updated_at = CURRENT_TIMESTAMP
+            SET permanent_key = ?, status = 'active', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
             WHERE id = ?
         `);
         updateChatStmt.run(permanentKey, chatId);
@@ -1303,9 +1303,9 @@ export class ChatDatabase {
         const stmt = this.db.prepare(`
             UPDATE chats 
             SET offline_bucket_secret = ?, 
-                notifications_bucket_key = ?, 
+                notifications_bucket_key = ?,
                 trusted_out_of_band = ?,
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
             WHERE id = ?
         `);
         stmt.run(
@@ -1962,17 +1962,17 @@ export class ChatDatabase {
     // --- Group chat column helpers ---
 
     updateChatGroupStatus(chatId: number, groupStatus: string): void {
-        this.db.prepare('UPDATE chats SET group_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+        this.db.prepare("UPDATE chats SET group_status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?")
             .run(groupStatus, chatId);
     }
 
     updateChatKeyVersion(chatId: number, keyVersion: number): void {
-        this.db.prepare('UPDATE chats SET key_version = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+        this.db.prepare("UPDATE chats SET key_version = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?")
             .run(keyVersion, chatId);
     }
 
     updateChatGroupInfoDhtKey(chatId: number, dhtKey: string): void {
-        this.db.prepare('UPDATE chats SET group_info_dht_key = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+        this.db.prepare("UPDATE chats SET group_info_dht_key = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?")
             .run(dhtKey, chatId);
     }
 
