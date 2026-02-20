@@ -209,9 +209,6 @@ export class ChatDatabase {
             trusted_out_of_band: Boolean(row.trusted_out_of_band),
             muted: Boolean(row.muted),
             key_version: row.key_version ?? 0,
-            group_creator_peer_id: row.group_creator_peer_id ?? undefined,
-            group_info_dht_key: row.group_info_dht_key ?? undefined,
-            group_status: row.group_status ?? undefined,
         };
     }
 
@@ -889,8 +886,8 @@ export class ChatDatabase {
 
             this.db.exec('BEGIN TRANSACTION');
             const stmt = this.db.prepare(`
-                INSERT INTO chats (created_by, type, name, offline_bucket_secret, notifications_bucket_key, status, group_id, group_key, permanent_key, trusted_out_of_band, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO chats (created_by, type, name, offline_bucket_secret, notifications_bucket_key, status, group_id, group_key, permanent_key, trusted_out_of_band, group_creator_peer_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `);
 
             const createdAt = chat.created_at instanceof Date ? chat.created_at.toISOString() : chat.created_at;
@@ -905,6 +902,7 @@ export class ChatDatabase {
                 chat.type === 'group' && chat?.group_key ? chat.group_key : null,
                 chat.type === 'group' && chat?.permanent_key ? chat.permanent_key : null,
                 chat.trusted_out_of_band ? 1 : 0,
+                chat.group_creator_peer_id ?? null,
                 createdAt,
                 createdAt
             );
