@@ -27,6 +27,16 @@ export const GroupInviteList: FC = () => {
     fetchInvites();
   }, [fetchInvites]);
 
+  useEffect(() => {
+    const unsubscribe = window.kiyeovoAPI.onOfflineMessagesFetchComplete(() => {
+      void fetchInvites();
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [fetchInvites]);
+
   const handleRespond = async (groupId: string, accept: boolean) => {
     try {
       const result = await window.kiyeovoAPI.respondToGroupInvite(groupId, accept);

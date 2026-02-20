@@ -20,7 +20,13 @@ interface GroupInviteItemProps {
 
 export const GroupInviteItem: FC<GroupInviteItemProps> = ({ invite, onRespond }) => {
   const [isResponding, setIsResponding] = useState(false);
-  const { minutes, seconds } = useExpirationTimer(invite.expiresAt);
+  const { timeLeft } = useExpirationTimer(invite.expiresAt);
+
+  const totalSeconds = Math.max(0, Math.floor(timeLeft / 1000));
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
 
   const handleRespond = async (accept: boolean) => {
     setIsResponding(true);
@@ -46,7 +52,7 @@ export const GroupInviteItem: FC<GroupInviteItemProps> = ({ invite, onRespond })
       </div>
       <div className="shrink-0 flex items-center gap-1">
         <span className="text-xs text-muted-foreground font-mono tabular-nums mr-1">
-          {minutes}:{seconds.toString().padStart(2, '0')}
+          {days}:{hours.toString().padStart(2, '0')}:{minutes.toString().padStart(2, '0')}:{seconds.toString().padStart(2, '0')}
         </span>
         <Button
           variant="ghost"

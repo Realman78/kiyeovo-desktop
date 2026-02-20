@@ -84,6 +84,8 @@ declare global {
             // Offline message events
             checkOfflineMessages: (chatIds?: number[]) => Promise<{ success: boolean; checkedChatIds: number[]; unreadFromChats: Map<number, number>; error: string | null }>;
             checkOfflineMessagesForChat: (chatId: number) => Promise<{ success: boolean; checkedChatIds: number[]; unreadFromChats: Map<number, number>; error: string | null }>;
+            onOfflineMessagesFetchStart: (callback: (data: { chatIds: number[] }) => void) => () => void;
+            onOfflineMessagesFetchComplete: (callback: (data: { chatIds: number[] }) => void) => () => void;
 
             // Pending key exchange events
             cancelPendingKeyExchange: (peerId: string) => Promise<{ success: boolean; error: string | null }>;

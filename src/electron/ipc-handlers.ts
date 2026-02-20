@@ -730,7 +730,7 @@ function setupOfflineMessageHandlers(
   getP2PCore: () => P2PCore | null
 ): void {
   // Check offline messages for specific chats (or top 10 if no IDs provided)
-  ipcMain.handle(IPC_CHANNELS.CHECK_OFFLINE_MESSAGES, async (_event, chatIds?: number[]) => {
+  ipcMain.handle(IPC_CHANNELS.CHECK_OFFLINE_MESSAGES, async (event, chatIds?: number[]) => {
     try {
       const p2pCore = getP2PCore();
       if (!p2pCore) {
@@ -755,6 +755,8 @@ function setupOfflineMessageHandlers(
         return cached.result;
       }
 
+      event.sender.send(IPC_CHANNELS.OFFLINE_MESSAGES_FETCH_START, { chatIds: chatIds ?? [] });
+
       // Create and store the promise for this check
       const checkPromise = (async () => {
         try {
@@ -766,6 +768,8 @@ function setupOfflineMessageHandlers(
           const {checkedChatIds, unreadFromChats} = await p2pCore.messageHandler.checkOfflineMessages(chatIds);
           console.log(`[IPC] Offline message check complete - checked ${checkedChatIds.length} chats`);
           console.log(unreadFromChats)
+
+          event.sender.send(IPC_CHANNELS.OFFLINE_MESSAGES_FETCH_COMPLETE, { chatIds: checkedChatIds });
 
           const result = { success: true, checkedChatIds, unreadFromChats, error: null };
 
@@ -796,7 +800,7 @@ function setupOfflineMessageHandlers(
   });
 
   // Check offline messages for a specific chat
-  ipcMain.handle(IPC_CHANNELS.CHECK_OFFLINE_MESSAGES_FOR_CHAT, async (_event, chatId: number) => {
+  ipcMain.handle(IPC_CHANNELS.CHECK_OFFLINE_MESSAGES_FOR_CHAT, async (event, chatId: number) => {
     try {
       const p2pCore = getP2PCore();
       if (!p2pCore) {
@@ -821,12 +825,16 @@ function setupOfflineMessageHandlers(
         return cached.result;
       }
 
+      event.sender.send(IPC_CHANNELS.OFFLINE_MESSAGES_FETCH_START, { chatIds: [chatId] });
+
       // Create and store the promise for this check
       const checkPromise = (async () => {
         try {
           console.log(`[IPC] Checking offline messages for chat: ${chatId}`);
           const {checkedChatIds, unreadFromChats} = await p2pCore.messageHandler.checkOfflineMessages([chatId]);
           console.log(`[IPC] Offline message check complete for chat: ${chatId}`);
+
+          event.sender.send(IPC_CHANNELS.OFFLINE_MESSAGES_FETCH_COMPLETE, { chatIds: checkedChatIds });
 
           const result = { success: true, checkedChatIds, unreadFromChats, error: null };
 
