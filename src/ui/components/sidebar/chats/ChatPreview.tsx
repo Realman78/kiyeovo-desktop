@@ -1,7 +1,7 @@
 import type { FC } from "react";
 import type { Chat } from "../../../state/slices/chatSlice";
 import { formatTimestampToHourMinute } from "../../../utils/dateUtils";
-import { Ban, BellOff, Paperclip } from "lucide-react";
+import { Ban, BellOff, Paperclip, Users } from "lucide-react";
 
 type ChatPreviewProps = {
     chat: Chat;
@@ -17,7 +17,8 @@ export const ChatPreview: FC<ChatPreviewProps> = ({ chat, onSelectChat, selected
         >
             <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between mb-1">
-                    <span className="font-medium text-sm text-sidebar-foreground truncate">
+                    <span className="font-medium text-sm text-sidebar-foreground truncate flex items-center gap-1.5">
+                        {chat.type === 'group' && <Users className="w-3.5 h-3.5 text-primary shrink-0" />}
                         {chat.name}
                     </span>
                     <span className="text-xs text-muted-foreground shrink-0">

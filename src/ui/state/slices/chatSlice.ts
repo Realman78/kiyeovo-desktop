@@ -47,6 +47,7 @@ export interface Chat {
   muted?: boolean; // Whether notifications and sounds are muted for this chat
   blocked?: boolean; // Whether the other user is blocked
   hasPendingFile?: boolean; // Whether chat has a pending file request
+  groupStatus?: string; // Group-specific status (invited_pending, active, etc.)
 }
 
 interface ChatState {

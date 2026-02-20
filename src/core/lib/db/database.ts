@@ -692,6 +692,15 @@ export class ChatDatabase {
         return new Map(rows.map(row => [row.peer_id, row.username]));
     }
 
+    getAllUsers(): User[] {
+        const stmt = this.db.prepare('SELECT * FROM users ORDER BY username');
+        return (stmt.all() as any[]).map(row => ({
+            ...row,
+            created_at: new Date(row.created_at),
+            updated_at: new Date(row.updated_at),
+        }));
+    }
+
     deleteUserByPeerId(peerId: string): void {
         const stmt = this.db.prepare('DELETE FROM users WHERE peer_id = ?');
         stmt.run(peerId);
@@ -932,8 +941,8 @@ export class ChatDatabase {
                 c.*,
                 u.username
             FROM chats c
-            LEFT JOIN chat_participants cp ON c.id = cp.chat_id AND c.type = 'direct'
-            LEFT JOIN users u ON cp.peer_id = u.peer_id AND cp.peer_id != ?
+            LEFT JOIN chat_participants cp ON c.id = cp.chat_id AND c.type = 'direct' AND cp.peer_id != ?
+            LEFT JOIN users u ON cp.peer_id = u.peer_id
             ORDER BY c.updated_at DESC
         `);
         const rows = stmt.all(myPeerId) as any[];

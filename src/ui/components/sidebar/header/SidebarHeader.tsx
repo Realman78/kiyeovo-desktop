@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, type FC } from "react";
 import { Logo } from "../../icons/Logo";
-import { Plus, MessageSquarePlus, UserPlus } from "lucide-react";
+import { Plus, MessageSquarePlus, UserPlus, Users } from "lucide-react";
 import { Button } from "../../ui/Button";
 import ConnectionStatusDialog from "./ConnectionStatusDialog";
 import { KiyeovoDialog } from "./KiyeovoDialog";
@@ -8,6 +8,7 @@ import { useDispatch, useSelector } from "react-redux";
 import { setConnected, setRegistered, setUsername } from "../../../state/slices/userSlice";
 import NewConversationDialog from "./NewConversationDialog";
 import ImportTrustedUserDialog from "./ImportTrustedUserDialog";
+import NewGroupDialog from "./NewGroupDialog";
 import { addPendingKeyExchange, setActivePendingKeyExchange, setActiveChat, addChat, type Chat } from "../../../state/slices/chatSlice";
 import type { RootState } from "../../../state/store";
 import { DropdownMenu, DropdownMenuItem } from "../../ui/DropdownMenu";
@@ -23,6 +24,7 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
     const [isDHTConnected, setIsDHTConnected] = useState<boolean | null>(null);
     const [newConversationDialogOpen, setNewConversationDialogOpen] = useState(false);
     const [importTrustedUserDialogOpen, setImportTrustedUserDialogOpen] = useState(false);
+    const [newGroupDialogOpen, setNewGroupDialogOpen] = useState(false);
     const [dropdownOpen, setDropdownOpen] = useState(false);
     const [error, setError] = useState<string | undefined>(undefined);
     const [isTorEnabled, setIsTorEnabled] = useState<boolean>(false);
@@ -138,6 +140,39 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
         setDropdownOpen(false);
     }
 
+    const handleShowNewGroupDialog = () => {
+        setNewGroupDialogOpen(true);
+        setDropdownOpen(false);
+    }
+
+    const handleGroupCreated = async (groupId: string, chatId: number) => {
+        console.log(`Group created: ${groupId}, chat ID: ${chatId}`);
+
+        try {
+            const result = await window.kiyeovoAPI.getChatById(chatId);
+            if (result.success && result.chat) {
+                const chat: Chat = {
+                    id: result.chat.id,
+                    type: result.chat.type as 'direct' | 'group',
+                    name: result.chat.name,
+                    lastMessage: '',
+                    lastMessageTimestamp: new Date(result.chat.updated_at || result.chat.created_at).getTime(),
+                    unreadCount: 0,
+                    status: result.chat.status as 'active' | 'pending' | 'awaiting_acceptance',
+                    justCreated: true,
+                    fetchedOffline: true,
+                    isFetchingOffline: false,
+                };
+                dispatch(addChat(chat));
+            }
+        } catch (error) {
+            console.error('Failed to fetch group chat:', error);
+        }
+
+        dispatch(setActiveChat(chatId));
+        toast.success("Group invites have been sent.", "Group created");
+    }
+
     const handleImportSuccess = async (chatId: number) => {
         console.log(`Successfully imported trusted user, chat ID: ${chatId}`);
 
@@ -227,6 +262,12 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
                     >
                         Import Trusted User
                     </DropdownMenuItem>
+                    <DropdownMenuItem
+                        icon={<Users className="w-4 h-4" />}
+                        onClick={handleShowNewGroupDialog}
+                    >
+                        New Group
+                    </DropdownMenuItem>
                 </DropdownMenu>
             </div>
         </div>
@@ -248,6 +289,11 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
             open={importTrustedUserDialogOpen}
             onOpenChange={setImportTrustedUserDialogOpen}
             onSuccess={handleImportSuccess}
+        />
+        <NewGroupDialog
+            open={newGroupDialogOpen}
+            onOpenChange={setNewGroupDialogOpen}
+            onSuccess={handleGroupCreated}
         />
     </>
 };

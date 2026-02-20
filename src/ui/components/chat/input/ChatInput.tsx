@@ -19,14 +19,16 @@ export const ChatInput: FC = () => {
     const myPeerId = useSelector((state: RootState) => state.user.peerId);
     const myUsername = useSelector((state: RootState) => state.user.username);
     const isBlocked = activeChat?.blocked || false;
+    const isGroupPending = activeChat?.type === 'group' && activeChat?.groupStatus !== 'active';
+    const isDisabled = isBlocked || isGroupPending;
     const inputRef = useRef<HTMLInputElement>(null);
 
     // Auto-focus input when chat changes
     useEffect(() => {
-        if (activeChat && !isBlocked) {
+        if (activeChat && !isDisabled) {
             inputRef.current?.focus();
         }
-    }, [activeChat?.id, isBlocked]);
+    }, [activeChat?.id, isDisabled]);
 
     const activeChatId = activeChat?.id;
     const inputQuery = activeChatId ? (draftByChatId[activeChatId] ?? "") : "";
@@ -182,7 +184,7 @@ export const ChatInput: FC = () => {
                 type="button"
                 variant="ghost"
                 size="icon"
-                disabled={isSending || isBlocked}
+                disabled={isSending || isDisabled}
                 onClick={() => setFileDialogOpen(true)}
                 className="text-sidebar-foreground hover:text-foreground"
             >
@@ -190,10 +192,10 @@ export const ChatInput: FC = () => {
             </Button>
             <Input
                 ref={inputRef}
-                placeholder={isBlocked ? "Cannot send messages to blocked users" : "Type a message..."}
+                placeholder={isBlocked ? "Cannot send messages to blocked users" : isGroupPending ? "Waiting for members to join..." : "Type a message..."}
                 parentClassName="flex flex-1 w-full"
                 value={inputQuery}
-                disabled={isSending || isBlocked}
+                disabled={isSending || isDisabled}
                 onChange={(e) => {
                     if (!activeChat) return;
                     setDraftForChat(activeChat.id, e.target.value);
@@ -201,7 +203,7 @@ export const ChatInput: FC = () => {
             />
             <Button
                 type="submit"
-                disabled={!inputQuery.trim() || isSending || isBlocked}
+                disabled={!inputQuery.trim() || isSending || isDisabled}
                 size="icon"
             >
                 {isSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}

@@ -6,6 +6,8 @@ import { validateMessageLength, validateUsername } from '../core/utils/validator
 import { peerIdFromString } from '@libp2p/peer-id';
 import { OfflineMessageManager } from '../core/lib/offline-message-manager.js';
 import { ProfileManager } from '../core/lib/profile-manager.js';
+import { GroupCreator } from '../core/lib/group/group-creator.js';
+import { GroupResponder } from '../core/lib/group/group-responder.js';
 import { ensureAppDataDir } from '../core/utils/miscellaneous.js';
 import { homedir } from 'os';
 import { basename, join } from 'path';
@@ -65,6 +67,9 @@ export function setupIPCHandlers(
 
   // File transfer handlers
   setupFileTransferHandlers(ipcMain, getP2PCore);
+
+  // Group chat handlers
+  setupGroupHandlers(ipcMain, getP2PCore);
 
   // App handlers
   setupAppHandlers(ipcMain, getP2PCore);
@@ -1312,6 +1317,203 @@ function setupChatSettingsHandlers(
     } catch (error) {
       console.error('[IPC] Failed to set app config:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to set app config' };
+    }
+  });
+}
+
+/**
+ * Group chat handlers
+ */
+function setupGroupHandlers(
+  ipcMain: IpcMain,
+  getP2PCore: () => P2PCore | null
+): void {
+  ipcMain.handle(IPC_CHANNELS.GET_CONTACTS, async () => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, contacts: [], error: 'P2P core not initialized' };
+      }
+
+      const myPeerId = p2pCore.userIdentity.id;
+      // Only return users who have an active direct chat (established pairwise keys)
+      const chats = p2pCore.database.getAllChatsWithUsernames(myPeerId);
+      const contacts = chats
+        .filter(c => c.type === 'direct' && c.status === 'active')
+        .map(c => {
+          const participants = p2pCore.database.getChatParticipants(c.id);
+          const otherParticipant = participants.find(p => p.peer_id !== myPeerId);
+          if (!otherParticipant) return null;
+          return { peerId: otherParticipant.peer_id, username: c.username || c.name };
+        })
+        .filter((c): c is { peerId: string; username: string } => c !== null);
+
+      return { success: true, contacts, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to get contacts:', error);
+      return { success: false, contacts: [], error: error instanceof Error ? error.message : 'Failed to get contacts' };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.CREATE_GROUP, async (_event, groupName: string, peerIds: string[]) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, groupId: null, chatId: null, error: 'P2P core not initialized' };
+      }
+
+      const username = p2pCore.usernameRegistry.getCurrentUsername();
+      if (!username) {
+        return { success: false, groupId: null, chatId: null, error: 'No username registered' };
+      }
+
+      // Check for duplicate group name
+      const existingGroup = p2pCore.database.getChatByName(groupName.trim(), 'group');
+      if (existingGroup) {
+        return { success: false, groupId: null, chatId: null, error: `A group named "${groupName.trim()}" already exists` };
+      }
+
+      const creator = new GroupCreator({
+        node: p2pCore.node,
+        database: p2pCore.database,
+        userIdentity: p2pCore.userIdentity,
+        myPeerId: p2pCore.userIdentity.id,
+        myUsername: username,
+      });
+
+      const groupId = await creator.createGroup(groupName, peerIds);
+      console.log(`[IPC] Group created: ${groupId}`);
+
+      // Look up the chatId for the newly created group
+      const chat = p2pCore.database.getChatByGroupId(groupId);
+      const chatId = chat?.id ?? null;
+
+      return { success: true, groupId, chatId, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to create group:', error);
+      return { success: false, groupId: null, chatId: null, error: error instanceof Error ? error.message : 'Failed to create group' };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.GET_GROUP_MEMBERS, async (_event, chatId: number) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, members: [], error: 'P2P core not initialized' };
+      }
+
+      const myPeerId = p2pCore.userIdentity.id;
+      const participants = p2pCore.database.getChatParticipants(chatId);
+
+      // Get the chat to find groupId for pending ack lookup
+      const chat = p2pCore.database.getChatByIdWithUsernameAndLastMsg(chatId, myPeerId);
+      const groupId = chat?.group_id;
+
+      const pendingAcks = groupId ? p2pCore.database.getPendingAcksForGroup(groupId) : [];
+
+      const members: Array<{ peerId: string; username: string; status: 'pending' | 'accepted' | 'confirmed' }> = [];
+
+      for (const participant of participants) {
+        if (participant.peer_id === myPeerId) continue;
+
+        const user = p2pCore.database.getUserByPeerId(participant.peer_id);
+        const username = user?.username || participant.peer_id;
+
+        // Derive status from pending acks
+        const hasInvitePending = pendingAcks.some(
+          a => a.target_peer_id === participant.peer_id && a.message_type === 'GROUP_INVITE'
+        );
+        const hasWelcomePending = pendingAcks.some(
+          a => a.target_peer_id === participant.peer_id && a.message_type === 'GROUP_WELCOME'
+        );
+
+        let status: 'pending' | 'accepted' | 'confirmed';
+        if (hasInvitePending) {
+          status = 'pending';
+        } else if (hasWelcomePending) {
+          status = 'accepted';
+        } else {
+          status = 'confirmed';
+        }
+
+        members.push({ peerId: participant.peer_id, username, status });
+      }
+
+      return { success: true, members, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to get group members:', error);
+      return { success: false, members: [], error: error instanceof Error ? error.message : 'Failed to get group members' };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.GET_GROUP_INVITES, async () => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, invites: [], error: 'P2P core not initialized' };
+      }
+
+      const notifications = p2pCore.database.getAllNotifications();
+      const invites = notifications
+        .filter(n => n.notification_type === 'group_invitation' && n.status === 'pending')
+        .map(n => {
+          try {
+            const data = JSON.parse(n.notification_data) as {
+              groupId: string;
+              groupName: string;
+              inviterPeerId: string;
+              inviteId: string;
+              expiresAt: number;
+            };
+            const inviter = p2pCore.database.getUserByPeerId(data.inviterPeerId);
+            return {
+              groupId: data.groupId,
+              groupName: data.groupName,
+              inviterPeerId: data.inviterPeerId,
+              inviterUsername: inviter?.username || data.inviterPeerId,
+              inviteId: data.inviteId,
+              expiresAt: data.expiresAt,
+            };
+          } catch {
+            return null;
+          }
+        })
+        .filter((inv): inv is NonNullable<typeof inv> => inv !== null);
+
+      return { success: true, invites, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to get group invites:', error);
+      return { success: false, invites: [], error: error instanceof Error ? error.message : 'Failed to get group invites' };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.RESPOND_TO_GROUP_INVITE, async (_event, groupId: string, accept: boolean) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+
+      const username = p2pCore.usernameRegistry.getCurrentUsername();
+      if (!username) {
+        return { success: false, error: 'No username registered' };
+      }
+
+      const responder = new GroupResponder({
+        node: p2pCore.node,
+        database: p2pCore.database,
+        userIdentity: p2pCore.userIdentity,
+        myPeerId: p2pCore.userIdentity.id,
+        myUsername: username,
+      });
+
+      await responder.respondToInvite(groupId, accept);
+      console.log(`[IPC] Group invite response sent: ${accept ? 'accepted' : 'rejected'} for ${groupId}`);
+
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to respond to group invite:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to respond to group invite' };
     }
   });
 }

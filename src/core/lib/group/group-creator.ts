@@ -67,7 +67,7 @@ export class GroupCreator {
       offline_bucket_secret: '',
       notifications_bucket_key: '',
       group_id: groupId,
-      status: 'pending',
+      status: 'active',
       offline_last_read_timestamp: 0,
       offline_last_ack_sent: 0,
       trusted_out_of_band: false,
@@ -280,6 +280,9 @@ export class GroupCreator {
 
     // Publish group-info DHT records
     await this.publishGroupInfoRecords(groupId, keyVersion, roster);
+
+    // Transition group_status to 'active' now that at least one member has been welcomed
+    database.updateChatGroupStatus(chat.id, 'active');
   }
 
   async rotateGroupKey(
@@ -534,6 +537,8 @@ export class GroupCreator {
       userIdentity.signingPrivateKey,
       database,
     );
+
+    // TODO: send BUCKET_NUDGE message to the peer
   }
 
   private async putJsonToDHT(dhtKey: string, data: object): Promise<void> {

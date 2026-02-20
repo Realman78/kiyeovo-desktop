@@ -9,6 +9,7 @@ import { addContactAttempt, removeContactAttempt, setContactAttempts } from '../
 import type { RootState } from '../../state/store'
 import { ContactAttemptList } from './contact-attempts/ContactAttemptList'
 import { PendingKeyExchangeList } from './pending-key-exchange/PendingKeyExchangeList'
+import { GroupInviteList } from './group-invites/GroupInviteList'
 import { setConnected, setPeerId, setRegistered, setUsername } from '../../state/slices/userSlice'
 
 export const Sidebar: FC = () => {
@@ -90,6 +91,7 @@ export const Sidebar: FC = () => {
           handleContactAttemptExpired={handleContactAttemptExpired}
         />
       )}
+      {!isCollapsed && <GroupInviteList />}
       {!isCollapsed && <PendingKeyExchangeList />}
       {!isCollapsed && <ChatList />}
       {isCollapsed && <div className="flex-1" />}

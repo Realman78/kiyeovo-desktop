@@ -1,5 +1,5 @@
 import { xchacha20poly1305 } from '@noble/ciphers/chacha';
-import { privateDecrypt, randomBytes } from 'crypto';
+import { privateDecrypt, randomBytes, createDecipheriv } from 'crypto';
 import type { ConversationSession, EncryptedMessage, OfflineMessage, OfflineSenderInfo } from '../types.js';
 import { generalErrorHandler } from '../utils/general-error.js';
 
@@ -99,6 +99,22 @@ export class MessageEncryption {
     }
 
     try {
+      if (message.message_type === 'hybrid') {
+        if (!message.encrypted_aes_key || !message.aes_iv) {
+          return '[Malformed hybrid message: missing key or IV]';
+        }
+        const aesKey = privateDecrypt(offlinePrivateKey, Buffer.from(message.encrypted_aes_key, 'base64'));
+        const iv = Buffer.from(message.aes_iv, 'base64');
+        const combined = Buffer.from(message.content, 'base64');
+        // First 16 bytes are the GCM auth tag, remainder is ciphertext
+        const authTag = combined.subarray(0, 16);
+        const ciphertext = combined.subarray(16);
+        const decipher = createDecipheriv('aes-256-gcm', aesKey, iv);
+        decipher.setAuthTag(authTag);
+        return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
+      }
+
+      // 'encrypted': RSA-decrypt directly
       const encryptedContent = Buffer.from(message.content, 'base64');
       const decryptedContent = privateDecrypt(
         offlinePrivateKey,

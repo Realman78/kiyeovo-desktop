@@ -217,10 +217,12 @@ export interface OfflineMessage {
   id: string // UUID to prevent duplicates
   encrypted_sender_info: string // RSA-encrypted JSON: {peer_id: string, username: string}
   bucket_key?: string // For internal tracking during retrieval
-  content: string // RSA-encrypted with recipient's public key
+  content: string // RSA-encrypted ('encrypted'), AES-GCM ciphertext+authTag ('hybrid'), or plaintext ('plain')
   signature: string // Ed25519 signature over signed_payload (base64)
   signed_payload: OfflineSignedPayload // The payload that was signed (for verification)
-  message_type: 'encrypted' | 'plain'
+  message_type: 'encrypted' | 'plain' | 'hybrid'
+  encrypted_aes_key?: string // hybrid only: RSA-encrypted 32-byte AES key (base64)
+  aes_iv?: string            // hybrid only: 12-byte AES-GCM IV (base64)
   timestamp: number
   expires_at: number // TTL
 }
@@ -570,6 +572,13 @@ export const IPC_CHANNELS = {
   // Tor status
   TOR_STATUS: 'tor:status',
   GET_TOR_STATUS: 'tor:getStatus',
+
+  // Group chats
+  GET_CONTACTS: 'group:getContacts',
+  CREATE_GROUP: 'group:create',
+  GET_GROUP_MEMBERS: 'group:getMembers',
+  GET_GROUP_INVITES: 'group:getInvites',
+  RESPOND_TO_GROUP_INVITE: 'group:respondToInvite',
 } as const;
 
 export interface PasswordRequest {

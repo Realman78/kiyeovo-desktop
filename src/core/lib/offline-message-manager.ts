@@ -1,4 +1,4 @@
-import { randomUUID, publicEncrypt } from 'crypto';
+import { randomUUID, publicEncrypt, randomBytes, createCipheriv } from 'crypto';
 import { gzip, gunzip } from 'zlib';
 import { promisify } from 'util';
 import type { ChatNode, OfflineCheckCacheEntry, OfflineMessage, OfflineMessageStore, OfflineSenderInfo, OfflineSignedPayload, StoreSignedPayload } from '../types.js';
@@ -222,14 +222,36 @@ export class OfflineMessageManager {
         bucketKey: string,                    // Full bucket key for signature binding
         offlineAckTimestamp?: number          // Optional ACK for messages we've read from recipient's bucket
     ): OfflineMessage {
+        // RSA-OAEP (Node default) max plaintext for a 2048-bit key: 256 - 2*20 - 2 = 214 bytes
+        const RSA_MAX_PLAINTEXT = 214;
+
         try {
             const timestamp = Date.now();
 
-            const encryptedContent = publicEncrypt(
-                recipientPublicKey,
-                Buffer.from(content, 'utf8')
-            );
-            const encryptedContentB64 = encryptedContent.toString('base64');
+            const contentBytes = Buffer.from(content, 'utf8');
+            let encryptedContentB64: string;
+            let encryptedAesKey: string | undefined;
+            let aesIv: string | undefined;
+            let messageType: 'encrypted' | 'hybrid';
+
+            if (contentBytes.byteLength <= RSA_MAX_PLAINTEXT) {
+                // Small enough to RSA-encrypt directly
+                const encryptedContent = publicEncrypt(recipientPublicKey, contentBytes);
+                encryptedContentB64 = encryptedContent.toString('base64');
+                messageType = 'encrypted';
+            } else {
+                // Hybrid: AES-256-GCM for content, RSA for the AES key
+                const aesKey = randomBytes(32);
+                const iv = randomBytes(12);
+                const cipher = createCipheriv('aes-256-gcm', aesKey, iv);
+                const ciphertext = Buffer.concat([cipher.update(contentBytes), cipher.final()]);
+                const authTag = cipher.getAuthTag();
+                // Prepend authTag (16 bytes) to ciphertext so decryptor can extract it
+                encryptedContentB64 = Buffer.concat([authTag, ciphertext]).toString('base64');
+                encryptedAesKey = publicEncrypt(recipientPublicKey, aesKey).toString('base64');
+                aesIv = iv.toString('base64');
+                messageType = 'hybrid';
+            }
 
             // Encrypt sender info (peer_id, username, and optional ACK) with recipient's RSA public key
             const senderInfo: OfflineSenderInfo = {
@@ -245,8 +267,9 @@ export class OfflineMessageManager {
             );
             const encryptedSenderInfoB64 = encryptedSenderInfo.toString('base64');
 
+            const encryptedContentBuf = Buffer.from(encryptedContentB64, 'base64');
             const signedPayload: OfflineSignedPayload = {
-                content_hash: Buffer.from(sha256(encryptedContent)).toString('base64'),
+                content_hash: Buffer.from(sha256(encryptedContentBuf)).toString('base64'),
                 sender_info_hash: Buffer.from(sha256(encryptedSenderInfo)).toString('base64'),
                 timestamp,
                 bucket_key: bucketKey
@@ -262,7 +285,9 @@ export class OfflineMessageManager {
                 content: encryptedContentB64,
                 signature,
                 signed_payload: signedPayload,
-                message_type: 'encrypted',
+                message_type: messageType,
+                ...(encryptedAesKey !== undefined && { encrypted_aes_key: encryptedAesKey }),
+                ...(aesIv !== undefined && { aes_iv: aesIv }),
                 timestamp,
                 expires_at: timestamp + MESSAGE_TTL
             };

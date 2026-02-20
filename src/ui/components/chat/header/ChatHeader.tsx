@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useSelector, useDispatch } from "react-redux";
 import type { RootState } from "../../../state/store";
 import { Button } from "../../ui/Button";
-import { Bell, BellOff, MoreVertical, Shield, UserPlus, Ban, UserCheck, Info, Trash2, AlertCircle } from "lucide-react";
+import { Bell, BellOff, MoreVertical, Shield, UserPlus, Ban, UserCheck, Info, Trash2, AlertCircle, Users, Clock } from "lucide-react";
 import { DropdownMenu, DropdownMenuItem } from "../../ui/DropdownMenu";
 import { updateChat, clearMessages, removeChat } from "../../../state/slices/chatSlice";
 import { AboutUserModal } from "./AboutUserModal";
@@ -22,8 +22,11 @@ import { validateUsername } from "../../../utils/general";
 type ChatHeaderProps = {
   username: string;
   peerId: string;
+  chatType?: 'direct' | 'group';
+  groupStatus?: string;
+  chatId?: number;
 }
-export const ChatHeader = ({ username, peerId }: ChatHeaderProps) => {
+export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: ChatHeaderProps) => {
   const activeChat = useSelector((state: RootState) => state.chat.activeChat);
   const chats = useSelector((state: RootState) => state.chat.chats);
   const dispatch = useDispatch();
@@ -37,6 +40,22 @@ export const ChatHeader = ({ username, peerId }: ChatHeaderProps) => {
   const [editUsernameModalOpen, setEditUsernameModalOpen] = useState(false);
   const [newUsername, setNewUsername] = useState(username);
   const [validationError, setValidationError] = useState("");
+  const [groupMembers, setGroupMembers] = useState<Array<{ peerId: string; username: string; status: 'pending' | 'accepted' | 'confirmed' }>>([]);
+
+  useEffect(() => {
+    const fetchGroupMembers = async () => {
+      if (chatType !== 'group' || !chatId) return;
+      try {
+        const result = await window.kiyeovoAPI.getGroupMembers(chatId);
+        if (result.success) {
+          setGroupMembers(result.members);
+        }
+      } catch (error) {
+        console.error('Failed to fetch group members:', error);
+      }
+    };
+    fetchGroupMembers();
+  }, [chatType, chatId]);
 
   useEffect(() => {
     const checkBlockedStatus = async () => {
@@ -197,21 +216,46 @@ export const ChatHeader = ({ username, peerId }: ChatHeaderProps) => {
     }
   };
 
-  return <div className={`h-16 px-6 flex items-center justify-between border-b border-border ${activeChat?.status === 'pending' ? "" : "bg-card/50"}`}>
+  const isGroup = chatType === 'group';
+  const isGroupPending = isGroup && groupStatus !== 'active';
+
+  const memberSummary = groupMembers.length > 0
+    ? groupMembers.map(m => `${m.username} (${m.status})`).join(', ')
+    : 'No members yet';
+
+  return <div className={`${isGroupPending ? 'h-20' : 'h-16'} px-6 flex items-center justify-between border-b border-border ${activeChat?.status === 'pending' ? "" : "bg-card/50"}`}>
     <div className="flex items-center gap-3">
-      {activeChat?.status === 'pending' ? (
+      {isGroup ? (
+        <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center">
+          <Users className="w-5 h-5 text-primary" />
+        </div>
+      ) : activeChat?.status === 'pending' ? (
         <div className="w-10 h-10 rounded-full bg-warning/20 flex items-center justify-center">
           <UserPlus className="w-5 h-5 text-warning" />
         </div>
       ) : null}
       <div>
         <h3 className="font-medium text-foreground text-left">{username}</h3>
-        <div className="flex items-center gap-1.5">
-          <Shield className="w-3 h-3 text-primary" />
-          <span className="text-xs text-muted-foreground font-mono">
-            {peerId}
-          </span>
-        </div>
+        {isGroup ? (
+          <div className="flex flex-col gap-0.5">
+            <span className="text-xs text-muted-foreground truncate max-w-xs text-left" title={memberSummary}>
+              {memberSummary}
+            </span>
+            {isGroupPending && (
+              <div className="flex items-center gap-1">
+                <Clock className="w-3 h-3 text-warning" />
+                <span className="text-xs text-warning">Waiting for members to accept invites...</span>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="flex items-center gap-1.5">
+            <Shield className="w-3 h-3 text-primary" />
+            <span className="text-xs text-muted-foreground font-mono">
+              {peerId}
+            </span>
+          </div>
+        )}
       </div>
     </div>
 
@@ -225,42 +269,61 @@ export const ChatHeader = ({ username, peerId }: ChatHeaderProps) => {
           </Button>
         }
       >
-        <DropdownMenuItem
-          icon={<Info className="w-4 h-4" />}
-          onClick={handleAboutUser}
-        >
-          About user
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          icon={<Info className="w-4 h-4" />}
-          onClick={handleEditUsername}
-        >
-          Edit username
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          icon={activeChat?.muted ? <Bell className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
-          onClick={handleToggleMute}
-        >
-          {activeChat?.muted ? 'Enable notifications' : 'Disable notifications'}
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          icon={isBlocked ? <UserCheck className="w-4 h-4" /> : <Ban className="w-4 h-4" />}
-          onClick={handleToggleBlock}
-        >
-          {isBlocked ? 'Unblock user' : 'Block user'}
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          icon={<Trash2 className="w-4 h-4" />}
-          onClick={handleDeleteAllMessages}
-        >
-          Clear messages
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          icon={<Trash2 className="w-4 h-4" />}
-          onClick={handleDeleteChatAndUser}
-        >
-          Delete chat & User
-        </DropdownMenuItem>
+        {isGroup ? (
+          <>
+            <DropdownMenuItem
+              icon={<Info className="w-4 h-4" />}
+              onClick={() => setDropdownOpen(false)}
+            >
+              About group
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              icon={activeChat?.muted ? <Bell className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
+              onClick={handleToggleMute}
+            >
+              {activeChat?.muted ? 'Enable notifications' : 'Disable notifications'}
+            </DropdownMenuItem>
+          </>
+        ) : (
+          <>
+            <DropdownMenuItem
+              icon={<Info className="w-4 h-4" />}
+              onClick={handleAboutUser}
+            >
+              About user
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              icon={<Info className="w-4 h-4" />}
+              onClick={handleEditUsername}
+            >
+              Edit username
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              icon={activeChat?.muted ? <Bell className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
+              onClick={handleToggleMute}
+            >
+              {activeChat?.muted ? 'Enable notifications' : 'Disable notifications'}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              icon={isBlocked ? <UserCheck className="w-4 h-4" /> : <Ban className="w-4 h-4" />}
+              onClick={handleToggleBlock}
+            >
+              {isBlocked ? 'Unblock user' : 'Block user'}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              icon={<Trash2 className="w-4 h-4" />}
+              onClick={handleDeleteAllMessages}
+            >
+              Clear messages
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              icon={<Trash2 className="w-4 h-4" />}
+              onClick={handleDeleteChatAndUser}
+            >
+              Delete chat & User
+            </DropdownMenuItem>
+          </>
+        )}
       </DropdownMenu>
     </div>
 

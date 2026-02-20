@@ -391,6 +391,23 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
         return ipcRenderer.invoke(IPC_CHANNELS.OPEN_FILE_LOCATION, filePath);
     },
 
+    // Group chats
+    getContacts: async (): Promise<{ success: boolean; contacts: Array<{ peerId: string; username: string }>; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.GET_CONTACTS);
+    },
+    createGroup: async (groupName: string, peerIds: string[]): Promise<{ success: boolean; groupId: string | null; chatId: number | null; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.CREATE_GROUP, groupName, peerIds);
+    },
+    getGroupMembers: async (chatId: number): Promise<{ success: boolean; members: Array<{ peerId: string; username: string; status: 'pending' | 'accepted' | 'confirmed' }>; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.GET_GROUP_MEMBERS, chatId);
+    },
+    getGroupInvites: async (): Promise<{ success: boolean; invites: Array<{ groupId: string; groupName: string; inviterPeerId: string; inviterUsername: string; inviteId: string; expiresAt: number }>; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.GET_GROUP_INVITES);
+    },
+    respondToGroupInvite: async (groupId: string, accept: boolean): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.RESPOND_TO_GROUP_INVITE, groupId, accept);
+    },
+
     // File transfer events
     onFileTransferProgress: (callback: (data: any) => void) => {
         const listener = (_event: any, data: any) => callback(data);

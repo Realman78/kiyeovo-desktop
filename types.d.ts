@@ -217,6 +217,13 @@ declare global {
             }>;
             openFileLocation: (filePath: string) => Promise<{ success: boolean; error: string | null }>;
 
+            // Group chats
+            getContacts: () => Promise<{ success: boolean; contacts: Array<{ peerId: string; username: string }>; error: string | null }>;
+            createGroup: (groupName: string, peerIds: string[]) => Promise<{ success: boolean; groupId: string | null; chatId: number | null; error: string | null }>;
+            getGroupMembers: (chatId: number) => Promise<{ success: boolean; members: Array<{ peerId: string; username: string; status: 'pending' | 'accepted' | 'confirmed' }>; error: string | null }>;
+            getGroupInvites: () => Promise<{ success: boolean; invites: Array<{ groupId: string; groupName: string; inviterPeerId: string; inviterUsername: string; inviteId: string; expiresAt: number }>; error: string | null }>;
+            respondToGroupInvite: (groupId: string, accept: boolean) => Promise<{ success: boolean; error: string | null }>;
+
             // File transfer events
             onFileTransferProgress: (callback: (data: {
                 chatId: number;

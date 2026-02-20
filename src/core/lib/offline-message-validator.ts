@@ -29,7 +29,9 @@ export interface OfflineMessageDHT {
   content: string;
   signature: string;
   signed_payload: OfflineSignedPayload;
-  message_type: 'encrypted' | 'plain';
+  message_type: 'encrypted' | 'plain' | 'hybrid';
+  encrypted_aes_key?: string;
+  aes_iv?: string;
   timestamp: number;
   expires_at: number;
 }

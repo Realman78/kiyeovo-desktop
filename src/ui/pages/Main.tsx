@@ -219,10 +219,10 @@ export const Main = () => {
         if (result.success) {
           console.log(`[UI] Loaded ${result.chats.length} chats`);
 
-          const mappedChats = result.chats.filter((dbChat: any) => dbChat.other_peer_id !== undefined).map((dbChat: any) => ({
+          const mappedChats = result.chats.map((dbChat: any) => ({
             id: dbChat.id,
             type: dbChat.type,
-            name: dbChat.username || dbChat.name,
+            name: dbChat.type === 'group' ? dbChat.name : (dbChat.username || dbChat.name),
             peerId: dbChat.other_peer_id,
             lastMessage: dbChat.last_message_content || 'SYSTEM: No messages yet',
             lastMessageTimestamp: dbChat.last_message_timestamp
@@ -230,19 +230,21 @@ export const Main = () => {
               : new Date(dbChat.updated_at).getTime(),
             unreadCount: 0,
             status: dbChat.status,
-            fetchedOffline: false,
+            fetchedOffline: dbChat.type === 'group', // Groups don't need offline fetch
             isFetchingOffline: false,
             blocked: dbChat.blocked,
             muted: dbChat.muted,
+            groupStatus: dbChat.group_status,
           }));
 
           dispatch(setChats(mappedChats));
 
-          // After loading chats, check for offline messages for top 10 most recent
-          if (mappedChats.length > 0 && isConnected) {
+          // After loading chats, check for offline messages for top 10 most recent direct chats
+          const directChats = mappedChats.filter((c: any) => c.type === 'direct');
+          if (directChats.length > 0 && isConnected) {
             // Sort by most recent activity (latest message) and take top 10
-            const sortedChats = [...mappedChats].sort((a, b) => b.lastMessageTimestamp - a.lastMessageTimestamp);
-            const top10ChatIds = sortedChats.slice(0, 10).map(chat => chat.id);
+            const sortedChats = [...directChats].sort((a: any, b: any) => b.lastMessageTimestamp - a.lastMessageTimestamp);
+            const top10ChatIds = sortedChats.slice(0, 10).map((chat: any) => chat.id);
 
             console.log(`[UI] Checking offline messages for ${top10ChatIds.length} most recent chats (IDs: ${top10ChatIds.join(', ')})...`);
             top10ChatIds.forEach((chatId) => {
@@ -259,10 +261,10 @@ export const Main = () => {
                 console.log(`[UI] Unread from chats: ${JSON.stringify(result.unreadFromChats)}`);
                 const refreshResult = await window.kiyeovoAPI.getChats();
                 if (refreshResult.success) {
-                  const refreshedChats = refreshResult.chats.filter((dbChat: any) => dbChat.other_peer_id !== undefined).map((dbChat: any) => ({
+                  const refreshedChats = refreshResult.chats.map((dbChat: any) => ({
                     id: dbChat.id,
                     type: dbChat.type,
-                    name: dbChat.username || dbChat.name,
+                    name: dbChat.type === 'group' ? dbChat.name : (dbChat.username || dbChat.name),
                     username: dbChat.username,
                     peerId: dbChat.other_peer_id,
                     lastMessage: dbChat.last_message_content || 'SYSTEM: No messages yet',
@@ -271,10 +273,11 @@ export const Main = () => {
                       : new Date(dbChat.updated_at).getTime(),
                     unreadCount: result.unreadFromChats.get(dbChat.id) ?? 0,
                     status: dbChat.status,
-                    fetchedOffline: result.checkedChatIds.includes(dbChat.id),
+                    fetchedOffline: dbChat.type === 'group' || result.checkedChatIds.includes(dbChat.id),
                     isFetchingOffline: false,
                     blocked: dbChat.blocked,
                     muted: dbChat.muted,
+                    groupStatus: dbChat.group_status,
                   }));
                   dispatch(setChats(refreshedChats));
                   console.log('[UI] Chats refreshed successfully');

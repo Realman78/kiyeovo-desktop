@@ -72,7 +72,13 @@ const ChatWrapper = ({
         <EmptyState />
       ) : (
         <>
-          <ChatHeader username={activeChat?.name ?? activeContactAttempt?.username ?? activePendingKeyExchange?.username ?? ''} peerId={activeChat?.peerId ?? activeContactAttempt?.peerId ?? activePendingKeyExchange?.peerId ?? ''} />
+          <ChatHeader
+            username={activeChat?.name ?? activeContactAttempt?.username ?? activePendingKeyExchange?.username ?? ''}
+            peerId={activeChat?.peerId ?? activeContactAttempt?.peerId ?? activePendingKeyExchange?.peerId ?? ''}
+            chatType={activeChat?.type}
+            groupStatus={activeChat?.groupStatus}
+            chatId={activeChat?.id}
+          />
           <MessagesContainer
             messages={messagesToDisplay}
             isPending={!!activeContactAttempt || !!activePendingKeyExchange}
