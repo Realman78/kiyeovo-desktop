@@ -22,6 +22,7 @@ export interface GroupResponderDeps {
   myPeerId: string;
   myUsername: string;
   onGroupChatActivated?: (data: GroupChatActivatedEvent) => void;
+  nudgePeer?: (peerId: string) => void;
 }
 
 export class GroupResponder {
@@ -353,5 +354,8 @@ export class GroupResponder {
       userIdentity.signingPrivateKey,
       database,
     );
+
+    // DHT write succeeded — best-effort nudge so an online recipient checks their bucket immediately
+    this.deps.nudgePeer?.(peerId);
   }
 }

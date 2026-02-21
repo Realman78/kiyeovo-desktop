@@ -1,6 +1,16 @@
 import { peerIdFromString } from '@libp2p/peer-id';
 import type { ChatNode, StreamHandlerContext, AuthenticatedEncryptedMessage, OfflineMessage, OfflineSenderInfo, ConversationSession, EncryptedMessage, ContactMode, KeyExchangeEvent, ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent, SendMessageResponse, StrippedMessage, MessageSentStatus, FileTransferProgressEvent, FileTransferCompleteEvent, FileTransferFailedEvent, PendingFileReceivedEvent, GroupChatActivatedEvent } from '../types.js';
-import { CHAT_PROTOCOL, CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES, MESSAGE_TIMEOUT, SESSION_MANAGER_CLEANUP_INTERVAL } from '../constants.js';
+import {
+  CHAT_PROTOCOL,
+  CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES,
+  MESSAGE_TIMEOUT,
+  SESSION_MANAGER_CLEANUP_INTERVAL,
+  BUCKET_NUDGE_PROTOCOL,
+  BUCKET_NUDGE_COOLDOWN_MS,
+  BUCKET_NUDGE_DIAL_TIMEOUT_MS,
+  BUCKET_NUDGE_FETCH_DELAY_MS,
+  BUCKET_NUDGE_RETRY_DELAY_MS
+} from '../constants.js';
 import { SessionManager } from './session-manager.js';
 import { MessageEncryption } from './message-encryption.js';
 import { PeerConnectionHandler } from './peer-connection-handler.js';
@@ -29,6 +39,10 @@ export class MessageHandler {
   private cleanupPeerEvents: (() => void) | null = null;
   private onMessageReceived: (data: MessageReceivedEvent) => void;
   private onGroupChatActivated: (data: GroupChatActivatedEvent) => void;
+  private onOfflineMessagesFetchComplete: ((chatIds: number[]) => void) | undefined;
+  private nudgeCooldowns = new Map<string, number>();
+  private nudgeFetchTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private peerActivityCheckCooldowns = new Map<string, number>();
 
   constructor(
     node: ChatNode,
@@ -44,6 +58,7 @@ export class MessageHandler {
     onFileTransferFailed: (data: FileTransferFailedEvent) => void,
     onPendingFileReceived: (data: PendingFileReceivedEvent) => void,
     onGroupChatActivated: (data: GroupChatActivatedEvent) => void,
+    onOfflineMessagesFetchComplete?: (chatIds: number[]) => void,
   ) {
     this.node = node;
     this.usernameRegistry = usernameRegistry;
@@ -51,6 +66,7 @@ export class MessageHandler {
     this.sessionManager = new SessionManager();
     this.onMessageReceived = onMessageReceived;
     this.onGroupChatActivated = onGroupChatActivated;
+    this.onOfflineMessagesFetchComplete = onOfflineMessagesFetchComplete;
     this.keyExchange = new KeyExchange(node, usernameRegistry, this.sessionManager, database, onKeyExchangeSent, onContactRequestReceived, onChatCreated, onKeyExchangeFailed);
     this.fileHandler = new FileHandler(node, this, database, onFileTransferProgress, onFileTransferComplete, onFileTransferFailed, onPendingFileReceived);
     this.setupProtocolHandler();
@@ -64,10 +80,57 @@ export class MessageHandler {
     return setting ? parseInt(setting, 10) : CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES;
   }
 
+  public nudgePeer(peerId: string): void {
+    // Do not force-dial just to send a nudge.
+    const hasActiveConnection = this.node.getConnections().some(
+      conn => conn.remotePeer.toString() === peerId
+    );
+    if (!hasActiveConnection) {
+      return;
+    }
+
+    const last = this.nudgeCooldowns.get(peerId) ?? 0;
+    if (Date.now() - last < BUCKET_NUDGE_COOLDOWN_MS) {
+      console.log(`[NUDGE] Cooldown active for ${peerId.slice(-8)}, skipping`);
+      return;
+    }
+    this.nudgeCooldowns.set(peerId, Date.now());
+
+    void (async () => {
+      try {
+        const targetPeerId = peerIdFromString(peerId);
+        const stream = await this.node.dialProtocol(targetPeerId, BUCKET_NUDGE_PROTOCOL, {
+          signal: AbortSignal.timeout(BUCKET_NUDGE_DIAL_TIMEOUT_MS),
+        });
+        await stream.close();
+        console.log(`[NUDGE] Sent bucket nudge to ${peerId.slice(-8)}`);
+      } catch {
+        // Best-effort — peer offline or unreachable, offline bucket still delivers
+      }
+    })();
+  }
+
   /**
    * Sets up the chat protocol handler for incoming messages
    */
   private setupProtocolHandler(): void {
+    void this.node.handle(BUCKET_NUDGE_PROTOCOL, async (context: StreamHandlerContext) => {
+      const { remoteId, stream } = StreamHandler.getRemotePeerInfo(context);
+      await stream.close();
+
+      // Ignore nudges from blocked peers
+      if (this.database.isBlocked(remoteId)) return;
+
+      const chat = this.database.getChatByPeerId(remoteId);
+      if (!chat) {
+        console.log(`[NUDGE] Received nudge from ${remoteId.slice(-8)} but no chat found, ignoring`);
+        return;
+      }
+
+      console.log(`[NUDGE] Received bucket nudge from ${remoteId.slice(-8)}, scheduling check for chat ${chat.id}`);
+      this.scheduleNudgeOfflineCheck(remoteId, chat.id);
+    });
+
     void this.node.handle(CHAT_PROTOCOL, async (context: StreamHandlerContext) => {
       const { remoteId, stream } = StreamHandler.getRemotePeerInfo(context);
       // Immediately check if the user is blocked
@@ -86,7 +149,12 @@ export class MessageHandler {
         StreamHandler.logReceivedMessage(message);
 
         if (MessageEncryption.isKeyExchange(message)) {
+          const hadUserAtStart = !!this.database.getUserByPeerId(remoteId);
           await this.keyExchange.handleKeyExchange(remoteId, message as AuthenticatedEncryptedMessage, stream);
+          // Fallback B only for initial handshake from an existing known contact.
+          if (message.content === 'key_exchange_init' && hadUserAtStart) {
+            this.schedulePeerActivityOfflineCheck(remoteId);
+          }
           return;
         }
 
@@ -145,6 +213,65 @@ export class MessageHandler {
     });
   }
 
+  private scheduleNudgeOfflineCheck(remoteId: string, chatId: number): void {
+    const existingTimer = this.nudgeFetchTimers.get(remoteId);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+
+    const timer = setTimeout(() => {
+      this.nudgeFetchTimers.delete(remoteId);
+      void this.runNudgeOfflineCheck(remoteId, chatId, false, true);
+    }, BUCKET_NUDGE_FETCH_DELAY_MS);
+
+    this.nudgeFetchTimers.set(remoteId, timer);
+  }
+
+  private async runNudgeOfflineCheck(remoteId: string, chatId: number, isRetry: boolean, allowRetry: boolean): Promise<void> {
+    try {
+      const beforeTimestamp = this.database.getOfflineLastReadTimestampByPeerId(remoteId);
+      const { checkedChatIds } = await this.checkOfflineMessages([chatId]);
+      const afterTimestamp = this.database.getOfflineLastReadTimestampByPeerId(remoteId);
+      const hasNewData = afterTimestamp > beforeTimestamp;
+
+      if (checkedChatIds.length > 0 && hasNewData) {
+        this.onOfflineMessagesFetchComplete?.(checkedChatIds);
+      }
+
+      if (!isRetry && allowRetry && !hasNewData) {
+        setTimeout(() => {
+          void this.runNudgeOfflineCheck(remoteId, chatId, true, allowRetry);
+        }, BUCKET_NUDGE_RETRY_DELAY_MS);
+      }
+    } catch (error: unknown) {
+      generalErrorHandler(error, `[NUDGE] Failed offline bucket check for ${remoteId.slice(-8)}`);
+    }
+  }
+
+  private schedulePeerActivityOfflineCheck(peerId: string): void {
+    const chat = this.database.getChatByPeerId(peerId);
+    if (!chat) return;
+
+    const last = this.peerActivityCheckCooldowns.get(peerId) ?? 0;
+    if (Date.now() - last < BUCKET_NUDGE_COOLDOWN_MS) {
+      return;
+    }
+    this.peerActivityCheckCooldowns.set(peerId, Date.now());
+
+    // If a nudge/activity check is already queued for this peer, do not reset it.
+    if (this.nudgeFetchTimers.has(peerId)) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      this.nudgeFetchTimers.delete(peerId);
+      // Fallback B is a single extra check on key-exchange activity (no retry).
+      void this.runNudgeOfflineCheck(peerId, chat.id, false, false);
+    }, BUCKET_NUDGE_FETCH_DELAY_MS);
+
+    this.nudgeFetchTimers.set(peerId, timer);
+  }
+
   private startSessionCleanup(): void {
     setInterval(() => {
       if (this.sessionManager.getSessionsLength() !== 0) {
@@ -159,13 +286,23 @@ export class MessageHandler {
   /**
    * Ensures a user exists and has an active session with key rotation handling.
    */
-  async ensureUserSession(targetUsernameOrPeerId: string, message: string, isFileTransfer = false): Promise<{
+  async ensureUserSession(
+    targetUsernameOrPeerId: string,
+    message: string,
+    isFileTransfer = false,
+    initialUser?: User | null
+  ): Promise<{
     user: User
     session: ConversationSession
     peerId: PeerId
+    keyExchangeOccurred: boolean
   }> {
-    let user = this.database.getUserByPeerIdThenUsername(targetUsernameOrPeerId);
+    const initialUserProvided = initialUser !== undefined;
+    let user = initialUserProvided
+      ? initialUser
+      : this.database.getUserByPeerIdThenUsername(targetUsernameOrPeerId);
     let targetPeerId: PeerId;
+    let keyExchangeOccurred = false;
 
     if (!user) {
       if (isFileTransfer) {
@@ -183,6 +320,7 @@ export class MessageHandler {
       if (!user) {
         throw new Error('Key exchange failed');
       }
+      keyExchangeOccurred = true;
     } else {
       targetPeerId = peerIdFromString(user.peer_id);
       
@@ -195,6 +333,7 @@ export class MessageHandler {
           const exchangedUser = await this.keyExchange.initiateKeyExchange(targetPeerId, targetUsernameOrPeerId, message);
           if (exchangedUser) {
             user = exchangedUser;
+            keyExchangeOccurred = true;
             console.log(`✓ Upgraded to stronger encryption with ECDH-derived keys`);
           } else {
             console.warn(`Key exchange upgrade failed, falling back to out-of-band keys`);
@@ -224,6 +363,7 @@ export class MessageHandler {
         if (!exchangedUser) {
           throw new Error('Key exchange failed');
         }
+        keyExchangeOccurred = true;
 
         session = this.sessionManager.getSession(targetPeerId.toString());
         if (!session) {
@@ -259,13 +399,24 @@ export class MessageHandler {
       }
     }
 
-    return { user, session, peerId: targetPeerId };
+    return { user, session, peerId: targetPeerId, keyExchangeOccurred };
   }
 
   async sendMessage(targetUsernameOrPeerId: string, message: string): Promise<SendMessageResponse> {
     let user: User | null = null;
     try {
-      const { user: resolvedUser, session, peerId: targetPeerId } = await this.ensureUserSession(targetUsernameOrPeerId, message);
+      const initialUser = this.database.getUserByPeerIdThenUsername(targetUsernameOrPeerId);
+      const hadUserAtStart = !!initialUser;
+      const hadConnectionBefore = initialUser
+        ? this.node.getConnections().some(conn => conn.remotePeer.toString() === initialUser.peer_id)
+        : false;
+
+      const { user: resolvedUser, session, peerId: targetPeerId, keyExchangeOccurred } = await this.ensureUserSession(
+        targetUsernameOrPeerId,
+        message,
+        false,
+        initialUser
+      );
       user = resolvedUser;
 
       // Check if we need to send an ACK for offline messages we've read
@@ -311,6 +462,14 @@ export class MessageHandler {
         if (shouldSendAck) {
           this.database.updateOfflineLastAckSentByPeerId(targetPeerId.toString(), lastReadTimestamp);
         }
+
+        // Fallback B:
+        // only after key exchange with an already-known contact and only if no connection existed
+        // before this send (meaning connected-only BUCKET_NUDGE path could not have helped).
+        if (keyExchangeOccurred && hadUserAtStart && !hadConnectionBefore) {
+          this.schedulePeerActivityOfflineCheck(targetPeerId.toString());
+        }
+
         console.log(`Encrypted message sent to ${targetUsernameOrPeerId}`);
         return { success: true, messageSentStatus: 'online', error: null, message: strippedMessage };
       }
@@ -708,6 +867,12 @@ export class MessageHandler {
   }
 
   cleanup(): void {
+    for (const timer of this.nudgeFetchTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.nudgeFetchTimers.clear();
+    this.peerActivityCheckCooldowns.clear();
+
     if (this.cleanupPeerEvents) {
       this.cleanupPeerEvents();
     }
@@ -814,6 +979,7 @@ export class MessageHandler {
       myPeerId,
       myUsername,
       onGroupChatActivated: this.onGroupChatActivated,
+      nudgePeer: this.nudgePeer.bind(this),
     };
 
     try {

@@ -42,6 +42,7 @@ export interface P2PCoreConfig {
   onFileTransferFailed: (data: FileTransferFailedEvent) => void;
   onPendingFileReceived: (data: PendingFileReceivedEvent) => void;
   onGroupChatActivated: (data: GroupChatActivatedEvent) => void;
+  onOfflineMessagesFetchComplete: (chatIds: number[]) => void;
 }
 
 /**
@@ -49,7 +50,7 @@ export interface P2PCoreConfig {
  * This is the main entry point for the Kiyeovo P2P functionality
  */
 export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore> {
-  const { onStatus, onDHTConnectionStatus, onKeyExchangeSent, onContactRequestReceived, onChatCreated, onKeyExchangeFailed, onMessageReceived, onRestoreUsername, onFileTransferProgress, onFileTransferComplete, onFileTransferFailed, onPendingFileReceived, onGroupChatActivated } = config;
+  const { onStatus, onDHTConnectionStatus, onKeyExchangeSent, onContactRequestReceived, onChatCreated, onKeyExchangeFailed, onMessageReceived, onRestoreUsername, onFileTransferProgress, onFileTransferComplete, onFileTransferFailed, onPendingFileReceived, onGroupChatActivated, onOfflineMessagesFetchComplete } = config;
   const sendStatus = (message: string, stage: any) => {
     console.log(`[P2P Core] ${message}`);
     onStatus(message, stage);
@@ -273,6 +274,10 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
     onGroupChatActivated(data);
   };
 
+  const sendOfflineMessagesFetchComplete = (chatIds: number[]) => {
+    onOfflineMessagesFetchComplete(chatIds);
+  };
+
   const messageHandler = new MessageHandler(
     node,
     usernameRegistry,
@@ -287,6 +292,7 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
     sendFileTransferFailed,
     sendPendingFileReceived,
     sendGroupChatActivated,
+    sendOfflineMessagesFetchComplete,
   );
 
   // Offline messages will be checked from UI after chats load

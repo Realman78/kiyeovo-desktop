@@ -250,6 +250,12 @@ function sendGroupChatActivated(data: GroupChatActivatedEvent) {
   }
 }
 
+function sendOfflineMessagesFetchComplete(chatIds: number[]) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(IPC_CHANNELS.OFFLINE_MESSAGES_FETCH_COMPLETE, { chatIds });
+  }
+}
+
 async function initializeP2PAfterWindow() {
   try {
     if (!mainWindow) {
@@ -380,6 +386,9 @@ async function initializeP2PAfterWindow() {
       },
       onGroupChatActivated: (data: GroupChatActivatedEvent) => {
         sendGroupChatActivated(data);
+      },
+      onOfflineMessagesFetchComplete: (chatIds: number[]) => {
+        sendOfflineMessagesFetchComplete(chatIds);
       },
     });
 

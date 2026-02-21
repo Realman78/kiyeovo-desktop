@@ -1387,6 +1387,7 @@ function setupGroupHandlers(
         userIdentity: p2pCore.userIdentity,
         myPeerId: p2pCore.userIdentity.id,
         myUsername: username,
+        nudgePeer: (peerId) => p2pCore.messageHandler.nudgePeer(peerId),
       });
 
       const groupId = await creator.createGroup(groupName, peerIds);
@@ -1513,6 +1514,7 @@ function setupGroupHandlers(
         userIdentity: p2pCore.userIdentity,
         myPeerId: p2pCore.userIdentity.id,
         myUsername: username,
+        nudgePeer: (peerId) => p2pCore.messageHandler.nudgePeer(peerId),
       });
 
       await responder.respondToInvite(groupId, accept);

@@ -15,7 +15,7 @@ export interface GroupInvite {
 
 interface GroupInviteItemProps {
   invite: GroupInvite;
-  onRespond: (groupId: string, accept: boolean) => void;
+  onRespond: (groupId: string, accept: boolean) => Promise<void>;
 }
 
 export const GroupInviteItem: FC<GroupInviteItemProps> = ({ invite, onRespond }) => {
@@ -31,7 +31,7 @@ export const GroupInviteItem: FC<GroupInviteItemProps> = ({ invite, onRespond })
   const handleRespond = async (accept: boolean) => {
     setIsResponding(true);
     try {
-      onRespond(invite.groupId, accept);
+      await onRespond(invite.groupId, accept);
     } finally {
       setIsResponding(false);
     }

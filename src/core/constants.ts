@@ -7,6 +7,11 @@ export const PROTOCOL_NAME = '/kiyeovo/1.0.0';
 export const CHAT_PROTOCOL = `${PROTOCOL_NAME}/chat`;
 export const BOOTSTRAP_PROTOCOL = `${PROTOCOL_NAME}/bootstrap`;
 export const FILE_TRANSFER_PROTOCOL = `${PROTOCOL_NAME}/file-transfer`;
+export const BUCKET_NUDGE_PROTOCOL = `${PROTOCOL_NAME}/bucket-nudge`;
+export const BUCKET_NUDGE_COOLDOWN_MS = 5000;
+export const BUCKET_NUDGE_DIAL_TIMEOUT_MS = 5000;
+export const BUCKET_NUDGE_FETCH_DELAY_MS = 4000;
+export const BUCKET_NUDGE_RETRY_DELAY_MS = 30000;
 
 /**
  * Network configuration

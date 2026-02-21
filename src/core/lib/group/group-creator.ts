@@ -33,6 +33,7 @@ export interface GroupCreatorDeps {
   userIdentity: EncryptedUserIdentity;
   myPeerId: string;
   myUsername: string;
+  nudgePeer?: (peerId: string) => void;
 }
 
 export class GroupCreator {
@@ -538,7 +539,8 @@ export class GroupCreator {
       database,
     );
 
-    // TODO: send BUCKET_NUDGE message to the peer
+    // DHT write succeeded — best-effort nudge so an online recipient checks their bucket immediately
+    this.deps.nudgePeer?.(peerId);
   }
 
   private async putJsonToDHT(dhtKey: string, data: object): Promise<void> {
