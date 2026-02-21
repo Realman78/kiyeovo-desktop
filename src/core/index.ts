@@ -137,19 +137,90 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
   await connectToBootstrap(node, database);
 
   // Start periodic DHT connection status checker (every 30 seconds)
-  const checkDHTStatus = async () => {
+  let dhtStatusCheckInFlight: Promise<void> | null = null;
+  let reconnectInProgress = false;
+
+  const probeAnyAliveConnection = async (): Promise<boolean> => {
+    const connections = node.getConnections();
+    if (connections.length === 0) return false;
+
+    const toProbe = connections.slice(0, 3);
     try {
-      const peers = node.getConnections();
-      console.log(`[P2P Core] Peers: ${peers.map(p => p.remotePeer.toString())}`);
-      const isConnected = peers.length > 0;
-      sendDHTConnectionStatus({ connected: isConnected });
-      if (isConnected) {
-        console.log(`[P2P Core] Network status: ${peers.length} peer(s) connected`);
-      }
-    } catch (error) {
-      console.error('[P2P Core] Failed to check peer count:', error);
-      sendDHTConnectionStatus({ connected: false });
+      // Promise.any: resolves as soon as one ping succeeds, rejects only if ALL fail
+      await Promise.any(
+        toProbe.map(conn =>
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (node.services as any).ping.ping(conn.remotePeer, {
+            signal: AbortSignal.timeout(15000),
+          }),
+        ),
+      );
+      return true;
+    } catch {
+      return false;
     }
+  };
+
+  const checkDHTStatus = async () => {
+    if (dhtStatusCheckInFlight) return dhtStatusCheckInFlight;
+
+    dhtStatusCheckInFlight = (async () => {
+      try {
+        const connections = node.getConnections();
+        console.log(`[P2P Core] Peers: ${connections.map(p => p.remotePeer.toString())}`);
+
+        if (connections.length === 0) {
+          sendDHTConnectionStatus({ connected: false });
+          return;
+        }
+
+        // Verify at least one peer is actually reachable before reporting "connected".
+        const anyAlive = await probeAnyAliveConnection();
+        if (!anyAlive) {
+          sendDHTConnectionStatus({ connected: false });
+
+          if (reconnectInProgress) {
+            console.log('[P2P Core] Reconnect already in progress, skipping duplicate reconnect attempt');
+            return;
+          }
+
+          reconnectInProgress = true;
+          try {
+            console.log('[P2P Core] All sampled connections appear stale; closing and reconnecting...');
+            const staleConnections = node.getConnections();
+            if (staleConnections.length > 0) {
+              await Promise.allSettled(staleConnections.map(conn => conn.close()));
+            }
+
+            await connectToBootstrap(node, database);
+
+            // Verify immediately after reconnect attempt so UI state is up to date.
+            const aliveAfterReconnect = await probeAnyAliveConnection();
+            const liveCount = aliveAfterReconnect ? node.getConnections().length : 0;
+            sendDHTConnectionStatus({ connected: liveCount > 0 });
+            if (liveCount > 0) {
+              console.log(`[P2P Core] Network status: ${liveCount} peer(s) connected after reconnect`);
+            }
+            return;
+          } finally {
+            reconnectInProgress = false;
+          }
+        }
+
+        const liveCount = node.getConnections().length;
+        sendDHTConnectionStatus({ connected: liveCount > 0 });
+        if (liveCount > 0) {
+          console.log(`[P2P Core] Network status: ${liveCount} peer(s) connected`);
+        }
+      } catch (error) {
+        console.error('[P2P Core] Failed to check peer count:', error);
+        sendDHTConnectionStatus({ connected: false });
+      } finally {
+        dhtStatusCheckInFlight = null;
+      }
+    })();
+
+    return dhtStatusCheckInFlight;
   };
 
   // Send initial status immediately
@@ -238,9 +309,20 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
     usernameRegistry,
     messageHandler,
     retryBootstrap: async () => {
+      if (reconnectInProgress) {
+        console.log('[P2P Core] Reconnect already in progress, ignoring manual retry');
+        return;
+      }
       console.log('[P2P Core] Retrying bootstrap connection...');
+      // Close all existing connections first — stale ones (after sleep) stay in the pool
+      // and connectToBootstrap would skip already-connected peers, returning instantly.
+      const existing = node.getConnections();
+      if (existing.length > 0) {
+        console.log(`[P2P Core] Closing ${existing.length} potentially stale connection(s) before reconnect...`);
+        await Promise.allSettled(existing.map(c => c.close()));
+      }
       await connectToBootstrap(node, database);
-      // Trigger immediate DHT status check after reconnection attempt
+      // Verify the new connection is actually alive
       await checkDHTStatus();
     },
     cleanup: async () => {
