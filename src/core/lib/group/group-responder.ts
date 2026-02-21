@@ -1,6 +1,6 @@
 import { randomUUID, privateDecrypt } from 'crypto';
 import { ed25519 } from '@noble/curves/ed25519';
-import type { ChatNode } from '../../types.js';
+import type { ChatNode, GroupChatActivatedEvent } from '../../types.js';
 import type { ChatDatabase } from '../db/database.js';
 import type { EncryptedUserIdentity } from '../encrypted-user-identity.js';
 import { OfflineMessageManager } from '../offline-message-manager.js';
@@ -21,6 +21,7 @@ export interface GroupResponderDeps {
   userIdentity: EncryptedUserIdentity;
   myPeerId: string;
   myUsername: string;
+  onGroupChatActivated?: (data: GroupChatActivatedEvent) => void;
 }
 
 export class GroupResponder {
@@ -248,15 +249,36 @@ export class GroupResponder {
       database.updateChatGroupInfoDhtKey(chat.id, welcome.groupInfoLatestDhtKey);
     }
 
+    // Ensure all roster members exist in users table (required by chat_participants FK)
+    for (const entry of welcome.roster) {
+      if (entry.peerId === this.deps.myPeerId) continue;
+      if (!database.getUserByPeerId(entry.peerId)) {
+        await database.createUser({
+          peer_id: entry.peerId,
+          username: entry.username,
+          signing_public_key: entry.signingPubKey,
+          offline_public_key: entry.offlinePubKey,
+          // No handshake signature for group-only contacts; empty string is safe because
+          // key-exchange.ts treats a falsy signature as "not yet verified via direct KX"
+          // and falls through to a full re-handshake if they ever become direct contacts.
+          signature: '',
+        });
+      }
+    }
+
     // Save roster to chat_participants
     const participantPeerIds = welcome.roster.map(r => r.peerId);
     database.updateGroupParticipants(chat.id, participantPeerIds);
 
-    // Transition to active
+    // Transition to active (both group_status and the top-level status so ChatList shows it)
     database.updateChatGroupStatus(chat.id, 'active' satisfies GroupStatus);
+    database.updateChatStatus(chat.id, 'active');
 
     // Creator has definitely processed our invite response if they sent welcome.
     database.removePendingAck(welcome.groupId, creatorPeerId, 'GROUP_INVITE_RESPONSE');
+
+    // Notify UI that this group chat is now active
+    this.deps.onGroupChatActivated?.({ chatId: chat.id });
 
     // Send ACK back to creator
     await this.sendWelcomeAck(welcome);

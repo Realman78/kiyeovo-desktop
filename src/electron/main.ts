@@ -3,7 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { isDev } from './util.js';
-import { initializeP2PCore, InitStatus, IPC_CHANNELS, KeyExchangeEvent, type P2PCore, type ContactRequestEvent, type ChatCreatedEvent, type KeyExchangeFailedEvent, type MessageReceivedEvent, type FileTransferProgressEvent, type FileTransferCompleteEvent, type FileTransferFailedEvent, type PendingFileReceivedEvent, type TorConfig, type PasswordRequest } from '../core/index.js';
+import { initializeP2PCore, InitStatus, IPC_CHANNELS, KeyExchangeEvent, type P2PCore, type ContactRequestEvent, type ChatCreatedEvent, type KeyExchangeFailedEvent, type MessageReceivedEvent, type FileTransferProgressEvent, type FileTransferCompleteEvent, type FileTransferFailedEvent, type PendingFileReceivedEvent, type GroupChatActivatedEvent, type TorConfig, type PasswordRequest } from '../core/index.js';
 import { ensureAppDataDir } from '../core/utils/miscellaneous.js';
 import { requestPasswordFromUI } from './password-prompt.js';
 import { setupIPCHandlers } from './ipc-handlers.js';
@@ -243,6 +243,13 @@ function sendPendingFileReceived(data: PendingFileReceivedEvent) {
   }
 }
 
+function sendGroupChatActivated(data: GroupChatActivatedEvent) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    console.log(`[Electron] Group chat activated: chatId=${data.chatId}`);
+    mainWindow.webContents.send(IPC_CHANNELS.GROUP_CHAT_ACTIVATED, data);
+  }
+}
+
 async function initializeP2PAfterWindow() {
   try {
     if (!mainWindow) {
@@ -370,7 +377,10 @@ async function initializeP2PAfterWindow() {
       },
       onPendingFileReceived: (data: PendingFileReceivedEvent) => {
         sendPendingFileReceived(data);
-      }
+      },
+      onGroupChatActivated: (data: GroupChatActivatedEvent) => {
+        sendGroupChatActivated(data);
+      },
     });
 
     console.log('[Electron] P2P core initialized successfully');

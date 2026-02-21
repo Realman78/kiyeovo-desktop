@@ -1,4 +1,4 @@
-import type { ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, InitStatus, PasswordRequest, MessageReceivedEvent, KeyExchangeEvent, SendMessageResponse } from './src/core/types';
+import type { ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, InitStatus, PasswordRequest, MessageReceivedEvent, KeyExchangeEvent, SendMessageResponse, GroupChatActivatedEvent } from './src/core/types';
 import type { Chat, Message } from './src/core/lib/db/database';
 
 declare global {
@@ -63,6 +63,7 @@ declare global {
 
             // Chat events
             onChatCreated: (callback: (data: ChatCreatedEvent) => void) => () => void;
+            onGroupChatActivated: (callback: (data: GroupChatActivatedEvent) => void) => () => void;
             getChats: () => Promise<{ success: boolean; chats: Array<Chat>; error: string | null }>;
             getChatById: (chatId: number) => Promise<{
                 success: boolean;

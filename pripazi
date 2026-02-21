@@ -23,6 +23,7 @@ Still “startup blocked” (by design) until the user submits; but at least it 
 1.2 High: createGroup can leave partial state on failure (chat created + some invites sent) with no rollback/transaction boundary.
 If one invite send fails mid-loop, IPC returns failure even though earlier invites may already be delivered.
 
+1.3 ako oden rejectat nesto i faila mi reject. zac ne maknut samo?
 
 2. Timestamp forgery - ca ako korisnici sami mijenjaju timestamp
 

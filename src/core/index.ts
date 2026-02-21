@@ -5,7 +5,7 @@ import { MessageHandler } from './lib/message-handler.js';
 import { EncryptedUserIdentity } from './lib/encrypted-user-identity.js';
 import { ChatDatabase } from './lib/db/database.js';
 import { DATABASE_CLEANUP_INTERVAL } from './constants.js';
-import type { ChatNode, ContactRequestEvent, KeyExchangeEvent, PasswordResponse, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent, FileTransferProgressEvent, FileTransferCompleteEvent, FileTransferFailedEvent, PendingFileReceivedEvent } from './types.js';
+import type { ChatNode, ContactRequestEvent, KeyExchangeEvent, PasswordResponse, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent, FileTransferProgressEvent, FileTransferCompleteEvent, FileTransferFailedEvent, PendingFileReceivedEvent, GroupChatActivatedEvent } from './types.js';
 
 export interface P2PCore {
   node: ChatNode;
@@ -41,6 +41,7 @@ export interface P2PCoreConfig {
   onFileTransferComplete: (data: FileTransferCompleteEvent) => void;
   onFileTransferFailed: (data: FileTransferFailedEvent) => void;
   onPendingFileReceived: (data: PendingFileReceivedEvent) => void;
+  onGroupChatActivated: (data: GroupChatActivatedEvent) => void;
 }
 
 /**
@@ -48,7 +49,7 @@ export interface P2PCoreConfig {
  * This is the main entry point for the Kiyeovo P2P functionality
  */
 export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore> {
-  const { onStatus, onDHTConnectionStatus, onKeyExchangeSent, onContactRequestReceived, onChatCreated, onKeyExchangeFailed, onMessageReceived, onRestoreUsername, onFileTransferProgress, onFileTransferComplete, onFileTransferFailed, onPendingFileReceived } = config;
+  const { onStatus, onDHTConnectionStatus, onKeyExchangeSent, onContactRequestReceived, onChatCreated, onKeyExchangeFailed, onMessageReceived, onRestoreUsername, onFileTransferProgress, onFileTransferComplete, onFileTransferFailed, onPendingFileReceived, onGroupChatActivated } = config;
   const sendStatus = (message: string, stage: any) => {
     console.log(`[P2P Core] ${message}`);
     onStatus(message, stage);
@@ -196,6 +197,11 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
     onPendingFileReceived(data);
   };
 
+  const sendGroupChatActivated = (data: GroupChatActivatedEvent) => {
+    console.log(`[P2P Core] Group chat activated: chatId=${data.chatId}`);
+    onGroupChatActivated(data);
+  };
+
   const messageHandler = new MessageHandler(
     node,
     usernameRegistry,
@@ -208,7 +214,8 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
     sendFileTransferProgress,
     sendFileTransferComplete,
     sendFileTransferFailed,
-    sendPendingFileReceived
+    sendPendingFileReceived,
+    sendGroupChatActivated,
   );
 
   // Offline messages will be checked from UI after chats load

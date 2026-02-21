@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { InitStatus, IPC_CHANNELS, KeyExchangeEvent, MessageSentStatus, PasswordRequest, ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent } from '../core';
+import { InitStatus, IPC_CHANNELS, KeyExchangeEvent, MessageSentStatus, PasswordRequest, ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent, GroupChatActivatedEvent } from '../core';
 import { ContactAttempt, Message } from '../core/lib/db/database';
 
 contextBridge.exposeInMainWorld('kiyeovoAPI', {
@@ -242,6 +242,13 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
         const listener = (_event: any, data: ChatCreatedEvent) => callback(data);
         ipcRenderer.on(IPC_CHANNELS.CHAT_CREATED, listener);
         return () => ipcRenderer.removeListener(IPC_CHANNELS.CHAT_CREATED, listener);
+    },
+
+    // Group chat activated event (GROUP_WELCOME processed successfully on receiver side)
+    onGroupChatActivated: (callback: (data: GroupChatActivatedEvent) => void) => {
+        const listener = (_event: any, data: GroupChatActivatedEvent) => callback(data);
+        ipcRenderer.on(IPC_CHANNELS.GROUP_CHAT_ACTIVATED, listener);
+        return () => ipcRenderer.removeListener(IPC_CHANNELS.GROUP_CHAT_ACTIVATED, listener);
     },
 
     // Key exchange failed event

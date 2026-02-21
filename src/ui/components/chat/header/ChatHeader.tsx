@@ -42,19 +42,29 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
   const [validationError, setValidationError] = useState("");
   const [groupMembers, setGroupMembers] = useState<Array<{ peerId: string; username: string; status: 'pending' | 'accepted' | 'confirmed' }>>([]);
 
-  useEffect(() => {
-    const fetchGroupMembers = async () => {
-      if (chatType !== 'group' || !chatId) return;
-      try {
-        const result = await window.kiyeovoAPI.getGroupMembers(chatId);
-        if (result.success) {
-          setGroupMembers(result.members);
-        }
-      } catch (error) {
-        console.error('Failed to fetch group members:', error);
+  const fetchGroupMembers = async () => {
+    if (chatType !== 'group' || !chatId) return;
+    try {
+      const result = await window.kiyeovoAPI.getGroupMembers(chatId);
+      if (result.success) {
+        setGroupMembers(result.members);
       }
-    };
+    } catch (error) {
+      console.error('Failed to fetch group members:', error);
+    }
+  };
+
+  useEffect(() => {
     fetchGroupMembers();
+  }, [chatType, chatId]);
+
+  // Refresh member list whenever an offline-message fetch completes (invite responses arrive)
+  useEffect(() => {
+    if (chatType !== 'group') return;
+    const unsub = window.kiyeovoAPI.onOfflineMessagesFetchComplete(() => {
+      void fetchGroupMembers();
+    });
+    return unsub;
   }, [chatType, chatId]);
 
   useEffect(() => {
@@ -220,7 +230,7 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
   const isGroupPending = isGroup && groupStatus !== 'active';
 
   const memberSummary = groupMembers.length > 0
-    ? groupMembers.map(m => `${m.username} (${m.status})`).join(', ')
+    ? groupMembers.map(m => m.status === 'pending' ? `${m.username} (invited)` : m.username).join(', ')
     : 'No members yet';
 
   return <div className={`${isGroupPending ? 'h-20' : 'h-16'} px-6 flex items-center justify-between border-b border-border ${activeChat?.status === 'pending' ? "" : "bg-card/50"}`}>

@@ -1959,6 +1959,11 @@ export class ChatDatabase {
 
     // --- Group chat column helpers ---
 
+    updateChatStatus(chatId: number, status: string): void {
+        this.db.prepare("UPDATE chats SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?")
+            .run(status, chatId);
+    }
+
     updateChatGroupStatus(chatId: number, groupStatus: string): void {
         this.db.prepare("UPDATE chats SET group_status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?")
             .run(groupStatus, chatId);

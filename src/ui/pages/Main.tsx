@@ -68,6 +68,15 @@ export const Main = () => {
       }));
     });
 
+    // Group chat activated — receiver processed GROUP_WELCOME, update Redux so chat appears in sidebar
+    const unsubGroupChatActivated = window.kiyeovoAPI.onGroupChatActivated((data) => {
+      console.log(`[UI] Group chat activated: chatId=${data.chatId}`);
+      dispatch(updateChat({
+        id: data.chatId,
+        updates: { status: 'active', groupStatus: 'active' },
+      }));
+    });
+
     // Global listener for chat creation - always active regardless of UI state
     const unsubChatCreated = window.kiyeovoAPI.onChatCreated((data) => {
       console.log(`[UI] Chat created: ${data.chatId} for ${data.username} (peerId: ${data.peerId})`);
@@ -200,6 +209,7 @@ export const Main = () => {
     return () => {
       unsubKeyExchangeFailed();
       unsubMessageReceived();
+      unsubGroupChatActivated();
       unsubChatCreated();
       unsubFileTransferProgress();
       unsubFileTransferComplete();

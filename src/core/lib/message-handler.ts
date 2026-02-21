@@ -1,5 +1,5 @@
 import { peerIdFromString } from '@libp2p/peer-id';
-import type { ChatNode, StreamHandlerContext, AuthenticatedEncryptedMessage, OfflineMessage, OfflineSenderInfo, ConversationSession, EncryptedMessage, ContactMode, KeyExchangeEvent, ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent, SendMessageResponse, StrippedMessage, MessageSentStatus, FileTransferProgressEvent, FileTransferCompleteEvent, FileTransferFailedEvent, PendingFileReceivedEvent } from '../types.js';
+import type { ChatNode, StreamHandlerContext, AuthenticatedEncryptedMessage, OfflineMessage, OfflineSenderInfo, ConversationSession, EncryptedMessage, ContactMode, KeyExchangeEvent, ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent, SendMessageResponse, StrippedMessage, MessageSentStatus, FileTransferProgressEvent, FileTransferCompleteEvent, FileTransferFailedEvent, PendingFileReceivedEvent, GroupChatActivatedEvent } from '../types.js';
 import { CHAT_PROTOCOL, CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES, MESSAGE_TIMEOUT, SESSION_MANAGER_CLEANUP_INTERVAL } from '../constants.js';
 import { SessionManager } from './session-manager.js';
 import { MessageEncryption } from './message-encryption.js';
@@ -28,6 +28,7 @@ export class MessageHandler {
   private database: ChatDatabase;
   private cleanupPeerEvents: (() => void) | null = null;
   private onMessageReceived: (data: MessageReceivedEvent) => void;
+  private onGroupChatActivated: (data: GroupChatActivatedEvent) => void;
 
   constructor(
     node: ChatNode,
@@ -42,12 +43,14 @@ export class MessageHandler {
     onFileTransferComplete: (data: FileTransferCompleteEvent) => void,
     onFileTransferFailed: (data: FileTransferFailedEvent) => void,
     onPendingFileReceived: (data: PendingFileReceivedEvent) => void,
+    onGroupChatActivated: (data: GroupChatActivatedEvent) => void,
   ) {
     this.node = node;
     this.usernameRegistry = usernameRegistry;
     this.database = database;
     this.sessionManager = new SessionManager();
     this.onMessageReceived = onMessageReceived;
+    this.onGroupChatActivated = onGroupChatActivated;
     this.keyExchange = new KeyExchange(node, usernameRegistry, this.sessionManager, database, onKeyExchangeSent, onContactRequestReceived, onChatCreated, onKeyExchangeFailed);
     this.fileHandler = new FileHandler(node, this, database, onFileTransferProgress, onFileTransferComplete, onFileTransferFailed, onPendingFileReceived);
     this.setupProtocolHandler();
@@ -569,9 +572,14 @@ export class MessageHandler {
 
         // Check if this is a group control message
         // eslint-disable-next-line no-await-in-loop
-        const wasGroupMessage = await this.tryRouteGroupControlMessage(decryptedContent, senderInfo);
-        if (wasGroupMessage) {
-          // Still track timestamp so we don't re-process this message
+        const groupResult = await this.tryRouteGroupControlMessage(decryptedContent, senderInfo);
+        if (groupResult === 'retry') {
+          // Handler failed — skip saving as text, skip advancing timestamp so it is retried next check
+          console.log(`Group control message from ${senderInfo.username} failed, will retry`);
+          continue;
+        }
+        if (groupResult === 'handled') {
+          // Advance timestamp so we don't re-process, but don't save as a regular message
           const currentMax = maxTimestampPerPeer.get(bucketInfo.peerId) ?? 0;
           if (msg.timestamp > currentMax) {
             maxTimestampPerPeer.set(bucketInfo.peerId, msg.timestamp);
@@ -579,6 +587,7 @@ export class MessageHandler {
           console.log(`Routed group control message from ${senderInfo.username}`);
           continue;
         }
+        // 'not_group': fall through to regular message handling
 
         // Regular text message — save to database
         // eslint-disable-next-line no-await-in-loop
@@ -765,32 +774,33 @@ export class MessageHandler {
   /**
    * Attempts to parse decrypted content as a group control message and route it
    * to the appropriate handler (GroupCreator or GroupResponder).
-   * Returns true if the message was a group control message, false otherwise.
+   * Returns 'handled' if processed OK, 'retry' if it was a group message but failed (no timestamp advance),
+   * or 'not_group' if this is a regular text message.
    */
   private async tryRouteGroupControlMessage(
     decryptedContent: string,
     senderInfo: OfflineSenderInfo,
-  ): Promise<boolean> {
+  ): Promise<'handled' | 'retry' | 'not_group'> {
     let parsed: { type?: string };
     try {
       parsed = JSON.parse(decryptedContent);
     } catch {
       // Not JSON — regular text message
-      return false;
+      return 'not_group';
     }
 
-    if (!parsed || typeof parsed.type !== 'string') return false;
+    if (!parsed || typeof parsed.type !== 'string') return 'not_group';
 
     const type = parsed.type;
 
     // Check if this is a known group message type
     const groupTypes = Object.values(GroupMessageType) as string[];
-    if (!groupTypes.includes(type)) return false;
+    if (!groupTypes.includes(type)) return 'not_group';
 
     const userIdentity = this.usernameRegistry.getUserIdentity();
     if (!userIdentity) {
       console.log(`[GROUP] Cannot route group message — no user identity, will retry`);
-      return false;
+      return 'retry';
     }
 
     const myPeerId = this.node.peerId.toString();
@@ -803,6 +813,7 @@ export class MessageHandler {
       userIdentity,
       myPeerId,
       myUsername,
+      onGroupChatActivated: this.onGroupChatActivated,
     };
 
     try {
@@ -841,23 +852,23 @@ export class MessageHandler {
           break;
         }
 
-        // --- Messages not yet implemented — return false so they are retried later ---
+        // --- Messages not yet implemented — consume without saving as text ---
         case GroupMessageType.GROUP_STATE_UPDATE:
         case GroupMessageType.GROUP_LEAVE_REQUEST:
         case GroupMessageType.GROUP_KICK:
         case GroupMessageType.GROUP_MESSAGE:
-          console.log(`[GROUP] Received ${type} from ${senderInfo.username} — handler not yet implemented, will retry`);
-          return false;
+          console.log(`[GROUP] Received ${type} from ${senderInfo.username} — handler not yet implemented, consuming`);
+          break;
 
         default:
           console.log(`[GROUP] Unknown group message type: ${type}`);
-          return false;
+          return 'retry';
       }
     } catch (error: unknown) {
       generalErrorHandler(error, `[GROUP] Error handling ${type} from ${senderInfo.username}`);
-      return false; // Handler failed — don't advance timestamp so message is retried
+      return 'retry'; // Handler failed — don't advance timestamp so message is retried
     }
 
-    return true;
+    return 'handled';
   }
 } 
