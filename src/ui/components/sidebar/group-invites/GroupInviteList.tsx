@@ -42,7 +42,11 @@ export const GroupInviteList: FC = () => {
       const result = await window.kiyeovoAPI.respondToGroupInvite(groupId, accept);
       if (result.success) {
         setInvites(prev => prev.filter(inv => inv.groupId !== groupId));
-        toast.success(accept ? 'Group invite accepted' : 'Group invite rejected');
+        toast.success(
+          accept
+            ? 'Group invite accepted. Waiting for creator activation...'
+            : 'Group invite rejected'
+        );
       } else {
         toast.error(result.error || 'Failed to respond to invite');
       }

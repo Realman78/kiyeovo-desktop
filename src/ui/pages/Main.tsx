@@ -71,6 +71,39 @@ export const Main = () => {
     // Group chat activated — receiver processed GROUP_WELCOME, update Redux so chat appears in sidebar
     const unsubGroupChatActivated = window.kiyeovoAPI.onGroupChatActivated((data) => {
       console.log(`[UI] Group chat activated: chatId=${data.chatId}`);
+      const existing = store.getState().chat.chats.find(c => c.id === data.chatId);
+      if (!existing) {
+        // Chat may exist in DB but not in Redux yet (e.g. invite arrived while sidebar state was stale).
+        // Upsert from DB so activation is reflected immediately without restart.
+        void (async () => {
+          try {
+            const result = await window.kiyeovoAPI.getChatById(data.chatId);
+            if (result.success && result.chat) {
+              const dbChat = result.chat;
+              const newChat: Chat = {
+                id: dbChat.id,
+                type: dbChat.type,
+                name: dbChat.type === 'group' ? dbChat.name : (dbChat.username || dbChat.name),
+                peerId: dbChat.other_peer_id,
+                lastMessage: dbChat.last_message_content || 'SYSTEM: No messages yet',
+                lastMessageTimestamp: dbChat.last_message_timestamp
+                  ? new Date(dbChat.last_message_timestamp).getTime()
+                  : new Date(dbChat.updated_at).getTime(),
+                unreadCount: 0,
+                status: 'active',
+                fetchedOffline: dbChat.type === 'group',
+                isFetchingOffline: false,
+                groupStatus: 'active',
+              };
+              dispatch(addChat(newChat));
+            }
+          } catch (error) {
+            console.error(`[UI] Failed to upsert activated group chat ${data.chatId}:`, error);
+          }
+        })();
+        return;
+      }
+
       dispatch(updateChat({
         id: data.chatId,
         updates: { status: 'active', groupStatus: 'active' },

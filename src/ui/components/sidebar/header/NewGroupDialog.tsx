@@ -40,6 +40,12 @@ const NewGroupDialog = ({ open, onOpenChange, onSuccess }: NewGroupDialogProps) 
 
   useEffect(() => {
     if (!open) {
+      // Preserve in-flight submit state when dialog is temporarily closed.
+      // This lets the user reopen and still see "Creating...".
+      if (isSubmitting) {
+        return;
+      }
+
       setGroupName("");
       setContacts([]);
       setSelectedPeerIds(new Set());
@@ -68,7 +74,7 @@ const NewGroupDialog = ({ open, onOpenChange, onSuccess }: NewGroupDialogProps) 
     };
 
     void loadContacts();
-  }, [open]);
+  }, [open, isSubmitting]);
 
   const toggleContact = (peerId: string) => {
     setSelectedPeerIds(prev => {
@@ -147,6 +153,7 @@ const NewGroupDialog = ({ open, onOpenChange, onSuccess }: NewGroupDialogProps) 
                 onChange={(e) => setGroupName(e.target.value.slice(0, MAX_GROUP_NAME_LENGTH))}
                 autoFocus
                 spellCheck={false}
+                disabled={isSubmitting}
               />
               <p className="text-xs text-muted-foreground mt-1">
                 {groupName.length}/{MAX_GROUP_NAME_LENGTH}
@@ -168,6 +175,7 @@ const NewGroupDialog = ({ open, onOpenChange, onSuccess }: NewGroupDialogProps) 
                   {selectedContacts.map(c => (
                     <button
                       key={c.peerId}
+                      disabled={isSubmitting}
                       type="button"
                       onClick={() => toggleContact(c.peerId)}
                       className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-primary/20 text-primary border border-primary/30 hover:bg-primary/30 transition-colors"
@@ -201,7 +209,7 @@ const NewGroupDialog = ({ open, onOpenChange, onSuccess }: NewGroupDialogProps) 
                 ) : (
                   contacts.map(contact => {
                     const isSelected = selectedPeerIds.has(contact.peerId);
-                    const isDisabled = !isSelected && selectedPeerIds.size >= MAX_SELECTABLE;
+                    const isDisabled = (!isSelected && selectedPeerIds.size >= MAX_SELECTABLE) || isSubmitting;
                     return (
                       <button
                         key={contact.peerId}
