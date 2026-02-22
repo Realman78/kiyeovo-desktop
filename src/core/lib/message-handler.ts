@@ -25,7 +25,7 @@ import { UsernameRegistry } from './username-registry.js';
 import { FileHandler } from './file-handler.js';
 import { generalErrorHandler } from '../utils/general-error.js';
 import { PeerId } from '@libp2p/interface';
-import { GroupMessageType } from './group/types.js';
+import { GroupMessageType, type GroupInvite } from './group/types.js';
 import { GroupCreator } from './group/group-creator.js';
 import { GroupResponder } from './group/group-responder.js';
 
@@ -349,6 +349,38 @@ export class MessageHandler {
 
       for (const pending of pendingAcks) {
         try {
+          if (pending.message_type === 'GROUP_INVITE') {
+            let inviteId: string | null = null;
+            try {
+              const invite = JSON.parse(pending.message_payload) as GroupInvite;
+              inviteId = invite.inviteId;
+            } catch {
+              console.warn(
+                `[GROUP-ACK] Removing invalid pending payload: type=${pending.message_type} group=${pending.group_id} target=${pending.target_peer_id.slice(-8)}`
+              );
+              this.database.removePendingAck(
+                pending.group_id,
+                pending.target_peer_id,
+                pending.message_type,
+              );
+              continue;
+            }
+
+            if (
+              inviteId &&
+              this.database.isInviteDeliveryAckReceived(
+                pending.group_id,
+                pending.target_peer_id,
+                inviteId,
+              )
+            ) {
+              console.log(
+                `[GROUP-ACK] Skipping delivered invite ${inviteId} for ${pending.target_peer_id.slice(-8)}`
+              );
+              continue;
+            }
+          }
+
           // TODO extend to support other group message types
           if (pending.message_type === 'GROUP_INVITE_RESPONSE') {
             // Responder -> creator flow
@@ -1132,6 +1164,12 @@ export class MessageHandler {
           const creator = new GroupCreator(deps);
           await creator.processInviteResponse(parsed as any);
           console.log(`[GROUP] Processed GROUP_INVITE_RESPONSE from ${senderInfo.username}`);
+          break;
+        }
+        case GroupMessageType.GROUP_INVITE_DELIVERED_ACK: {
+          const creator = new GroupCreator(deps);
+          await creator.handleInviteDeliveredAck(parsed as any, senderInfo.peer_id);
+          console.log(`[GROUP] Processed GROUP_INVITE_DELIVERED_ACK from ${senderInfo.username}`);
           break;
         }
         case GroupMessageType.GROUP_CONTROL_ACK: {

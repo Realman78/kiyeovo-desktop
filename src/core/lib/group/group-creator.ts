@@ -15,6 +15,7 @@ import {
 import {
   GroupMessageType,
   type GroupInvite,
+  type GroupInviteDeliveredAck,
   type GroupInviteResponse,
   type GroupInviteResponseAck,
   type GroupWelcome,
@@ -183,6 +184,7 @@ export class GroupCreator {
     if (Date.now() > storedInvite.expiresAt) {
       console.log(`[GROUP] Invite expired for ${response.responderPeerId}`);
       database.removePendingAck(response.groupId, response.responderPeerId, 'GROUP_INVITE');
+      database.removeInviteDeliveryAcksForMember(response.groupId, response.responderPeerId);
       return;
     }
 
@@ -199,6 +201,7 @@ export class GroupCreator {
     if (response.response === 'reject') {
       // Reject is terminal for this invite.
       database.removePendingAck(response.groupId, response.responderPeerId, 'GROUP_INVITE');
+      database.removeInviteDeliveryAcksForMember(response.groupId, response.responderPeerId);
       return;
     }
 
@@ -207,6 +210,7 @@ export class GroupCreator {
       .some(p => p.peer_id === response.responderPeerId);
     if (alreadyParticipant) {
       database.removePendingAck(response.groupId, response.responderPeerId, 'GROUP_INVITE');
+      database.removeInviteDeliveryAcksForMember(response.groupId, response.responderPeerId);
       return;
     }
 
@@ -214,6 +218,32 @@ export class GroupCreator {
 
     // Remove invite only after welcome path succeeds.
     database.removePendingAck(response.groupId, response.responderPeerId, 'GROUP_INVITE');
+    database.removeInviteDeliveryAcksForMember(response.groupId, response.responderPeerId);
+  }
+
+  async handleInviteDeliveredAck(ack: GroupInviteDeliveredAck, senderPeerId: string): Promise<void> {
+    const { database, myPeerId } = this.deps;
+
+    const chat = database.getChatByGroupId(ack.groupId);
+    if (!chat || chat.created_by !== myPeerId) return;
+
+    const sender = database.getUserByPeerId(senderPeerId);
+    if (!sender) return;
+    this.verifySignature(ack, sender.signing_public_key);
+
+    const pendingAcks = database.getPendingAcksForGroup(ack.groupId);
+    const pendingInvite = pendingAcks.find(
+      a => a.target_peer_id === senderPeerId && a.message_type === 'GROUP_INVITE',
+    );
+    if (!pendingInvite) return;
+
+    try {
+      const storedInvite = JSON.parse(pendingInvite.message_payload) as GroupInvite;
+      if (storedInvite.inviteId !== ack.inviteId) return;
+      database.markInviteDeliveryAckReceived(ack.groupId, senderPeerId, ack.inviteId);
+    } catch {
+      return;
+    }
   }
 
   async handleControlAck(ack: GroupControlAck, senderPeerId: string): Promise<void> {

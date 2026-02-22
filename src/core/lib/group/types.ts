@@ -2,6 +2,7 @@
 
 export const GroupMessageType = {
   GROUP_INVITE: 'GROUP_INVITE',
+  GROUP_INVITE_DELIVERED_ACK: 'GROUP_INVITE_DELIVERED_ACK',
   GROUP_INVITE_RESPONSE: 'GROUP_INVITE_RESPONSE',
   GROUP_INVITE_RESPONSE_ACK: 'GROUP_INVITE_RESPONSE_ACK',
   GROUP_WELCOME: 'GROUP_WELCOME',
@@ -46,6 +47,14 @@ export interface GroupInviteResponse {
   responderPeerId: string;
   response: 'accept' | 'reject';
   timestamp: number;
+  signature: string;
+}
+
+export interface GroupInviteDeliveredAck {
+  type: typeof GroupMessageType.GROUP_INVITE_DELIVERED_ACK;
+  groupId: string;
+  inviteId: string;
+  ackId: string;
   signature: string;
 }
 
@@ -217,6 +226,7 @@ export interface PendingAck {
 // Union of all group control messages
 export type GroupControlMessage =
   | GroupInvite
+  | GroupInviteDeliveredAck
   | GroupInviteResponse
   | GroupInviteResponseAck
   | GroupWelcome

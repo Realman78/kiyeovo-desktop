@@ -8,6 +8,7 @@ import { toBase64Url } from '../base64url.js';
 import {
   GroupMessageType,
   type GroupInvite,
+  type GroupInviteDeliveredAck,
   type GroupInviteResponse,
   type GroupInviteResponseAck,
   type GroupWelcome,
@@ -61,6 +62,15 @@ export class GroupResponder {
     const existing = database.getChatByGroupId(invite.groupId);
     if (existing) {
       console.log(`[GROUP] Already have group ${invite.groupId}, ignoring duplicate invite`);
+      try {
+        await this.sendInviteDeliveredAck(invite);
+      } catch (error: unknown) {
+        console.warn(
+          `[GROUP] Failed to send duplicate invite delivery ACK for ${invite.groupId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
       return;
     }
 
@@ -100,6 +110,16 @@ export class GroupResponder {
       bucket_key: '',
       status: 'pending',
     });
+
+    try {
+      await this.sendInviteDeliveredAck(invite);
+    } catch (error: unknown) {
+      console.warn(
+        `[GROUP] Failed to send invite delivery ACK for ${invite.groupId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
   }
 
   async respondToInvite(groupId: string, accept: boolean): Promise<void> {
@@ -311,6 +331,19 @@ export class GroupResponder {
     const signedAck: GroupControlAck = { ...ack, signature };
 
     await this.sendControlMessageToPeer(creatorPeerId, signedAck);
+  }
+
+  private async sendInviteDeliveredAck(invite: GroupInvite): Promise<void> {
+    const ack: Omit<GroupInviteDeliveredAck, 'signature'> = {
+      type: GroupMessageType.GROUP_INVITE_DELIVERED_ACK,
+      groupId: invite.groupId,
+      inviteId: invite.inviteId,
+      ackId: randomUUID(),
+    };
+
+    const signature = this.sign(ack);
+    const signedAck: GroupInviteDeliveredAck = { ...ack, signature };
+    await this.sendControlMessageToPeer(invite.inviterPeerId, signedAck);
   }
 
   // --- Helpers ---

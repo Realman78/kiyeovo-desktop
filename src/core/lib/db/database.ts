@@ -160,6 +160,13 @@ export interface GroupPendingAck {
     last_published_at: string
 }
 
+export interface GroupInviteDeliveryAck {
+    group_id: string
+    target_peer_id: string
+    invite_id: string
+    created_at: string
+}
+
 export interface GroupSenderSeq {
     group_id: string
     key_version: number
@@ -443,6 +450,19 @@ export class ChatDatabase {
             )
         `);
 
+        // Group invite delivery ACKs — recipient confirmed invite was received.
+        // Used to stop invite re-publishing while still keeping invite pending row
+        // for later response validation.
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS group_invite_delivery_acks (
+                group_id TEXT NOT NULL,
+                target_peer_id TEXT NOT NULL,
+                invite_id TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (group_id, target_peer_id, invite_id)
+            )
+        `);
+
         // Group sender sequence — tracks sender's own monotonic seq per group per keyVersion
         this.db.exec(`
             CREATE TABLE IF NOT EXISTS group_sender_seq (
@@ -484,6 +504,7 @@ export class ChatDatabase {
       -- Group indexes
       CREATE INDEX IF NOT EXISTS idx_group_key_history_group ON group_key_history(group_id);
       CREATE INDEX IF NOT EXISTS idx_group_pending_acks_group ON group_pending_acks(group_id);
+      CREATE INDEX IF NOT EXISTS idx_group_invite_delivery_acks_group ON group_invite_delivery_acks(group_id);
       CREATE INDEX IF NOT EXISTS idx_chats_group_id ON chats(group_id);
         `);
     }
@@ -1897,6 +1918,32 @@ export class ChatDatabase {
     updatePendingAckLastPublished(groupId: string, targetPeerId: string, messageType: AckMessageType): void {
         const stmt = this.db.prepare('UPDATE group_pending_acks SET last_published_at = CURRENT_TIMESTAMP WHERE group_id = ? AND target_peer_id = ? AND message_type = ?');
         stmt.run(groupId, targetPeerId, messageType);
+    }
+
+    markInviteDeliveryAckReceived(groupId: string, targetPeerId: string, inviteId: string): void {
+        const stmt = this.db.prepare(`
+            INSERT OR IGNORE INTO group_invite_delivery_acks (group_id, target_peer_id, invite_id)
+            VALUES (?, ?, ?)
+        `);
+        stmt.run(groupId, targetPeerId, inviteId);
+    }
+
+    isInviteDeliveryAckReceived(groupId: string, targetPeerId: string, inviteId: string): boolean {
+        const stmt = this.db.prepare(`
+            SELECT 1
+            FROM group_invite_delivery_acks
+            WHERE group_id = ? AND target_peer_id = ? AND invite_id = ?
+        `);
+        const row = stmt.get(groupId, targetPeerId, inviteId);
+        return row !== undefined;
+    }
+
+    removeInviteDeliveryAcksForMember(groupId: string, targetPeerId: string): void {
+        const stmt = this.db.prepare(`
+            DELETE FROM group_invite_delivery_acks
+            WHERE group_id = ? AND target_peer_id = ?
+        `);
+        stmt.run(groupId, targetPeerId);
     }
 
     // --- Group sender sequence ---
