@@ -101,7 +101,7 @@ const NewGroupDialog = ({ open, onOpenChange, onSuccess }: NewGroupDialogProps) 
     return chats.some(c => c.type === 'group' && c.name.toLowerCase() === trimmed);
   }, [groupName, chats]);
 
-  const canSubmit = groupName.trim().length > 0 && selectedPeerIds.size > 0 && !isSubmitting && !duplicateName;
+  const canSubmit = groupName.trim().length > 0 && selectedPeerIds.size > 1 && !isSubmitting && !duplicateName;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

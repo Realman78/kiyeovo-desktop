@@ -261,6 +261,7 @@ export class MessageHandler {
 
       if (!isRetry && allowRetry && !hasNewData) {
         setTimeout(() => {
+          console.log("DEBUG: runNudgeOfflineCheck from setTimeout")
           void this.runNudgeOfflineCheck(remoteId, chatId, true, allowRetry);
         }, BUCKET_NUDGE_RETRY_DELAY_MS);
       }

@@ -65,6 +65,10 @@ export class GroupCreator {
     if (invitedPeerIds.length + 1 > GROUP_MAX_MEMBERS) {
       throw new Error(`Group cannot exceed ${GROUP_MAX_MEMBERS} members`);
     }
+    
+    if (invitedPeerIds.length < 2) {
+      throw new Error(`You must invite at least 2 people`);
+    }
 
     // Verify all invitees are known contacts
     for (const peerId of invitedPeerIds) {
