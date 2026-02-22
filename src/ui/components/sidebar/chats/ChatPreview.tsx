@@ -24,7 +24,7 @@ export const ChatPreview: FC<ChatPreviewProps> = ({ chat, onSelectChat, selected
                 <div className="flex items-center justify-between mb-1">
                     <span className="font-medium text-sm text-sidebar-foreground truncate flex items-center gap-1.5">
                         {chat.type === 'group' && <Users className="w-3.5 h-3.5 text-primary shrink-0" />}
-                        {chat.name}
+                        <span className="truncate max-w-[180px]">{chat.name}</span>
                         {isAwaitingActivation && (
                             <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400 uppercase tracking-wide">
                                 Awaiting Activation
