@@ -92,6 +92,8 @@ export class GroupCreator {
   private async sendGroupInvites(groupId: string, groupName: string, invitedPeerIds: string[]): Promise<void> {
     const { database, myPeerId } = this.deps;
     const now = Date.now();
+    let sent = 0;
+    let queued = 0;
 
     for (const peerId of invitedPeerIds) {
       const inviteId = randomUUID();
@@ -113,7 +115,19 @@ export class GroupCreator {
       // Store in pending ACKs first, then send (crash-safe: re-publisher can deliver later).
       database.insertPendingAck(groupId, peerId, 'GROUP_INVITE', JSON.stringify(signedInvite));
 
-      await this.sendControlMessageToPeer(peerId, signedInvite);
+      try {
+        // Pending ACK row remains and will be re-published by the scheduler.
+        // eslint-disable-next-line no-await-in-loop
+        await this.sendControlMessageToPeer(peerId, signedInvite);
+        sent++;
+      } catch (error: unknown) {
+        queued++;
+        console.warn(`[GROUP] Invite to ${peerId} queued for retry: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    if (queued > 0) {
+      console.log(`[GROUP] Group ${groupId}: invites sent now=${sent}, queued for retry=${queued}`);
     }
   }
 
