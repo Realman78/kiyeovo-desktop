@@ -51,6 +51,7 @@ export class MessageHandler {
   private groupAckRepublishTimer: ReturnType<typeof setTimeout> | null = null;
   private groupAckStartupTimer: ReturnType<typeof setTimeout> | null = null;
   private groupAckRepublishInFlight = false;
+  private offlineCheckRunSeq = 0;
 
   constructor(
     node: ChatNode,
@@ -251,9 +252,15 @@ export class MessageHandler {
   private async runNudgeOfflineCheck(remoteId: string, chatId: number, isRetry: boolean, allowRetry: boolean): Promise<void> {
     try {
       const beforeTimestamp = this.database.getOfflineLastReadTimestampByPeerId(remoteId);
+      console.log(
+        `[NUDGE][CHECK][START] peer=${remoteId.slice(-8)} chatId=${chatId} isRetry=${isRetry} allowRetry=${allowRetry} beforeTs=${beforeTimestamp}`,
+      );
       const { checkedChatIds } = await this.checkOfflineMessages([chatId]);
       const afterTimestamp = this.database.getOfflineLastReadTimestampByPeerId(remoteId);
       const hasNewData = afterTimestamp > beforeTimestamp;
+      console.log(
+        `[NUDGE][CHECK][DONE] peer=${remoteId.slice(-8)} chatId=${chatId} isRetry=${isRetry} checkedChats=${checkedChatIds.length} beforeTs=${beforeTimestamp} afterTs=${afterTimestamp} hasNewData=${hasNewData}`,
+      );
 
       if (checkedChatIds.length > 0 && hasNewData) {
         this.onOfflineMessagesFetchComplete?.(checkedChatIds);
@@ -261,7 +268,9 @@ export class MessageHandler {
 
       if (!isRetry && allowRetry && !hasNewData) {
         setTimeout(() => {
-          console.log("DEBUG: runNudgeOfflineCheck from setTimeout")
+          console.log(
+            `[NUDGE][CHECK][RETRY_SCHEDULED] peer=${remoteId.slice(-8)} chatId=${chatId} retryInMs=${BUCKET_NUDGE_RETRY_DELAY_MS}`,
+          );
           void this.runNudgeOfflineCheck(remoteId, chatId, true, allowRetry);
         }, BUCKET_NUDGE_RETRY_DELAY_MS);
       }
@@ -337,6 +346,9 @@ export class MessageHandler {
 
       const pendingAcks = this.database.getAllPendingAcks();
       if (pendingAcks.length === 0) return;
+      console.log(
+        `[GROUP-ACK][CYCLE][START] pendingCount=${pendingAcks.length} connectedPeers=${this.node.getConnections().length}`,
+      );
 
       const userIdentity = this.usernameRegistry.getUserIdentity();
       if (!userIdentity) return;
@@ -358,9 +370,16 @@ export class MessageHandler {
 
       const creator = new GroupCreator(deps);
       const responder = new GroupResponder(deps);
+      let rePublished = 0;
+      let skippedDelivered = 0;
+      let removedInvalid = 0;
+      let failed = 0;
 
       for (const pending of pendingAcks) {
         try {
+          console.log(
+            `[GROUP-ACK][ITEM][START] type=${pending.message_type} group=${pending.group_id} target=${pending.target_peer_id.slice(-8)} ${this.describePendingPayload(pending.message_payload)}`,
+          );
           if (pending.message_type === 'GROUP_INVITE') {
             let inviteId: string | null = null;
             try {
@@ -375,6 +394,7 @@ export class MessageHandler {
                 pending.target_peer_id,
                 pending.message_type,
               );
+              removedInvalid++;
               continue;
             }
 
@@ -389,6 +409,7 @@ export class MessageHandler {
               console.log(
                 `[GROUP-ACK] Skipping delivered invite ${inviteId} for ${pending.target_peer_id.slice(-8)}`
               );
+              skippedDelivered++;
               continue;
             }
           }
@@ -409,13 +430,21 @@ export class MessageHandler {
             pending.target_peer_id,
             pending.message_type,
           );
+          rePublished++;
+          console.log(
+            `[GROUP-ACK][ITEM][DONE] type=${pending.message_type} group=${pending.group_id} target=${pending.target_peer_id.slice(-8)}`,
+          );
         } catch (error: unknown) {
+          failed++;
           generalErrorHandler(
             error,
             `[GROUP-ACK] Failed to re-publish ${pending.message_type} to ${pending.target_peer_id.slice(-8)}`,
           );
         }
       }
+      console.log(
+        `[GROUP-ACK][CYCLE][DONE] rePublished=${rePublished} skippedDelivered=${skippedDelivered} removedInvalid=${removedInvalid} failed=${failed}`,
+      );
     } finally {
       this.groupAckRepublishInFlight = false;
     }
@@ -749,9 +778,13 @@ export class MessageHandler {
 
   // Check offline messages (direct)
   private async performOfflineMessageCheck(chatIds?: number[]): Promise<{checkedChatIds: number[], unreadFromChats: Map<number, number>}> {
+    const runId = ++this.offlineCheckRunSeq;
     console.log(chatIds
       ? `Checking for offline messages in ${chatIds.length} chat${chatIds.length > 1 ? 's' : ''}...`
       : "Checking for offline direct messages (top 10)...");
+    console.log(
+      `[OFFLINE][CHECK][START] run=${runId} scope=${chatIds ? `chat_ids:${chatIds.join(',')}` : 'default'}`,
+    );
 
     // Get bucket info for reading: secret + peer's signing public key
     const bucketInfoList = chatIds
@@ -760,6 +793,7 @@ export class MessageHandler {
 
     if (bucketInfoList.length === 0) {
       console.log('No chats found for offline message check');
+      console.log(`[OFFLINE][CHECK][DONE] run=${runId} checkedChats=0 fetchedMessages=0 processedMessages=0`);
       return {checkedChatIds: [], unreadFromChats: new Map()};
     }
 
@@ -796,10 +830,16 @@ export class MessageHandler {
     }
 
     const bucketKeys = readBuckets.map(b => b.key);
+    console.log(
+      `[OFFLINE][CHECK][BUCKETS] run=${runId} count=${readBuckets.length} peers=${readBuckets.map(b => b.peerId.slice(-8)).join(',')}`,
+    );
     const store = await OfflineMessageManager.getOfflineMessages(this.node, bucketKeys);
 
     if (store.messages.length === 0) {
       console.log('No offline direct messages found');
+      console.log(
+        `[OFFLINE][CHECK][DONE] run=${runId} checkedChats=${checkedChats.length} fetchedMessages=0 processedMessages=0`,
+      );
       return {checkedChatIds: checkedChats, unreadFromChats: new Map()};
     }
 
@@ -819,7 +859,7 @@ export class MessageHandler {
       const duplicates = count - uniqueCount;
       const bucketInfo = readBuckets.find(b => b.key === bucket);
       console.log(
-        `[OFFLINE][PROCESS] bucket=${bucket.slice(0, 48)}... fetched=${count} uniqueIds=${uniqueCount} duplicates=${Math.max(0, duplicates)} ` +
+        `[OFFLINE][PROCESS] run=${runId} bucket=${bucket.slice(0, 48)}... fetched=${count} uniqueIds=${uniqueCount} duplicates=${Math.max(0, duplicates)} ` +
         `lastReadTs=${bucketInfo?.lastReadTimestamp ?? 'n/a'} peer=${bucketInfo?.peerId ?? 'n/a'}`
       );
     }
@@ -847,6 +887,9 @@ export class MessageHandler {
 
         // Skip messages we've already processed (based on last read timestamp)
         if (msg.timestamp <= bucketInfo.lastReadTimestamp) {
+          console.log(
+            `[OFFLINE][MSG][SKIP] run=${runId} msgId=${msg.id} peer=${bucketInfo.peerId.slice(-8)} reason=timestamp_leq_last_read msgTs=${msg.timestamp} lastReadTs=${bucketInfo.lastReadTimestamp}`,
+          );
           continue;
         }
 
@@ -857,20 +900,24 @@ export class MessageHandler {
         );
 
         if (!isSignatureValid) {
-          console.log(`Skipping message - signature verification failed`);
+          console.log(
+            `[OFFLINE][MSG][SKIP] run=${runId} msgId=${msg.id} peer=${bucketInfo.peerId.slice(-8)} reason=signature_invalid`,
+          );
           continue;
         }
 
         // Decrypt sender info to get username for display
         const senderInfo = MessageEncryption.decryptSenderInfo(msg, userIdentity.offlinePrivateKey);
         if (!senderInfo) {
-          console.log(`Skipping message - failed to decrypt sender info`);
+          console.log(
+            `[OFFLINE][MSG][SKIP] run=${runId} msgId=${msg.id} reason=sender_info_decrypt_failed`,
+          );
           continue;
         }
 
         // Skip messages sent by ourselves (shouldn't happen)
         if (senderInfo.peer_id === this.node.peerId.toString()) {
-          console.log(`Skipping own message`);
+          console.log(`[OFFLINE][MSG][SKIP] run=${runId} msgId=${msg.id} reason=own_message`);
           continue;
         }
 
@@ -891,7 +938,9 @@ export class MessageHandler {
         const groupResult = await this.tryRouteGroupControlMessage(decryptedContent, senderInfo);
         if (groupResult === 'retry') {
           // Handler failed — skip saving as text, skip advancing timestamp so it is retried next check
-          console.log(`Group control message from ${senderInfo.username} failed, will retry`);
+          console.log(
+            `[OFFLINE][MSG][GROUP] run=${runId} msgId=${msg.id} from=${senderInfo.peer_id.slice(-8)} result=retry`,
+          );
           continue;
         }
         if (groupResult === 'handled') {
@@ -900,7 +949,9 @@ export class MessageHandler {
           if (msg.timestamp > currentMax) {
             maxTimestampPerPeer.set(bucketInfo.peerId, msg.timestamp);
           }
-          console.log(`Routed group control message from ${senderInfo.username}`);
+          console.log(
+            `[OFFLINE][MSG][GROUP] run=${runId} msgId=${msg.id} from=${senderInfo.peer_id.slice(-8)} result=handled`,
+          );
           continue;
         }
         // 'not_group': fall through to regular message handling
@@ -918,7 +969,9 @@ export class MessageHandler {
           maxTimestampPerPeer.set(bucketInfo.peerId, msg.timestamp);
         }
 
-        console.log(`Delivered offline message from ${senderInfo.username}`);
+        console.log(
+          `[OFFLINE][MSG][TEXT] run=${runId} msgId=${msg.id} from=${senderInfo.peer_id.slice(-8)} delivered=true`,
+        );
       } catch (error: unknown) {
         generalErrorHandler(error, `Failed to process offline message`);
       }
@@ -927,12 +980,15 @@ export class MessageHandler {
     // Update last read timestamp for each peer
     for (const [peerId, maxTimestamp] of maxTimestampPerPeer.entries()) {
       this.database.updateOfflineLastReadTimestampByPeerId(peerId, maxTimestamp);
-      console.log(`[OFFLINE][PROCESS] Updated lastRead timestamp for peer=${peerId} to ${maxTimestamp}`);
+      console.log(`[OFFLINE][PROCESS] run=${runId} updatedLastRead peer=${peerId.slice(-8)} ts=${maxTimestamp}`);
     }
 
     if (processedCount > 0) {
       console.log(`Processed ${processedCount} new offline direct messages`);
     }
+    console.log(
+      `[OFFLINE][CHECK][DONE] run=${runId} checkedChats=${checkedChats.length} fetchedMessages=${store.messages.length} processedMessages=${processedCount} updatedPeers=${maxTimestampPerPeer.size}`,
+    );
 
     return {checkedChatIds: checkedChats, unreadFromChats: unreadFromChats};
   }
@@ -1131,6 +1187,10 @@ export class MessageHandler {
     // Check if this is a known group message type
     const groupTypes = Object.values(GroupMessageType) as string[];
     if (!groupTypes.includes(type)) return 'not_group';
+    const groupMeta = this.describeParsedGroupMessage(parsed as Record<string, unknown>);
+    console.log(
+      `[GROUP][TRACE][ROUTE][IN] from=${senderInfo.peer_id.slice(-8)} ${groupMeta}`,
+    );
 
     const userIdentity = this.usernameRegistry.getUserIdentity();
     if (!userIdentity) {
@@ -1211,7 +1271,29 @@ export class MessageHandler {
       generalErrorHandler(error, `[GROUP] Error handling ${type} from ${senderInfo.username}`);
       return 'retry'; // Handler failed — don't advance timestamp so message is retried
     }
+    console.log(
+      `[GROUP][TRACE][ROUTE][DONE] from=${senderInfo.peer_id.slice(-8)} ${groupMeta} result=handled`,
+    );
 
     return 'handled';
+  }
+
+  private describeParsedGroupMessage(parsed: Record<string, unknown>): string {
+    const type = typeof parsed.type === 'string' ? parsed.type : 'unknown';
+    const groupId = typeof parsed.groupId === 'string' ? parsed.groupId : 'n/a';
+    const inviteId = typeof parsed.inviteId === 'string' ? parsed.inviteId : 'n/a';
+    const messageId = typeof parsed.messageId === 'string' ? parsed.messageId : 'n/a';
+    const ackedMessageId = typeof parsed.ackedMessageId === 'string' ? parsed.ackedMessageId : 'n/a';
+    const ackId = typeof parsed.ackId === 'string' ? parsed.ackId : 'n/a';
+    return `type=${type} group=${groupId} inviteId=${inviteId} msgId=${messageId} ackedMsgId=${ackedMessageId} ackId=${ackId}`;
+  }
+
+  private describePendingPayload(payloadJson: string): string {
+    try {
+      const parsed = JSON.parse(payloadJson) as Record<string, unknown>;
+      return this.describeParsedGroupMessage(parsed);
+    } catch {
+      return 'type=invalid_json group=n/a inviteId=n/a msgId=n/a ackedMsgId=n/a ackId=n/a';
+    }
   }
 } 

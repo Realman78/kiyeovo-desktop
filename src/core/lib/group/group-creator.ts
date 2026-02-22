@@ -137,11 +137,17 @@ export class GroupCreator {
 
       // Store in pending ACKs first, then send
       database.insertPendingAck(groupId, peerId, 'GROUP_INVITE', JSON.stringify(signedInvite));
+      console.log(
+        `[GROUP][TRACE][INVITE][CREATE] group=${groupId} inviteId=${inviteId} to=${peerId.slice(-8)} pendingSaved=true expiresAt=${expiresAt}`,
+      );
 
       try {
         // Pending ACK row remains and will be re-published by the scheduler.
         // eslint-disable-next-line no-await-in-loop
         await this.sendControlMessageToPeer(peerId, signedInvite);
+        console.log(
+          `[GROUP][TRACE][INVITE][SENT] group=${groupId} inviteId=${inviteId} to=${peerId.slice(-8)}`,
+        );
         sent++;
         deliveries.push({ peerId, username, status: 'sent' });
       } catch (error: unknown) {
@@ -160,33 +166,68 @@ export class GroupCreator {
 
   async processInviteResponse(response: GroupInviteResponse): Promise<void> {
     const { database, myPeerId } = this.deps;
+    console.log(
+      `[GROUP][TRACE][RESP][IN] group=${response.groupId} inviteId=${response.inviteId} msgId=${response.messageId} from=${response.responderPeerId.slice(-8)} response=${response.response} ts=${response.timestamp}`,
+    );
 
     // Verify this is for a group we created
     const chat = database.getChatByGroupId(response.groupId);
     if (!chat || chat.created_by !== myPeerId) {
+      console.log(
+        `[GROUP][TRACE][RESP][DROP] group=${response.groupId} reason=not_creator chatExists=${!!chat} createdBy=${chat?.created_by?.slice(-8) ?? 'n/a'} me=${myPeerId.slice(-8)}`,
+      );
       throw new Error(`Not creator of group ${response.groupId}`);
     }
 
     // Reconstruct invite state from pending_acks (survives restart)
     const pendingAcks = database.getPendingAcksForGroup(response.groupId);
-    const inviteAck = pendingAcks.find(
+    const inviteCandidates = pendingAcks.filter(
       a => a.target_peer_id === response.responderPeerId && a.message_type === 'GROUP_INVITE'
     );
+    const inviteCandidateIds = inviteCandidates.map(candidate => {
+      try {
+        const parsed = JSON.parse(candidate.message_payload) as { inviteId?: string };
+        return parsed.inviteId ?? 'missing_invite_id';
+      } catch {
+        return 'invalid_json';
+      }
+    });
+    console.log(
+      `[GROUP][TRACE][RESP][LOOKUP] group=${response.groupId} from=${response.responderPeerId.slice(-8)} pendingInviteCount=${inviteCandidates.length} pendingInviteIds=${inviteCandidateIds.join(',') || 'none'}`,
+    );
+    const inviteAck = inviteCandidates[0];
 
     if (!inviteAck) {
       // No pending invite = already processed (dedup) or never sent
-      console.log(`[GROUP] No pending invite for ${response.responderPeerId}, ignoring (already processed or unknown)`);
+      console.log(
+        `[GROUP][TRACE][RESP][DROP] group=${response.groupId} from=${response.responderPeerId.slice(-8)} reason=no_pending_invite`,
+      );
       return;
     }
 
     // Parse stored invite to verify inviteId match and check expiry
-    const storedInvite: GroupInvite = JSON.parse(inviteAck.message_payload);
+    let storedInvite: GroupInvite;
+    try {
+      storedInvite = JSON.parse(inviteAck.message_payload) as GroupInvite;
+    } catch {
+      console.log(
+        `[GROUP][TRACE][RESP][DROP] group=${response.groupId} from=${response.responderPeerId.slice(-8)} reason=invalid_pending_invite_payload`,
+      );
+      throw new Error('Invalid pending invite payload');
+    }
+    console.log(
+      `[GROUP][TRACE][RESP][MATCH] group=${response.groupId} from=${response.responderPeerId.slice(-8)} incomingInviteId=${response.inviteId} pendingInviteId=${storedInvite.inviteId}`,
+    );
     if (response.inviteId !== storedInvite.inviteId) {
-      throw new Error('Invite ID mismatch');
+      throw new Error(
+        `Invite ID mismatch: incoming=${response.inviteId} pending=${storedInvite.inviteId}`,
+      );
     }
 
     if (Date.now() > storedInvite.expiresAt) {
-      console.log(`[GROUP] Invite expired for ${response.responderPeerId}`);
+      console.log(
+        `[GROUP][TRACE][RESP][DROP] group=${response.groupId} from=${response.responderPeerId.slice(-8)} reason=invite_expired now=${Date.now()} expiresAt=${storedInvite.expiresAt}`,
+      );
       database.removePendingAck(response.groupId, response.responderPeerId, 'GROUP_INVITE');
       database.removeInviteDeliveryAcksForMember(response.groupId, response.responderPeerId);
       return;
@@ -198,14 +239,23 @@ export class GroupCreator {
       throw new Error(`Responder ${response.responderPeerId} not found`);
     }
     this.verifySignature(response, responder.signing_public_key);
+    console.log(
+      `[GROUP][TRACE][RESP][SIG_OK] group=${response.groupId} from=${response.responderPeerId.slice(-8)} msgId=${response.messageId}`,
+    );
 
     // Send ACK back
+    console.log(
+      `[GROUP][TRACE][RESP][ACK_SEND] group=${response.groupId} inviteId=${response.inviteId} to=${response.responderPeerId.slice(-8)} ackedMsgId=${response.messageId}`,
+    );
     await this.sendInviteResponseAck(response);
 
     if (response.response === 'reject') {
       // Reject is terminal for this invite.
       database.removePendingAck(response.groupId, response.responderPeerId, 'GROUP_INVITE');
       database.removeInviteDeliveryAcksForMember(response.groupId, response.responderPeerId);
+      console.log(
+        `[GROUP][TRACE][RESP][DONE] group=${response.groupId} from=${response.responderPeerId.slice(-8)} result=rejected`,
+      );
       return;
     }
 
@@ -215,37 +265,75 @@ export class GroupCreator {
     if (alreadyParticipant) {
       database.removePendingAck(response.groupId, response.responderPeerId, 'GROUP_INVITE');
       database.removeInviteDeliveryAcksForMember(response.groupId, response.responderPeerId);
+      console.log(
+        `[GROUP][TRACE][RESP][DONE] group=${response.groupId} from=${response.responderPeerId.slice(-8)} result=already_participant`,
+      );
       return;
     }
 
+    console.log(
+      `[GROUP][TRACE][RESP][WELCOME] group=${response.groupId} to=${response.responderPeerId.slice(-8)} action=send_group_welcome`,
+    );
     await this.sendGroupWelcome(response.groupId, response.responderPeerId);
 
     // Remove invite only after welcome path succeeds.
     database.removePendingAck(response.groupId, response.responderPeerId, 'GROUP_INVITE');
     database.removeInviteDeliveryAcksForMember(response.groupId, response.responderPeerId);
+    console.log(
+      `[GROUP][TRACE][RESP][DONE] group=${response.groupId} from=${response.responderPeerId.slice(-8)} result=accepted_pending_removed`,
+    );
   }
 
   async handleInviteDeliveredAck(ack: GroupInviteDeliveredAck, senderPeerId: string): Promise<void> {
     const { database, myPeerId } = this.deps;
+    console.log(
+      `[GROUP][TRACE][DELIVERED_ACK][IN] group=${ack.groupId} inviteId=${ack.inviteId} ackId=${ack.ackId} from=${senderPeerId.slice(-8)}`,
+    );
 
     const chat = database.getChatByGroupId(ack.groupId);
-    if (!chat || chat.created_by !== myPeerId) return;
+    if (!chat || chat.created_by !== myPeerId) {
+      console.log(
+        `[GROUP][TRACE][DELIVERED_ACK][DROP] group=${ack.groupId} from=${senderPeerId.slice(-8)} reason=not_creator`,
+      );
+      return;
+    }
 
     const sender = database.getUserByPeerId(senderPeerId);
-    if (!sender) return;
+    if (!sender) {
+      console.log(
+        `[GROUP][TRACE][DELIVERED_ACK][DROP] group=${ack.groupId} from=${senderPeerId.slice(-8)} reason=unknown_sender`,
+      );
+      return;
+    }
     this.verifySignature(ack, sender.signing_public_key);
 
     const pendingAcks = database.getPendingAcksForGroup(ack.groupId);
     const pendingInvite = pendingAcks.find(
       a => a.target_peer_id === senderPeerId && a.message_type === 'GROUP_INVITE',
     );
-    if (!pendingInvite) return;
+    if (!pendingInvite) {
+      console.log(
+        `[GROUP][TRACE][DELIVERED_ACK][DROP] group=${ack.groupId} from=${senderPeerId.slice(-8)} reason=no_pending_invite`,
+      );
+      return;
+    }
 
     try {
       const storedInvite = JSON.parse(pendingInvite.message_payload) as GroupInvite;
-      if (storedInvite.inviteId !== ack.inviteId) return;
+      if (storedInvite.inviteId !== ack.inviteId) {
+        console.log(
+          `[GROUP][TRACE][DELIVERED_ACK][DROP] group=${ack.groupId} from=${senderPeerId.slice(-8)} reason=invite_id_mismatch pendingInviteId=${storedInvite.inviteId} incomingInviteId=${ack.inviteId}`,
+        );
+        return;
+      }
       database.markInviteDeliveryAckReceived(ack.groupId, senderPeerId, ack.inviteId);
+      console.log(
+        `[GROUP][TRACE][DELIVERED_ACK][APPLY] group=${ack.groupId} from=${senderPeerId.slice(-8)} inviteId=${ack.inviteId}`,
+      );
     } catch {
+      console.log(
+        `[GROUP][TRACE][DELIVERED_ACK][DROP] group=${ack.groupId} from=${senderPeerId.slice(-8)} reason=invalid_pending_invite_payload`,
+      );
       return;
     }
   }
@@ -260,6 +348,9 @@ export class GroupCreator {
     const sender = database.getUserByPeerId(senderPeerId);
     if (!sender) return;
     this.verifySignature(ack, sender.signing_public_key);
+    console.log(
+      `[GROUP][TRACE][CONTROL_ACK][IN] group=${ack.groupId} from=${senderPeerId.slice(-8)} ackType=${ack.ackedMessageType} ackedMsgId=${ack.ackedMessageId} ackId=${ack.ackId}`,
+    );
 
     // Map the acked message type to the pending ack type
     const ackType = ack.ackedMessageType as AckMessageType;
@@ -270,16 +361,32 @@ export class GroupCreator {
       const pending = pendingAcks.find(
         a => a.target_peer_id === senderPeerId && a.message_type === ackType,
       );
-      if (!pending) return;
+      if (!pending) {
+        console.log(
+          `[GROUP][TRACE][CONTROL_ACK][DROP] group=${ack.groupId} from=${senderPeerId.slice(-8)} reason=no_pending_for_type ackType=${ackType}`,
+        );
+        return;
+      }
 
       try {
         const stored = JSON.parse(pending.message_payload) as { messageId?: string };
-        if (stored.messageId !== ack.ackedMessageId) return;
+        if (stored.messageId !== ack.ackedMessageId) {
+          console.log(
+            `[GROUP][TRACE][CONTROL_ACK][DROP] group=${ack.groupId} from=${senderPeerId.slice(-8)} reason=message_id_mismatch pendingMsgId=${stored.messageId ?? 'missing'} ackedMsgId=${ack.ackedMessageId}`,
+          );
+          return;
+        }
       } catch {
+        console.log(
+          `[GROUP][TRACE][CONTROL_ACK][DROP] group=${ack.groupId} from=${senderPeerId.slice(-8)} reason=invalid_pending_payload`,
+        );
         return;
       }
 
       database.removePendingAck(ack.groupId, senderPeerId, ackType);
+      console.log(
+        `[GROUP][TRACE][CONTROL_ACK][APPLY] group=${ack.groupId} from=${senderPeerId.slice(-8)} ackType=${ackType}`,
+      );
     }
   }
 
@@ -295,6 +402,9 @@ export class GroupCreator {
     const signature = this.sign(ack);
     const signedAck: GroupInviteResponseAck = { ...ack, signature };
 
+    console.log(
+      `[GROUP][TRACE][RESP_ACK][SEND] group=${response.groupId} inviteId=${response.inviteId} to=${response.responderPeerId.slice(-8)} ackedMsgId=${response.messageId} ackId=${signedAck.ackId}`,
+    );
     await this.sendControlMessageToPeer(response.responderPeerId, signedAck);
   }
 
@@ -342,9 +452,15 @@ export class GroupCreator {
 
     // Store in pending ACKs first, then send. If send fails, re-publisher can still deliver later.
     database.insertPendingAck(groupId, acceptedPeerId, 'GROUP_WELCOME', JSON.stringify(signedWelcome));
+    console.log(
+      `[GROUP][TRACE][WELCOME][CREATE] group=${groupId} to=${acceptedPeerId.slice(-8)} msgId=${signedWelcome.messageId} keyVersion=${keyVersion}`,
+    );
 
     // Deliver to new member via pairwise offline bucket
     await this.sendControlMessageToPeer(acceptedPeerId, signedWelcome);
+    console.log(
+      `[GROUP][TRACE][WELCOME][SENT] group=${groupId} to=${acceptedPeerId.slice(-8)} msgId=${signedWelcome.messageId}`,
+    );
 
     // Send GroupStateUpdate to all existing members (excluding new joiner — they get welcome)
     await this.sendGroupStateUpdate(groupId, keyVersion, groupKey, roster, 'join', acceptedPeerId);
@@ -354,6 +470,9 @@ export class GroupCreator {
 
     // Transition group_status to 'active' now that at least one member has been welcomed
     database.updateChatGroupStatus(chat.id, 'active');
+    console.log(
+      `[GROUP][TRACE][WELCOME][DONE] group=${groupId} activated=true welcomedPeer=${acceptedPeerId.slice(-8)} keyVersion=${keyVersion}`,
+    );
     this.deps.onGroupMembersUpdated?.({
       chatId: chat.id,
       groupId,
@@ -408,6 +527,9 @@ export class GroupCreator {
     } catch {
       throw new Error(`Invalid pending ACK payload for ${targetPeerId}`);
     }
+    console.log(
+      `[GROUP][TRACE][REPUBLISH][CREATOR] target=${targetPeerId.slice(-8)} ${this.describeControlMessage(parsed)}`,
+    );
     await this.sendControlMessageToPeer(targetPeerId, parsed);
   }
 
@@ -603,12 +725,16 @@ export class GroupCreator {
 
     const ourPubKeyBase64url = toBase64Url(userIdentity.signingPublicKey);
     const writeBucketKey = `/kiyeovo-offline/${bucketSecret}/${ourPubKeyBase64url}`;
+    const bucketTag = writeBucketKey.slice(-12);
 
     // Wrap the group control message as an offline message
     const recipientPubKeyPem = Buffer.from(user.offline_public_key, 'base64').toString();
     const lastReadTimestamp = database.getOfflineLastReadTimestampByPeerId(peerId);
     const lastAckSent = database.getOfflineLastAckSentByPeerId(peerId);
     const shouldSendAck = lastReadTimestamp > lastAckSent;
+    console.log(
+      `[GROUP][TRACE][SEND] to=${peerId.slice(-8)} bucket=*${bucketTag} shouldAck=${shouldSendAck} ackTs=${shouldSendAck ? lastReadTimestamp : 0} ${this.describeControlMessage(message)}`,
+    );
 
     const offlineMessage = OfflineMessageManager.createOfflineMessage(
       myPeerId,
@@ -627,6 +753,9 @@ export class GroupCreator {
       userIdentity.signingPrivateKey,
       database,
     );
+    console.log(
+      `[GROUP][TRACE][SEND][DHT_OK] to=${peerId.slice(-8)} bucket=*${bucketTag} offlineMsgId=${offlineMessage.id} ${this.describeControlMessage(message)}`,
+    );
 
     if (shouldSendAck) {
       database.updateOfflineLastAckSentByPeerId(peerId, lastReadTimestamp);
@@ -634,6 +763,17 @@ export class GroupCreator {
 
     // DHT write succeeded — best-effort nudge so an online recipient checks their bucket immediately
     this.deps.nudgePeer?.(peerId);
+  }
+
+  private describeControlMessage(message: object): string {
+    const m = message as Record<string, unknown>;
+    const type = typeof m.type === 'string' ? m.type : 'unknown';
+    const groupId = typeof m.groupId === 'string' ? m.groupId : 'n/a';
+    const inviteId = typeof m.inviteId === 'string' ? m.inviteId : 'n/a';
+    const messageId = typeof m.messageId === 'string' ? m.messageId : 'n/a';
+    const ackedMessageId = typeof m.ackedMessageId === 'string' ? m.ackedMessageId : 'n/a';
+    const ackId = typeof m.ackId === 'string' ? m.ackId : 'n/a';
+    return `type=${type} group=${groupId} inviteId=${inviteId} msgId=${messageId} ackedMsgId=${ackedMessageId} ackId=${ackId}`;
   }
 
   private async putJsonToDHT(dhtKey: string, data: object): Promise<void> {

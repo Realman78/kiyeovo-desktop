@@ -37,6 +37,10 @@ export class OfflineMessageManager {
                 throw new Error(`Offline message store full (${messages.length}/${MAX_MESSAGES_PER_STORE})`);
             }
 
+            const bucketTag = bucketKey.slice(-12);
+            console.log(
+                `[OFFLINE][WRITE][START] bucket=*${bucketTag} prevVersion=${version} prevCount=${messages.length} appendMsgId=${message.id} appendType=${message.message_type}`
+            );
             messages.push(message);
             version++;
 
@@ -51,7 +55,9 @@ export class OfflineMessageManager {
             await OfflineMessageManager.putToDHT(node, bucketKey, signedStore);
 
             database.saveOfflineSentMessages(bucketKey, messages, version);
-            console.log(`Stored offline message (${messages.length} total in bucket)`);
+            console.log(
+                `[OFFLINE][WRITE][DONE] bucket=*${bucketTag} newVersion=${version} newCount=${messages.length} appendedMsgId=${message.id}`
+            );
         } catch (error: unknown) {
             generalErrorHandler(error);
             throw error;
@@ -217,15 +223,22 @@ export class OfflineMessageManager {
     ): Promise<void> {
         const local = database.getOfflineSentMessages(bucketKey);
         const remainingMessages = local.messages.filter(msg => msg.timestamp > ackTimestamp);
+        const bucketTag = bucketKey.slice(-12);
 
         const cleanMessages = OfflineMessageManager.filterExpiredMessages(remainingMessages);
 
         // Only update if something changed
         if (cleanMessages.length === local.messages.length) {
+            console.log(
+                `[OFFLINE][ACK_CLEAR][SKIP] bucket=*${bucketTag} ackTs=${ackTimestamp} localCount=${local.messages.length}`
+            );
             return;
         }
 
         const version = local.version + 1;
+        console.log(
+            `[OFFLINE][ACK_CLEAR][START] bucket=*${bucketTag} ackTs=${ackTimestamp} prevVersion=${local.version} prevCount=${local.messages.length} newCount=${cleanMessages.length}`
+        );
 
         // Sign the new store
         const signedStore = OfflineMessageManager.signStore(
@@ -238,7 +251,9 @@ export class OfflineMessageManager {
         await OfflineMessageManager.putToDHT(node, bucketKey, signedStore);
         database.saveOfflineSentMessages(bucketKey, cleanMessages, version);
 
-        console.log(`Cleared ${local.messages.length - cleanMessages.length} acknowledged messages from bucket`);
+        console.log(
+            `[OFFLINE][ACK_CLEAR][DONE] bucket=*${bucketTag} removed=${local.messages.length - cleanMessages.length} newVersion=${version} newCount=${cleanMessages.length}`
+        );
     }
 
     /**
