@@ -45,6 +45,7 @@ export class MessageHandler {
   private onGroupMembersUpdated: (data: GroupMembersUpdatedEvent) => void;
   private onOfflineMessagesFetchComplete: ((chatIds: number[]) => void) | undefined;
   private nudgeCooldowns = new Map<string, number>();
+  private nudgeTrailingTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private nudgeFetchTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private peerActivityCheckCooldowns = new Map<string, number>();
   private groupAckRepublishTimer: ReturnType<typeof setTimeout> | null = null;
@@ -99,12 +100,22 @@ export class MessageHandler {
       return;
     }
 
+    const now = Date.now();
     const last = this.nudgeCooldowns.get(peerId) ?? 0;
-    if (Date.now() - last < BUCKET_NUDGE_COOLDOWN_MS) {
-      console.log(`[NUDGE] Cooldown active for ${peerId.slice(-8)}, skipping`);
+    const elapsed = now - last;
+    if (elapsed < BUCKET_NUDGE_COOLDOWN_MS) {
+      const remaining = BUCKET_NUDGE_COOLDOWN_MS - elapsed;
+      if (!this.nudgeTrailingTimers.has(peerId)) {
+        const timer = setTimeout(() => {
+          this.nudgeTrailingTimers.delete(peerId);
+          this.nudgePeer(peerId);
+        }, remaining);
+        this.nudgeTrailingTimers.set(peerId, timer);
+      }
+      console.log(`[NUDGE] Cooldown active for ${peerId.slice(-8)}, scheduling trailing nudge in ${remaining}ms`);
       return;
     }
-    this.nudgeCooldowns.set(peerId, Date.now());
+    this.nudgeCooldowns.set(peerId, now);
 
     void (async () => {
       try {
@@ -1024,6 +1035,10 @@ export class MessageHandler {
     for (const timer of this.nudgeFetchTimers.values()) {
       clearTimeout(timer);
     }
+    for (const timer of this.nudgeTrailingTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.nudgeTrailingTimers.clear();
     this.nudgeFetchTimers.clear();
     this.peerActivityCheckCooldowns.clear();
 
