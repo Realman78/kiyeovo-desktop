@@ -67,6 +67,9 @@ export class OfflineMessageManager {
         const fetchPromises = bucketKeys.map(async (bucketKey) => {
             const key = new TextEncoder().encode(bucketKey);
             const bucketMessages: OfflineMessage[] = [];
+            let valueEventCount = 0;
+            let parsedStoreCount = 0;
+            const storeSignatures = new Set<string>();
 
             try {
                 let foundValue = false;
@@ -74,6 +77,7 @@ export class OfflineMessageManager {
                 for await (const event of node.services.dht.get(key) as AsyncIterable<QueryEvent>) {
                     if (event.name === 'VALUE' && event.value.length > 0) {
                         foundValue = true;
+                        valueEventCount++;
 
                         // Decompress the data before parsing
                         const compressedBuffer = Buffer.from(event.value);
@@ -81,9 +85,34 @@ export class OfflineMessageManager {
                         const store = JSON.parse(decompressedBuffer.toString('utf8')) as unknown;
 
                         if (!store || typeof store !== 'object' || !('messages' in store) || !Array.isArray(store.messages) || store.messages.length === 0) continue;
+                        parsedStoreCount++;
+
+                        const storeVersion = 'version' in store && typeof (store as any).version === 'number'
+                            ? (store as any).version
+                            : 'n/a';
+                        const storeLastUpdated = 'last_updated' in store && typeof (store as any).last_updated === 'number'
+                            ? (store as any).last_updated
+                            : 'n/a';
+                        const storeSignature = 'store_signature' in store && typeof (store as any).store_signature === 'string'
+                            ? (store as any).store_signature
+                            : '';
+                        if (storeSignature) {
+                            storeSignatures.add(storeSignature);
+                        }
 
                         const validMessages = store.messages.filter(
                             (msg: unknown) => OfflineMessageManager.isValidOfflineMessage(msg)
+                        );
+                        const validIds = validMessages
+                            .map(msg => msg.id)
+                            .slice(0, 3)
+                            .join(',');
+
+                        console.log(
+                            `[OFFLINE][READ] bucket=${bucketKey.slice(0, 48)}... value#${valueEventCount} ` +
+                            `storeVersion=${storeVersion} storeLastUpdated=${storeLastUpdated} ` +
+                            `raw=${store.messages.length} valid=${validMessages.length} ` +
+                            `sampleIds=[${validIds}]`
                         );
 
                         if (appendBucketKey) {
@@ -96,6 +125,15 @@ export class OfflineMessageManager {
 
                 if (!foundValue) {
                     console.log(`No value found in DHT for bucket key: ${bucketKey}`);
+                } else {
+                    const uniqueIds = new Set(bucketMessages.map(m => m.id)).size;
+                    const duplicateCount = bucketMessages.length - uniqueIds;
+                    const repeatedStoreWrites = parsedStoreCount - storeSignatures.size;
+                    console.log(
+                        `[OFFLINE][READ] bucket=${bucketKey.slice(0, 48)}... summary ` +
+                        `valueEvents=${valueEventCount} parsedStores=${parsedStoreCount} uniqueStores=${storeSignatures.size} ` +
+                        `repeatedStorePayloads=${Math.max(0, repeatedStoreWrites)} accumulatedMessages=${bucketMessages.length} duplicatesById=${Math.max(0, duplicateCount)}`
+                    );
                 }
 
             } catch (error: unknown) {

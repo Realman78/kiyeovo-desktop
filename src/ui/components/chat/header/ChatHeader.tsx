@@ -72,11 +72,25 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
     if (chatType !== 'group' || !chatId) return;
     const unsub = window.kiyeovoAPI.onGroupMembersUpdated((data) => {
       if (data.chatId === chatId) {
-        void fetchGroupMembers();
+        void (async () => {
+          await fetchGroupMembers();
+
+          // Keep group status in sync without requiring app restart.
+          const chatResult = await window.kiyeovoAPI.getChatById(chatId);
+          if (chatResult.success && chatResult.chat) {
+            dispatch(updateChat({
+              id: chatId,
+              updates: {
+                status: chatResult.chat.status,
+                groupStatus: chatResult.chat.group_status,
+              }
+            }));
+          }
+        })();
       }
     });
     return unsub;
-  }, [chatType, chatId]);
+  }, [chatType, chatId, dispatch]);
 
   useEffect(() => {
     const checkBlockedStatus = async () => {

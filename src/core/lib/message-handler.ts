@@ -760,6 +760,25 @@ export class MessageHandler {
     }
 
     console.log(`Found ${store.messages.length} offline direct message(s)`);
+    const byBucket = new Map<string, number>();
+    const uniquePerBucket = new Map<string, Set<string>>();
+    for (const msg of store.messages) {
+      const bucket = msg.bucket_key ?? 'unknown';
+      byBucket.set(bucket, (byBucket.get(bucket) ?? 0) + 1);
+      if (!uniquePerBucket.has(bucket)) {
+        uniquePerBucket.set(bucket, new Set());
+      }
+      uniquePerBucket.get(bucket)!.add(msg.id);
+    }
+    for (const [bucket, count] of byBucket.entries()) {
+      const uniqueCount = uniquePerBucket.get(bucket)?.size ?? 0;
+      const duplicates = count - uniqueCount;
+      const bucketInfo = readBuckets.find(b => b.key === bucket);
+      console.log(
+        `[OFFLINE][PROCESS] bucket=${bucket.slice(0, 48)}... fetched=${count} uniqueIds=${uniqueCount} duplicates=${Math.max(0, duplicates)} ` +
+        `lastReadTs=${bucketInfo?.lastReadTimestamp ?? 'n/a'} peer=${bucketInfo?.peerId ?? 'n/a'}`
+      );
+    }
 
     // Track max timestamp per peer to update after processing
     const maxTimestampPerPeer: Map<string, number> = new Map();
@@ -864,6 +883,7 @@ export class MessageHandler {
     // Update last read timestamp for each peer
     for (const [peerId, maxTimestamp] of maxTimestampPerPeer.entries()) {
       this.database.updateOfflineLastReadTimestampByPeerId(peerId, maxTimestamp);
+      console.log(`[OFFLINE][PROCESS] Updated lastRead timestamp for peer=${peerId} to ${maxTimestamp}`);
     }
 
     if (processedCount > 0) {
