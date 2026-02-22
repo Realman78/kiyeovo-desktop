@@ -1,4 +1,4 @@
-import type { ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, InitStatus, PasswordRequest, MessageReceivedEvent, KeyExchangeEvent, SendMessageResponse, GroupChatActivatedEvent } from './src/core/types';
+import type { ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, InitStatus, PasswordRequest, MessageReceivedEvent, KeyExchangeEvent, SendMessageResponse, GroupChatActivatedEvent, GroupMembersUpdatedEvent } from './src/core/types';
 import type { Chat, Message } from './src/core/lib/db/database';
 
 declare global {
@@ -64,6 +64,7 @@ declare global {
             // Chat events
             onChatCreated: (callback: (data: ChatCreatedEvent) => void) => () => void;
             onGroupChatActivated: (callback: (data: GroupChatActivatedEvent) => void) => () => void;
+            onGroupMembersUpdated: (callback: (data: GroupMembersUpdatedEvent) => void) => () => void;
             getChats: () => Promise<{ success: boolean; chats: Array<Chat>; error: string | null }>;
             getChatById: (chatId: number) => Promise<{
                 success: boolean;
@@ -222,7 +223,13 @@ declare global {
 
             // Group chats
             getContacts: () => Promise<{ success: boolean; contacts: Array<{ peerId: string; username: string }>; error: string | null }>;
-            createGroup: (groupName: string, peerIds: string[]) => Promise<{ success: boolean; groupId: string | null; chatId: number | null; error: string | null }>;
+            createGroup: (groupName: string, peerIds: string[]) => Promise<{
+                success: boolean;
+                groupId: string | null;
+                chatId: number | null;
+                inviteDeliveries: Array<{ peerId: string; username: string; status: 'sent' | 'queued_for_retry'; reason?: string }>;
+                error: string | null;
+            }>;
             getGroupMembers: (chatId: number) => Promise<{ success: boolean; members: Array<{ peerId: string; username: string; status: 'pending' | 'accepted' | 'confirmed' }>; error: string | null }>;
             getGroupInvites: () => Promise<{ success: boolean; invites: Array<{ groupId: string; groupName: string; inviterPeerId: string; inviterUsername: string; inviteId: string; expiresAt: number }>; error: string | null }>;
             respondToGroupInvite: (groupId: string, accept: boolean) => Promise<{ success: boolean; error: string | null }>;

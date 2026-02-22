@@ -67,6 +67,17 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
     return unsub;
   }, [chatType, chatId]);
 
+  // Refresh member list immediately when creator-side membership updates are processed.
+  useEffect(() => {
+    if (chatType !== 'group' || !chatId) return;
+    const unsub = window.kiyeovoAPI.onGroupMembersUpdated((data) => {
+      if (data.chatId === chatId) {
+        void fetchGroupMembers();
+      }
+    });
+    return unsub;
+  }, [chatType, chatId]);
+
   useEffect(() => {
     const checkBlockedStatus = async () => {
       if (!peerId || !activeChat) return;

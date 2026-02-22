@@ -3,7 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { isDev } from './util.js';
-import { initializeP2PCore, InitStatus, IPC_CHANNELS, KeyExchangeEvent, type P2PCore, type ContactRequestEvent, type ChatCreatedEvent, type KeyExchangeFailedEvent, type MessageReceivedEvent, type FileTransferProgressEvent, type FileTransferCompleteEvent, type FileTransferFailedEvent, type PendingFileReceivedEvent, type GroupChatActivatedEvent, type TorConfig, type PasswordRequest } from '../core/index.js';
+import { initializeP2PCore, InitStatus, IPC_CHANNELS, KeyExchangeEvent, type P2PCore, type ContactRequestEvent, type ChatCreatedEvent, type KeyExchangeFailedEvent, type MessageReceivedEvent, type FileTransferProgressEvent, type FileTransferCompleteEvent, type FileTransferFailedEvent, type PendingFileReceivedEvent, type GroupChatActivatedEvent, type GroupMembersUpdatedEvent, type TorConfig, type PasswordRequest } from '../core/index.js';
 import { ensureAppDataDir } from '../core/utils/miscellaneous.js';
 import { requestPasswordFromUI } from './password-prompt.js';
 import { setupIPCHandlers } from './ipc-handlers.js';
@@ -250,6 +250,13 @@ function sendGroupChatActivated(data: GroupChatActivatedEvent) {
   }
 }
 
+function sendGroupMembersUpdated(data: GroupMembersUpdatedEvent) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    console.log(`[Electron] Group members updated: chatId=${data.chatId}, member=${data.memberPeerId}`);
+    mainWindow.webContents.send(IPC_CHANNELS.GROUP_MEMBERS_UPDATED, data);
+  }
+}
+
 function sendOfflineMessagesFetchComplete(chatIds: number[]) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(IPC_CHANNELS.OFFLINE_MESSAGES_FETCH_COMPLETE, { chatIds });
@@ -386,6 +393,9 @@ async function initializeP2PAfterWindow() {
       },
       onGroupChatActivated: (data: GroupChatActivatedEvent) => {
         sendGroupChatActivated(data);
+      },
+      onGroupMembersUpdated: (data: GroupMembersUpdatedEvent) => {
+        sendGroupMembersUpdated(data);
       },
       onOfflineMessagesFetchComplete: (chatIds: number[]) => {
         sendOfflineMessagesFetchComplete(chatIds);

@@ -3,8 +3,9 @@ import { ChevronDown } from "lucide-react";
 import { GroupInviteItem, type GroupInvite } from "./GroupInviteItem";
 import { useToast } from "../../ui/use-toast";
 import type { FC } from "react";
-import { useDispatch } from "react-redux";
-import { setChats, type Chat } from "../../../state/slices/chatSlice";
+import { useDispatch, useSelector } from "react-redux";
+import { addChat, updateChat, type Chat } from "../../../state/slices/chatSlice";
+import type { RootState } from "../../../state/store";
 
 export const GroupInviteList: FC = () => {
   const [invites, setInvites] = useState<GroupInvite[]>([]);
@@ -12,6 +13,7 @@ export const GroupInviteList: FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const { toast } = useToast();
   const dispatch = useDispatch();
+  const chats = useSelector((state: RootState) => state.chat.chats);
 
   const fetchInvites = useCallback(async () => {
     try {
@@ -48,24 +50,49 @@ export const GroupInviteList: FC = () => {
         if (accept) {
           const chatsResult = await window.kiyeovoAPI.getChats();
           if (chatsResult.success) {
-            const mappedChats: Chat[] = chatsResult.chats.map((dbChat: any) => ({
-              id: dbChat.id,
-              type: dbChat.type,
-              name: dbChat.type === 'group' ? dbChat.name : (dbChat.username || dbChat.name),
-              peerId: dbChat.other_peer_id,
-              lastMessage: dbChat.last_message_content || 'SYSTEM: No messages yet',
-              lastMessageTimestamp: dbChat.last_message_timestamp
-                ? new Date(dbChat.last_message_timestamp).getTime()
-                : new Date(dbChat.updated_at).getTime(),
-              unreadCount: 0,
-              status: dbChat.status,
-              fetchedOffline: dbChat.type === 'group',
-              isFetchingOffline: false,
-              blocked: dbChat.blocked,
-              muted: dbChat.muted,
-              groupStatus: dbChat.group_status,
-            }));
-            dispatch(setChats(mappedChats));
+            const dbGroupChat = (chatsResult.chats as any[]).find(
+              (dbChat: any) => dbChat.type === 'group' && dbChat.group_id === groupId
+            ) as any | undefined;
+
+            if (dbGroupChat) {
+              const mappedGroupChat: Chat = {
+                id: dbGroupChat.id,
+                type: dbGroupChat.type,
+                name: dbGroupChat.name,
+                peerId: dbGroupChat.other_peer_id,
+                lastMessage: dbGroupChat.last_message_content || 'SYSTEM: No messages yet',
+                lastMessageTimestamp: dbGroupChat.last_message_timestamp
+                  ? new Date(dbGroupChat.last_message_timestamp).getTime()
+                  : new Date(dbGroupChat.updated_at).getTime(),
+                unreadCount: 0,
+                status: dbGroupChat.status,
+                fetchedOffline: true,
+                isFetchingOffline: false,
+                blocked: dbGroupChat.blocked,
+                muted: dbGroupChat.muted,
+                groupStatus: dbGroupChat.group_status,
+              };
+
+              const existing = chats.find((chat) => chat.id === mappedGroupChat.id);
+              if (existing) {
+                dispatch(updateChat({
+                  id: mappedGroupChat.id,
+                  updates: {
+                    name: mappedGroupChat.name,
+                    lastMessage: mappedGroupChat.lastMessage,
+                    lastMessageTimestamp: mappedGroupChat.lastMessageTimestamp,
+                    status: mappedGroupChat.status,
+                    fetchedOffline: true,
+                    isFetchingOffline: false,
+                    blocked: mappedGroupChat.blocked,
+                    muted: mappedGroupChat.muted,
+                    groupStatus: mappedGroupChat.groupStatus,
+                  }
+                }));
+              } else {
+                dispatch(addChat(mappedGroupChat));
+              }
+            }
           }
         }
         toast.success(

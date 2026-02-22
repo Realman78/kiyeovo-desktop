@@ -8,7 +8,7 @@ import { useDispatch, useSelector } from "react-redux";
 import { setConnected, setRegistered, setUsername } from "../../../state/slices/userSlice";
 import NewConversationDialog from "./NewConversationDialog";
 import ImportTrustedUserDialog from "./ImportTrustedUserDialog";
-import NewGroupDialog from "./NewGroupDialog";
+import NewGroupDialog, { type GroupInviteDeliveryView } from "./NewGroupDialog";
 import { addPendingKeyExchange, setActivePendingKeyExchange, setActiveChat, addChat, type Chat } from "../../../state/slices/chatSlice";
 import type { RootState } from "../../../state/store";
 import { DropdownMenu, DropdownMenuItem } from "../../ui/DropdownMenu";
@@ -145,7 +145,7 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
         setDropdownOpen(false);
     }
 
-    const handleGroupCreated = async (groupId: string, chatId: number) => {
+    const handleGroupCreated = async (groupId: string, chatId: number, inviteDeliveries: GroupInviteDeliveryView[]) => {
         console.log(`Group created: ${groupId}, chat ID: ${chatId}`);
 
         try {
@@ -170,7 +170,22 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
         }
 
         dispatch(setActiveChat(chatId));
-        toast.success("Group invites have been sent.", "Group created");
+
+        const sent = inviteDeliveries.filter((d) => d.status === 'sent');
+        const queued = inviteDeliveries.filter((d) => d.status === 'queued_for_retry');
+        if (queued.length === 0) {
+            toast.success(`Invites sent: ${sent.length}/${inviteDeliveries.length}.`, "Group created");
+            return;
+        }
+
+        const queuedNames = queued.map((d) => d.username);
+        const preview = queuedNames.slice(0, 3).join(', ');
+        const suffix = queuedNames.length > 3 ? ` +${queuedNames.length - 3} more` : '';
+        const details = preview ? ` (${preview}${suffix})` : '';
+        toast.warning(
+            `Invites sent: ${sent.length}/${inviteDeliveries.length}. ${queued.length} queued for retry${details}.`,
+            "Group created (partial delivery)"
+        );
     }
 
     const handleImportSuccess = async (chatId: number) => {

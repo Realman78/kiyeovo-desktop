@@ -19,10 +19,17 @@ interface Contact {
   username: string;
 }
 
+export interface GroupInviteDeliveryView {
+  peerId: string;
+  username: string;
+  status: 'sent' | 'queued_for_retry';
+  reason?: string;
+}
+
 interface NewGroupDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSuccess?: (groupId: string, chatId: number) => void;
+  onSuccess?: (groupId: string, chatId: number, inviteDeliveries: GroupInviteDeliveryView[]) => void;
 }
 
 const MAX_GROUP_NAME_LENGTH = 50;
@@ -111,7 +118,7 @@ const NewGroupDialog = ({ open, onOpenChange, onSuccess }: NewGroupDialogProps) 
 
       if (result.success && result.groupId && result.chatId) {
         onOpenChange(false);
-        onSuccess?.(result.groupId, result.chatId);
+        onSuccess?.(result.groupId, result.chatId, result.inviteDeliveries ?? []);
       } else {
         setError(result.error || "Failed to create group");
       }

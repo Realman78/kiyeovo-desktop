@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { InitStatus, IPC_CHANNELS, KeyExchangeEvent, MessageSentStatus, PasswordRequest, ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent, GroupChatActivatedEvent } from '../core';
+import { InitStatus, IPC_CHANNELS, KeyExchangeEvent, MessageSentStatus, PasswordRequest, ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent, GroupChatActivatedEvent, GroupMembersUpdatedEvent } from '../core';
 import { ContactAttempt, Message } from '../core/lib/db/database';
 
 contextBridge.exposeInMainWorld('kiyeovoAPI', {
@@ -250,6 +250,11 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
         ipcRenderer.on(IPC_CHANNELS.GROUP_CHAT_ACTIVATED, listener);
         return () => ipcRenderer.removeListener(IPC_CHANNELS.GROUP_CHAT_ACTIVATED, listener);
     },
+    onGroupMembersUpdated: (callback: (data: GroupMembersUpdatedEvent) => void) => {
+        const listener = (_event: any, data: GroupMembersUpdatedEvent) => callback(data);
+        ipcRenderer.on(IPC_CHANNELS.GROUP_MEMBERS_UPDATED, listener);
+        return () => ipcRenderer.removeListener(IPC_CHANNELS.GROUP_MEMBERS_UPDATED, listener);
+    },
 
     // Key exchange failed event
     onKeyExchangeFailed: (callback: (data: KeyExchangeFailedEvent) => void) => {
@@ -402,7 +407,13 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     getContacts: async (): Promise<{ success: boolean; contacts: Array<{ peerId: string; username: string }>; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.GET_CONTACTS);
     },
-    createGroup: async (groupName: string, peerIds: string[]): Promise<{ success: boolean; groupId: string | null; chatId: number | null; error: string | null }> => {
+    createGroup: async (groupName: string, peerIds: string[]): Promise<{
+        success: boolean;
+        groupId: string | null;
+        chatId: number | null;
+        inviteDeliveries: Array<{ peerId: string; username: string; status: 'sent' | 'queued_for_retry'; reason?: string }>;
+        error: string | null;
+    }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.CREATE_GROUP, groupName, peerIds);
     },
     getGroupMembers: async (chatId: number): Promise<{ success: boolean; members: Array<{ peerId: string; username: string; status: 'pending' | 'accepted' | 'confirmed' }>; error: string | null }> => {

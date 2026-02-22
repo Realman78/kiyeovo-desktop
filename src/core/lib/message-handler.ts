@@ -1,5 +1,5 @@
 import { peerIdFromString } from '@libp2p/peer-id';
-import type { ChatNode, StreamHandlerContext, AuthenticatedEncryptedMessage, OfflineMessage, OfflineSenderInfo, ConversationSession, EncryptedMessage, ContactMode, KeyExchangeEvent, ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent, SendMessageResponse, StrippedMessage, MessageSentStatus, FileTransferProgressEvent, FileTransferCompleteEvent, FileTransferFailedEvent, PendingFileReceivedEvent, GroupChatActivatedEvent } from '../types.js';
+import type { ChatNode, StreamHandlerContext, AuthenticatedEncryptedMessage, OfflineMessage, OfflineSenderInfo, ConversationSession, EncryptedMessage, ContactMode, KeyExchangeEvent, ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent, SendMessageResponse, StrippedMessage, MessageSentStatus, FileTransferProgressEvent, FileTransferCompleteEvent, FileTransferFailedEvent, PendingFileReceivedEvent, GroupChatActivatedEvent, GroupMembersUpdatedEvent } from '../types.js';
 import {
   CHAT_PROTOCOL,
   CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES,
@@ -42,6 +42,7 @@ export class MessageHandler {
   private cleanupPeerEvents: (() => void) | null = null;
   private onMessageReceived: (data: MessageReceivedEvent) => void;
   private onGroupChatActivated: (data: GroupChatActivatedEvent) => void;
+  private onGroupMembersUpdated: (data: GroupMembersUpdatedEvent) => void;
   private onOfflineMessagesFetchComplete: ((chatIds: number[]) => void) | undefined;
   private nudgeCooldowns = new Map<string, number>();
   private nudgeFetchTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -64,6 +65,7 @@ export class MessageHandler {
     onFileTransferFailed: (data: FileTransferFailedEvent) => void,
     onPendingFileReceived: (data: PendingFileReceivedEvent) => void,
     onGroupChatActivated: (data: GroupChatActivatedEvent) => void,
+    onGroupMembersUpdated: (data: GroupMembersUpdatedEvent) => void,
     onOfflineMessagesFetchComplete?: (chatIds: number[]) => void,
   ) {
     this.node = node;
@@ -72,6 +74,7 @@ export class MessageHandler {
     this.sessionManager = new SessionManager();
     this.onMessageReceived = onMessageReceived;
     this.onGroupChatActivated = onGroupChatActivated;
+    this.onGroupMembersUpdated = onGroupMembersUpdated;
     this.onOfflineMessagesFetchComplete = onOfflineMessagesFetchComplete;
     this.keyExchange = new KeyExchange(node, usernameRegistry, this.sessionManager, database, onKeyExchangeSent, onContactRequestReceived, onChatCreated, onKeyExchangeFailed);
     this.fileHandler = new FileHandler(node, this, database, onFileTransferProgress, onFileTransferComplete, onFileTransferFailed, onPendingFileReceived);
@@ -337,6 +340,7 @@ export class MessageHandler {
         myPeerId,
         myUsername,
         onGroupChatActivated: this.onGroupChatActivated,
+        onGroupMembersUpdated: this.onGroupMembersUpdated,
         nudgePeer: this.nudgePeer.bind(this),
       };
 
@@ -1077,6 +1081,7 @@ export class MessageHandler {
       myPeerId,
       myUsername,
       onGroupChatActivated: this.onGroupChatActivated,
+      onGroupMembersUpdated: this.onGroupMembersUpdated,
       nudgePeer: this.nudgePeer.bind(this),
     };
 

@@ -580,6 +580,7 @@ export const IPC_CHANNELS = {
   GET_GROUP_INVITES: 'group:getInvites',
   RESPOND_TO_GROUP_INVITE: 'group:respondToInvite',
   GROUP_CHAT_ACTIVATED: 'group:chatActivated',
+  GROUP_MEMBERS_UPDATED: 'group:membersUpdated',
 } as const;
 
 export interface PasswordRequest {
@@ -637,6 +638,12 @@ export interface ChatCreatedEvent {
 
 export interface GroupChatActivatedEvent {
   chatId: number;
+}
+
+export interface GroupMembersUpdatedEvent {
+  chatId: number;
+  groupId: string;
+  memberPeerId: string;
 }
 
 export interface AppConfig {

@@ -1,7 +1,7 @@
 import { randomUUID, publicEncrypt } from 'crypto';
 import { ed25519 } from '@noble/curves/ed25519';
 import { sha256 } from '@noble/hashes/sha2';
-import type { ChatNode } from '../../types.js';
+import type { ChatNode, GroupMembersUpdatedEvent } from '../../types.js';
 import type { ChatDatabase } from '../db/database.js';
 import type { EncryptedUserIdentity } from '../encrypted-user-identity.js';
 import { OfflineMessageManager } from '../offline-message-manager.js';
@@ -33,7 +33,22 @@ export interface GroupCreatorDeps {
   userIdentity: EncryptedUserIdentity;
   myPeerId: string;
   myUsername: string;
+  onGroupMembersUpdated?: (data: GroupMembersUpdatedEvent) => void;
   nudgePeer?: (peerId: string) => void;
+}
+
+export type GroupInviteDeliveryStatus = 'sent' | 'queued_for_retry';
+
+export interface GroupInviteDelivery {
+  peerId: string;
+  username: string;
+  status: GroupInviteDeliveryStatus;
+  reason?: string;
+}
+
+export interface GroupCreateResult {
+  groupId: string;
+  inviteDeliveries: GroupInviteDelivery[];
 }
 
 export class GroupCreator {
@@ -43,7 +58,7 @@ export class GroupCreator {
     this.deps = deps;
   }
 
-  async createGroup(groupName: string, invitedPeerIds: string[]): Promise<string> {
+  async createGroup(groupName: string, invitedPeerIds: string[]): Promise<GroupCreateResult> {
     const { database, myPeerId } = this.deps;
 
     if (invitedPeerIds.length + 1 > GROUP_MAX_MEMBERS) {
@@ -84,20 +99,23 @@ export class GroupCreator {
     database.updateChatKeyVersion(chatId, 0);
 
     // Send invites
-    await this.sendGroupInvites(groupId, groupName, invitedPeerIds);
+    const inviteDeliveries = await this.sendGroupInvites(groupId, groupName, invitedPeerIds);
 
-    return groupId;
+    return { groupId, inviteDeliveries };
   }
 
-  private async sendGroupInvites(groupId: string, groupName: string, invitedPeerIds: string[]): Promise<void> {
+  private async sendGroupInvites(groupId: string, groupName: string, invitedPeerIds: string[]): Promise<GroupInviteDelivery[]> {
     const { database, myPeerId } = this.deps;
     const now = Date.now();
     let sent = 0;
     let queued = 0;
+    const deliveries: GroupInviteDelivery[] = [];
 
     for (const peerId of invitedPeerIds) {
       const inviteId = randomUUID();
       const expiresAt = now + GROUP_INVITE_LIFETIME;
+      const invitee = database.getUserByPeerId(peerId);
+      const username = invitee?.username || peerId;
 
       const invite: Omit<GroupInvite, 'signature'> = {
         type: GroupMessageType.GROUP_INVITE,
@@ -112,7 +130,7 @@ export class GroupCreator {
       const signature = this.sign(invite);
       const signedInvite: GroupInvite = { ...invite, signature };
 
-      // Store in pending ACKs first, then send (crash-safe: re-publisher can deliver later).
+      // Store in pending ACKs first, then send
       database.insertPendingAck(groupId, peerId, 'GROUP_INVITE', JSON.stringify(signedInvite));
 
       try {
@@ -120,15 +138,19 @@ export class GroupCreator {
         // eslint-disable-next-line no-await-in-loop
         await this.sendControlMessageToPeer(peerId, signedInvite);
         sent++;
+        deliveries.push({ peerId, username, status: 'sent' });
       } catch (error: unknown) {
         queued++;
-        console.warn(`[GROUP] Invite to ${peerId} queued for retry: ${error instanceof Error ? error.message : String(error)}`);
+        const reason = error instanceof Error ? error.message : String(error);
+        deliveries.push({ peerId, username, status: 'queued_for_retry', reason });
+        console.warn(`[GROUP] Invite to ${peerId} queued for retry: ${reason}`);
       }
     }
 
     if (queued > 0) {
       console.log(`[GROUP] Group ${groupId}: invites sent now=${sent}, queued for retry=${queued}`);
     }
+    return deliveries;
   }
 
   async processInviteResponse(response: GroupInviteResponse): Promise<void> {
@@ -298,6 +320,11 @@ export class GroupCreator {
 
     // Transition group_status to 'active' now that at least one member has been welcomed
     database.updateChatGroupStatus(chat.id, 'active');
+    this.deps.onGroupMembersUpdated?.({
+      chatId: chat.id,
+      groupId,
+      memberPeerId: acceptedPeerId,
+    });
   }
 
   async rotateGroupKey(

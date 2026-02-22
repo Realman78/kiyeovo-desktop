@@ -1367,18 +1367,18 @@ function setupGroupHandlers(
     try {
       const p2pCore = getP2PCore();
       if (!p2pCore) {
-        return { success: false, groupId: null, chatId: null, error: 'P2P core not initialized' };
+        return { success: false, groupId: null, chatId: null, inviteDeliveries: [], error: 'P2P core not initialized' };
       }
 
       const username = p2pCore.usernameRegistry.getCurrentUsername();
       if (!username) {
-        return { success: false, groupId: null, chatId: null, error: 'No username registered' };
+        return { success: false, groupId: null, chatId: null, inviteDeliveries: [], error: 'No username registered' };
       }
 
       // Check for duplicate group name
       const existingGroup = p2pCore.database.getChatByName(groupName.trim(), 'group');
       if (existingGroup) {
-        return { success: false, groupId: null, chatId: null, error: `A group named "${groupName.trim()}" already exists` };
+        return { success: false, groupId: null, chatId: null, inviteDeliveries: [], error: `A group named "${groupName.trim()}" already exists` };
       }
 
       const creator = new GroupCreator({
@@ -1390,17 +1390,18 @@ function setupGroupHandlers(
         nudgePeer: (peerId) => p2pCore.messageHandler.nudgePeer(peerId),
       });
 
-      const groupId = await creator.createGroup(groupName, peerIds);
+      const createResult = await creator.createGroup(groupName, peerIds);
+      const { groupId, inviteDeliveries } = createResult;
       console.log(`[IPC] Group created: ${groupId}`);
 
       // Look up the chatId for the newly created group
       const chat = p2pCore.database.getChatByGroupId(groupId);
       const chatId = chat?.id ?? null;
 
-      return { success: true, groupId, chatId, error: null };
+      return { success: true, groupId, chatId, inviteDeliveries, error: null };
     } catch (error) {
       console.error('[IPC] Failed to create group:', error);
-      return { success: false, groupId: null, chatId: null, error: error instanceof Error ? error.message : 'Failed to create group' };
+      return { success: false, groupId: null, chatId: null, inviteDeliveries: [], error: error instanceof Error ? error.message : 'Failed to create group' };
     }
   });
 
