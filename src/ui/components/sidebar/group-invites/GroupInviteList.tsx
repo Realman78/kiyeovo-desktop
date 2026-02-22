@@ -3,12 +3,15 @@ import { ChevronDown } from "lucide-react";
 import { GroupInviteItem, type GroupInvite } from "./GroupInviteItem";
 import { useToast } from "../../ui/use-toast";
 import type { FC } from "react";
+import { useDispatch } from "react-redux";
+import { setChats, type Chat } from "../../../state/slices/chatSlice";
 
 export const GroupInviteList: FC = () => {
   const [invites, setInvites] = useState<GroupInvite[]>([]);
   const [isExpanded, setIsExpanded] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
   const { toast } = useToast();
+  const dispatch = useDispatch();
 
   const fetchInvites = useCallback(async () => {
     try {
@@ -42,6 +45,29 @@ export const GroupInviteList: FC = () => {
       const result = await window.kiyeovoAPI.respondToGroupInvite(groupId, accept);
       if (result.success) {
         setInvites(prev => prev.filter(inv => inv.groupId !== groupId));
+        if (accept) {
+          const chatsResult = await window.kiyeovoAPI.getChats();
+          if (chatsResult.success) {
+            const mappedChats: Chat[] = chatsResult.chats.map((dbChat: any) => ({
+              id: dbChat.id,
+              type: dbChat.type,
+              name: dbChat.type === 'group' ? dbChat.name : (dbChat.username || dbChat.name),
+              peerId: dbChat.other_peer_id,
+              lastMessage: dbChat.last_message_content || 'SYSTEM: No messages yet',
+              lastMessageTimestamp: dbChat.last_message_timestamp
+                ? new Date(dbChat.last_message_timestamp).getTime()
+                : new Date(dbChat.updated_at).getTime(),
+              unreadCount: 0,
+              status: dbChat.status,
+              fetchedOffline: dbChat.type === 'group',
+              isFetchingOffline: false,
+              blocked: dbChat.blocked,
+              muted: dbChat.muted,
+              groupStatus: dbChat.group_status,
+            }));
+            dispatch(setChats(mappedChats));
+          }
+        }
         toast.success(
           accept
             ? 'Group invite accepted. Waiting for creator activation...'

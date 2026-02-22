@@ -9,7 +9,10 @@ import {
   BUCKET_NUDGE_COOLDOWN_MS,
   BUCKET_NUDGE_DIAL_TIMEOUT_MS,
   BUCKET_NUDGE_FETCH_DELAY_MS,
-  BUCKET_NUDGE_RETRY_DELAY_MS
+  BUCKET_NUDGE_RETRY_DELAY_MS,
+  GROUP_ACK_REPUBLISH_STARTUP_DELAY,
+  GROUP_ACK_REPUBLISH_INTERVAL,
+  GROUP_ACK_REPUBLISH_JITTER
 } from '../constants.js';
 import { SessionManager } from './session-manager.js';
 import { MessageEncryption } from './message-encryption.js';
@@ -43,6 +46,9 @@ export class MessageHandler {
   private nudgeCooldowns = new Map<string, number>();
   private nudgeFetchTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private peerActivityCheckCooldowns = new Map<string, number>();
+  private groupAckRepublishTimer: ReturnType<typeof setTimeout> | null = null;
+  private groupAckStartupTimer: ReturnType<typeof setTimeout> | null = null;
+  private groupAckRepublishInFlight = false;
 
   constructor(
     node: ChatNode,
@@ -72,6 +78,7 @@ export class MessageHandler {
     this.setupProtocolHandler();
     this.cleanupPeerEvents = PeerConnectionHandler.setupPeerEvents(node, this.sessionManager);
     this.startSessionCleanup();
+    this.startGroupAckRepublisher();
   }
 
   // Get configuration value from database with fallback to constant
@@ -281,6 +288,89 @@ export class MessageHandler {
         this.sessionManager.cleanupExpiredPendingKX();
       }
     }, SESSION_MANAGER_CLEANUP_INTERVAL);
+  }
+
+  private startGroupAckRepublisher(): void {
+    if (this.groupAckStartupTimer) {
+      clearTimeout(this.groupAckStartupTimer);
+    }
+    this.groupAckStartupTimer = setTimeout(() => {
+      this.groupAckStartupTimer = null;
+      void this.runGroupAckRepublishCycle();
+      this.scheduleNextGroupAckRepublish();
+    }, GROUP_ACK_REPUBLISH_STARTUP_DELAY);
+  }
+
+  private scheduleNextGroupAckRepublish(): void {
+    if (this.groupAckRepublishTimer) {
+      clearTimeout(this.groupAckRepublishTimer);
+    }
+    const jitter = (Math.random() * 2 - 1) * GROUP_ACK_REPUBLISH_JITTER;
+    const delay = Math.max(1000, GROUP_ACK_REPUBLISH_INTERVAL + jitter);
+    this.groupAckRepublishTimer = setTimeout(() => {
+      void this.runGroupAckRepublishCycle();
+      this.scheduleNextGroupAckRepublish();
+    }, delay);
+  }
+
+  private async runGroupAckRepublishCycle(): Promise<void> {
+    if (this.groupAckRepublishInFlight) return;
+    this.groupAckRepublishInFlight = true;
+    try {
+      // No peers connected means no useful republish work right now.
+      if (this.node.getConnections().length === 0) return;
+
+      const pendingAcks = this.database.getAllPendingAcks();
+      if (pendingAcks.length === 0) return;
+
+      const userIdentity = this.usernameRegistry.getUserIdentity();
+      if (!userIdentity) return;
+
+      const myPeerId = this.node.peerId.toString();
+      const myUser = this.database.getUserByPeerId(myPeerId);
+      const myUsername = myUser?.username || `user_${myPeerId.slice(-8)}`;
+
+      const deps = {
+        node: this.node,
+        database: this.database,
+        userIdentity,
+        myPeerId,
+        myUsername,
+        onGroupChatActivated: this.onGroupChatActivated,
+        nudgePeer: this.nudgePeer.bind(this),
+      };
+
+      const creator = new GroupCreator(deps);
+      const responder = new GroupResponder(deps);
+
+      for (const pending of pendingAcks) {
+        try {
+          // TODO extend to support other group message types
+          if (pending.message_type === 'GROUP_INVITE_RESPONSE') {
+            // Responder -> creator flow
+            // eslint-disable-next-line no-await-in-loop
+            await responder.republishPendingControl(pending.target_peer_id, pending.message_payload);
+          } else {
+            // Creator -> members flow
+            // eslint-disable-next-line no-await-in-loop
+            await creator.republishPendingControl(pending.target_peer_id, pending.message_payload);
+          }
+
+          this.database.updatePendingAckLastPublished(
+            pending.group_id,
+            pending.target_peer_id,
+            pending.message_type,
+          );
+        } catch (error: unknown) {
+          generalErrorHandler(
+            error,
+            `[GROUP-ACK] Failed to re-publish ${pending.message_type} to ${pending.target_peer_id.slice(-8)}`,
+          );
+        }
+      }
+    } finally {
+      this.groupAckRepublishInFlight = false;
+    }
   }
 
   /**
@@ -867,6 +957,14 @@ export class MessageHandler {
   }
 
   cleanup(): void {
+    if (this.groupAckStartupTimer) {
+      clearTimeout(this.groupAckStartupTimer);
+      this.groupAckStartupTimer = null;
+    }
+    if (this.groupAckRepublishTimer) {
+      clearTimeout(this.groupAckRepublishTimer);
+      this.groupAckRepublishTimer = null;
+    }
     for (const timer of this.nudgeFetchTimers.values()) {
       clearTimeout(timer);
     }

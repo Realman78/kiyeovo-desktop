@@ -9,6 +9,11 @@ type ChatPreviewProps = {
     selectedChatId: number | null;
 }
 export const ChatPreview: FC<ChatPreviewProps> = ({ chat, onSelectChat, selectedChatId }) => {
+    const isAwaitingActivation = chat.type === 'group' && chat.groupStatus === 'awaiting_activation';
+    const previewText = isAwaitingActivation
+        ? 'Waiting for creator activation...'
+        : (chat.lastMessage || "SYSTEM: No messages yet");
+
     return (
         <button
             key={chat.id}
@@ -20,6 +25,11 @@ export const ChatPreview: FC<ChatPreviewProps> = ({ chat, onSelectChat, selected
                     <span className="font-medium text-sm text-sidebar-foreground truncate flex items-center gap-1.5">
                         {chat.type === 'group' && <Users className="w-3.5 h-3.5 text-primary shrink-0" />}
                         {chat.name}
+                        {isAwaitingActivation && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400 uppercase tracking-wide">
+                                Awaiting Activation
+                            </span>
+                        )}
                     </span>
                     <span className="text-xs text-muted-foreground shrink-0">
                         {formatTimestampToHourMinute(chat.lastMessageTimestamp)}
@@ -27,7 +37,7 @@ export const ChatPreview: FC<ChatPreviewProps> = ({ chat, onSelectChat, selected
                 </div>
                 <div className="flex items-center justify-between gap-2">
                     <p className="text-xs text-muted-foreground truncate flex-1">
-                        {chat.lastMessage || "SYSTEM: No messages yet"}
+                        {previewText}
                     </p>
                     <div className="flex items-center gap-2 shrink-0">
                         {chat.muted && (

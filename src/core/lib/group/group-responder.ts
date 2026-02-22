@@ -285,6 +285,16 @@ export class GroupResponder {
     await this.sendWelcomeAck(welcome);
   }
 
+  async republishPendingControl(targetPeerId: string, payloadJson: string): Promise<void> {
+    let parsed: object;
+    try {
+      parsed = JSON.parse(payloadJson) as object;
+    } catch {
+      throw new Error(`Invalid pending ACK payload for ${targetPeerId}`);
+    }
+    await this.sendControlMessageToPeer(targetPeerId, parsed);
+  }
+
   private async sendWelcomeAck(welcome: GroupWelcome): Promise<void> {
     const creatorPeerId = this.deps.database.getChatByGroupId(welcome.groupId)?.group_creator_peer_id;
     if (!creatorPeerId) return;
@@ -337,6 +347,9 @@ export class GroupResponder {
     const writeBucketKey = `/kiyeovo-offline/${bucketSecret}/${ourPubKeyBase64url}`;
 
     const recipientPubKeyPem = Buffer.from(user.offline_public_key, 'base64').toString();
+    const lastReadTimestamp = database.getOfflineLastReadTimestampByPeerId(peerId);
+    const lastAckSent = database.getOfflineLastAckSentByPeerId(peerId);
+    const shouldSendAck = lastReadTimestamp > lastAckSent;
 
     const offlineMessage = OfflineMessageManager.createOfflineMessage(
       myPeerId,
@@ -345,6 +358,7 @@ export class GroupResponder {
       recipientPubKeyPem,
       userIdentity.signingPrivateKey,
       writeBucketKey,
+      shouldSendAck ? lastReadTimestamp : undefined,
     );
 
     await OfflineMessageManager.storeOfflineMessage(
@@ -354,6 +368,10 @@ export class GroupResponder {
       userIdentity.signingPrivateKey,
       database,
     );
+
+    if (shouldSendAck) {
+      database.updateOfflineLastAckSentByPeerId(peerId, lastReadTimestamp);
+    }
 
     // DHT write succeeded — best-effort nudge so an online recipient checks their bucket immediately
     this.deps.nudgePeer?.(peerId);

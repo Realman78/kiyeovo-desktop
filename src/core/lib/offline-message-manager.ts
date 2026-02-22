@@ -34,8 +34,7 @@ export class OfflineMessageManager {
             let version = local.version;
 
             if (messages.length >= MAX_MESSAGES_PER_STORE) {
-                console.log('Max messages reached for offline message store');
-                return;
+                throw new Error(`Offline message store full (${messages.length}/${MAX_MESSAGES_PER_STORE})`);
             }
 
             messages.push(message);

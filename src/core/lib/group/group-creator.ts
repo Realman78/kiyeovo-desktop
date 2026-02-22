@@ -326,6 +326,16 @@ export class GroupCreator {
     return { groupKey, keyVersion };
   }
 
+  async republishPendingControl(targetPeerId: string, payloadJson: string): Promise<void> {
+    let parsed: object;
+    try {
+      parsed = JSON.parse(payloadJson) as object;
+    } catch {
+      throw new Error(`Invalid pending ACK payload for ${targetPeerId}`);
+    }
+    await this.sendControlMessageToPeer(targetPeerId, parsed);
+  }
+
   private async sendGroupStateUpdate(
     groupId: string,
     keyVersion: number,
@@ -521,6 +531,9 @@ export class GroupCreator {
 
     // Wrap the group control message as an offline message
     const recipientPubKeyPem = Buffer.from(user.offline_public_key, 'base64').toString();
+    const lastReadTimestamp = database.getOfflineLastReadTimestampByPeerId(peerId);
+    const lastAckSent = database.getOfflineLastAckSentByPeerId(peerId);
+    const shouldSendAck = lastReadTimestamp > lastAckSent;
 
     const offlineMessage = OfflineMessageManager.createOfflineMessage(
       myPeerId,
@@ -529,6 +542,7 @@ export class GroupCreator {
       recipientPubKeyPem,
       userIdentity.signingPrivateKey,
       writeBucketKey,
+      shouldSendAck ? lastReadTimestamp : undefined,
     );
 
     await OfflineMessageManager.storeOfflineMessage(
@@ -538,6 +552,10 @@ export class GroupCreator {
       userIdentity.signingPrivateKey,
       database,
     );
+
+    if (shouldSendAck) {
+      database.updateOfflineLastAckSentByPeerId(peerId, lastReadTimestamp);
+    }
 
     // DHT write succeeded — best-effort nudge so an online recipient checks their bucket immediately
     this.deps.nudgePeer?.(peerId);

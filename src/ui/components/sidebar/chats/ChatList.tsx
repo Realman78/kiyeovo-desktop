@@ -46,7 +46,10 @@ export const ChatList: FC = () => {
         }
     }
 
-    const activeChats = chats.filter((chat) => chat.status !== 'pending');
+    const activeChats = chats.filter((chat) => {
+        if (chat.status !== 'pending') return true;
+        return chat.type === 'group' && chat.groupStatus === 'awaiting_activation';
+    });
     const hasNoConversations = activeChats.length === 0 && contactAttempts.length === 0;
 
     return (
