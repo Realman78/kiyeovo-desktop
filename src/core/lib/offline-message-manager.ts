@@ -19,6 +19,38 @@ const gunzipAsync = promisify(gunzip);
 export class OfflineMessageManager {
     static offlineCheckCache: Map<string, OfflineCheckCacheEntry> = new Map<string, OfflineCheckCacheEntry>();
     static inFlightOfflineChecks: Map<string, Promise<any>> = new Map<string, Promise<any>>();
+    private static bucketMutationQueues: Map<string, Promise<void>> = new Map<string, Promise<void>>();
+
+    /**
+     * Serializes all store mutations per bucket key to prevent lost updates.
+     * Different buckets can still mutate in parallel.
+     */
+    private static async withBucketMutationLock<T>(
+        bucketKey: string,
+        operation: () => Promise<T>,
+    ): Promise<T> {
+        const previous = OfflineMessageManager.bucketMutationQueues.get(bucketKey) ?? Promise.resolve();
+        let releaseCurrent!: () => void;
+        const current = new Promise<void>(resolve => {
+            releaseCurrent = resolve;
+        });
+
+        OfflineMessageManager.bucketMutationQueues.set(
+            bucketKey,
+            previous.catch(() => undefined).then(() => current),
+        );
+
+        await previous.catch(() => undefined);
+
+        try {
+            return await operation();
+        } finally {
+            releaseCurrent();
+            if (OfflineMessageManager.bucketMutationQueues.get(bucketKey) === current) {
+                OfflineMessageManager.bucketMutationQueues.delete(bucketKey);
+            }
+        }
+    }
  
     static async storeOfflineMessage(
         node: ChatNode,
@@ -27,41 +59,43 @@ export class OfflineMessageManager {
         signingPrivateKey: Uint8Array,  // Ed25519 private key for signing store
         database: ChatDatabase          // Local database for caching
     ): Promise<void> {
-        try {
-            // Read from local database instead of DHT
-            const local = database.getOfflineSentMessages(bucketKey);
-            const messages: OfflineMessage[] = OfflineMessageManager.filterExpiredMessages(local.messages);
-            let version = local.version;
+        return OfflineMessageManager.withBucketMutationLock(bucketKey, async () => {
+            try {
+                // Read from local database instead of DHT
+                const local = database.getOfflineSentMessages(bucketKey);
+                const messages: OfflineMessage[] = OfflineMessageManager.filterExpiredMessages(local.messages);
+                let version = local.version;
 
-            if (messages.length >= MAX_MESSAGES_PER_STORE) {
-                throw new Error(`Offline message store full (${messages.length}/${MAX_MESSAGES_PER_STORE})`);
+                if (messages.length >= MAX_MESSAGES_PER_STORE) {
+                    throw new Error(`Offline message store full (${messages.length}/${MAX_MESSAGES_PER_STORE})`);
+                }
+
+                const bucketTag = bucketKey.slice(-12);
+                console.log(
+                    `[OFFLINE][WRITE][START] bucket=*${bucketTag} prevVersion=${version} prevCount=${messages.length} appendMsgId=${message.id} appendType=${message.message_type}`
+                );
+                messages.push(message);
+                version++;
+
+                // Sign the store before putting to DHT
+                const signedStore = OfflineMessageManager.signStore(
+                    messages,
+                    version,
+                    bucketKey,
+                    signingPrivateKey
+                );
+
+                await OfflineMessageManager.putToDHT(node, bucketKey, signedStore);
+
+                database.saveOfflineSentMessages(bucketKey, messages, version);
+                console.log(
+                    `[OFFLINE][WRITE][DONE] bucket=*${bucketTag} newVersion=${version} newCount=${messages.length} appendedMsgId=${message.id}`
+                );
+            } catch (error: unknown) {
+                generalErrorHandler(error);
+                throw error;
             }
-
-            const bucketTag = bucketKey.slice(-12);
-            console.log(
-                `[OFFLINE][WRITE][START] bucket=*${bucketTag} prevVersion=${version} prevCount=${messages.length} appendMsgId=${message.id} appendType=${message.message_type}`
-            );
-            messages.push(message);
-            version++;
-
-            // Sign the store before putting to DHT
-            const signedStore = OfflineMessageManager.signStore(
-                messages,
-                version,
-                bucketKey,
-                signingPrivateKey
-            );
-
-            await OfflineMessageManager.putToDHT(node, bucketKey, signedStore);
-
-            database.saveOfflineSentMessages(bucketKey, messages, version);
-            console.log(
-                `[OFFLINE][WRITE][DONE] bucket=*${bucketTag} newVersion=${version} newCount=${messages.length} appendedMsgId=${message.id}`
-            );
-        } catch (error: unknown) {
-            generalErrorHandler(error);
-            throw error;
-        }
+        });
     }
 
     static async getOfflineMessages(
@@ -221,39 +255,41 @@ export class OfflineMessageManager {
         signingPrivateKey: Uint8Array,
         database: ChatDatabase
     ): Promise<void> {
-        const local = database.getOfflineSentMessages(bucketKey);
-        const remainingMessages = local.messages.filter(msg => msg.timestamp > ackTimestamp);
-        const bucketTag = bucketKey.slice(-12);
+        await OfflineMessageManager.withBucketMutationLock(bucketKey, async () => {
+            const local = database.getOfflineSentMessages(bucketKey);
+            const remainingMessages = local.messages.filter(msg => msg.timestamp > ackTimestamp);
+            const bucketTag = bucketKey.slice(-12);
 
-        const cleanMessages = OfflineMessageManager.filterExpiredMessages(remainingMessages);
+            const cleanMessages = OfflineMessageManager.filterExpiredMessages(remainingMessages);
 
-        // Only update if something changed
-        if (cleanMessages.length === local.messages.length) {
+            // Only update if something changed
+            if (cleanMessages.length === local.messages.length) {
+                console.log(
+                    `[OFFLINE][ACK_CLEAR][SKIP] bucket=*${bucketTag} ackTs=${ackTimestamp} localCount=${local.messages.length}`
+                );
+                return;
+            }
+
+            const version = local.version + 1;
             console.log(
-                `[OFFLINE][ACK_CLEAR][SKIP] bucket=*${bucketTag} ackTs=${ackTimestamp} localCount=${local.messages.length}`
+                `[OFFLINE][ACK_CLEAR][START] bucket=*${bucketTag} ackTs=${ackTimestamp} prevVersion=${local.version} prevCount=${local.messages.length} newCount=${cleanMessages.length}`
             );
-            return;
-        }
 
-        const version = local.version + 1;
-        console.log(
-            `[OFFLINE][ACK_CLEAR][START] bucket=*${bucketTag} ackTs=${ackTimestamp} prevVersion=${local.version} prevCount=${local.messages.length} newCount=${cleanMessages.length}`
-        );
+            // Sign the new store
+            const signedStore = OfflineMessageManager.signStore(
+                cleanMessages,
+                version,
+                bucketKey,
+                signingPrivateKey
+            );
 
-        // Sign the new store
-        const signedStore = OfflineMessageManager.signStore(
-            cleanMessages,
-            version,
-            bucketKey,
-            signingPrivateKey
-        );
+            await OfflineMessageManager.putToDHT(node, bucketKey, signedStore);
+            database.saveOfflineSentMessages(bucketKey, cleanMessages, version);
 
-        await OfflineMessageManager.putToDHT(node, bucketKey, signedStore);
-        database.saveOfflineSentMessages(bucketKey, cleanMessages, version);
-
-        console.log(
-            `[OFFLINE][ACK_CLEAR][DONE] bucket=*${bucketTag} removed=${local.messages.length - cleanMessages.length} newVersion=${version} newCount=${cleanMessages.length}`
-        );
+            console.log(
+                `[OFFLINE][ACK_CLEAR][DONE] bucket=*${bucketTag} removed=${local.messages.length - cleanMessages.length} newVersion=${version} newCount=${cleanMessages.length}`
+            );
+        });
     }
 
     /**
