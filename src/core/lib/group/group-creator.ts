@@ -115,47 +115,58 @@ export class GroupCreator {
     let sent = 0;
     let queued = 0;
     const deliveries: GroupInviteDelivery[] = [];
+    const batchSize = 3;
 
-    for (const peerId of invitedPeerIds) {
-      const inviteId = randomUUID();
-      const expiresAt = now + GROUP_INVITE_LIFETIME;
-      const invitee = database.getUserByPeerId(peerId);
-      const username = invitee?.username || peerId;
+    for (let i = 0; i < Math.min(invitedPeerIds.length, 9); i += batchSize) {
+      const batch = invitedPeerIds.slice(i, i + batchSize);
+      const round = Math.floor(i / batchSize) + 1;
+      console.log(`[GROUP][TRACE][INVITE][ROUND_START] group=${groupId} round=${round} size=${batch.length}`);
 
-      const invite: Omit<GroupInvite, 'signature'> = {
-        type: GroupMessageType.GROUP_INVITE,
-        groupId,
-        groupName,
-        inviterPeerId: myPeerId,
-        inviteId,
-        createdAt: now,
-        expiresAt,
-      };
+      const roundResults = await Promise.all(batch.map(async (peerId): Promise<GroupInviteDelivery> => {
+        const inviteId = randomUUID();
+        const expiresAt = now + GROUP_INVITE_LIFETIME;
+        const invitee = database.getUserByPeerId(peerId);
+        const username = invitee?.username || peerId;
 
-      const signature = this.sign(invite);
-      const signedInvite: GroupInvite = { ...invite, signature };
+        const invite: Omit<GroupInvite, 'signature'> = {
+          type: GroupMessageType.GROUP_INVITE,
+          groupId,
+          groupName,
+          inviterPeerId: myPeerId,
+          inviteId,
+          createdAt: now,
+          expiresAt,
+        };
 
-      // Store in pending ACKs first, then send
-      database.insertPendingAck(groupId, peerId, 'GROUP_INVITE', JSON.stringify(signedInvite));
-      console.log(
-        `[GROUP][TRACE][INVITE][CREATE] group=${groupId} inviteId=${inviteId} to=${peerId.slice(-8)} pendingSaved=true expiresAt=${expiresAt}`,
-      );
+        const signature = this.sign(invite);
+        const signedInvite: GroupInvite = { ...invite, signature };
 
-      try {
-        // Pending ACK row remains and will be re-published by the scheduler.
-        // eslint-disable-next-line no-await-in-loop
-        await this.sendControlMessageToPeer(peerId, signedInvite);
+        // Store in pending ACKs first, then send
+        database.insertPendingAck(groupId, peerId, 'GROUP_INVITE', JSON.stringify(signedInvite));
         console.log(
-          `[GROUP][TRACE][INVITE][SENT] group=${groupId} inviteId=${inviteId} to=${peerId.slice(-8)}`,
+          `[GROUP][TRACE][INVITE][CREATE] group=${groupId} inviteId=${inviteId} to=${peerId.slice(-8)} pendingSaved=true expiresAt=${expiresAt}`,
         );
-        sent++;
-        deliveries.push({ peerId, username, status: 'sent' });
-      } catch (error: unknown) {
-        queued++;
-        const reason = error instanceof Error ? error.message : String(error);
-        deliveries.push({ peerId, username, status: 'queued_for_retry', reason });
-        console.warn(`[GROUP] Invite to ${peerId} queued for retry: ${reason}`);
+
+        try {
+          await this.sendControlMessageToPeer(peerId, signedInvite);
+          console.log(
+            `[GROUP][TRACE][INVITE][SENT] group=${groupId} inviteId=${inviteId} to=${peerId.slice(-8)}`,
+          );
+          return { peerId, username, status: 'sent' };
+        } catch (error: unknown) {
+          const reason = error instanceof Error ? error.message : String(error);
+          console.warn(`[GROUP] Invite to ${peerId} queued for retry: ${reason}`);
+          return { peerId, username, status: 'queued_for_retry', reason };
+        }
+      }));
+
+      for (const result of roundResults) {
+        deliveries.push(result);
+        if (result.status === 'sent') sent++;
+        else queued++;
       }
+
+      console.log(`[GROUP][TRACE][INVITE][ROUND_DONE] group=${groupId} round=${round} sent=${sent} queued=${queued}`);
     }
 
     if (queued > 0) {
