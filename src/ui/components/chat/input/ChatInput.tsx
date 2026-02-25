@@ -64,15 +64,30 @@ export const ChatInput: FC = () => {
         }
     };
 
+    const handleSendGroupMessage = async (chatId: number, messageContent: string) => {
+        try {
+            const { success, error } = await window.kiyeovoAPI.sendGroupMessage(chatId, messageContent);
+            if (!success) {
+                toast.error(error || 'Failed to send group message');
+            }
+        } catch (err) {
+            console.error('Failed to send group message:', err);
+            toast.error(err instanceof Error ? err.message : 'Unexpected error occurred');
+        } finally {
+            setSendingForChat(chatId, false);
+            setTimeout(() => {
+                if (activeChat?.id === chatId) {
+                    inputRef.current?.focus();
+                }
+            }, 200);
+        }
+    };
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
 
         if (!activeChat) {
             toast.error('No active chat selected');
-            return;
-        }
-        if (!activeChat.peerId) {
-            toast.error('No peer ID found for active chat');
             return;
         }
         if (!inputQuery.trim()) {
@@ -81,7 +96,16 @@ export const ChatInput: FC = () => {
         const chatId = activeChat.id;
         setSendingForChat(chatId, true);
 
-        await handleSendMessage(activeChat.peerId, inputQuery, chatId);
+        if (activeChat.type === 'group') {
+            await handleSendGroupMessage(chatId, inputQuery);
+        } else {
+            if (!activeChat.peerId) {
+                toast.error('No peer ID found for active chat');
+                setSendingForChat(chatId, false);
+                return;
+            }
+            await handleSendMessage(activeChat.peerId, inputQuery, chatId);
+        }
         setDraftForChat(chatId, '');
     };
 

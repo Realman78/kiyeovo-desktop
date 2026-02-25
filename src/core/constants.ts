@@ -202,6 +202,13 @@ export const GROUP_ACK_REPUBLISH_STARTUP_DELAY = 60 * 1000; // 60 seconds
 export const GROUP_ACK_REPUBLISH_INTERVAL = 10 * 60 * 1000; // 10 minutes
 export const GROUP_ACK_REPUBLISH_JITTER = 2 * 60 * 1000; // ±2 minutes
 export const GROUP_GOSSIPSUB_HEARTBEAT_INTERVAL = 90 * 1000; // 90 seconds
+export const GROUP_TOPIC_RECONCILE_INTERVAL = 10 * 60 * 1000; // 10 minutes
+export const GROUP_PUBLISH_RETRY_DELAY_MS = 750; // Retry shortly after re-subscribing
+// Replace with your preferred publish error marker if libp2p error text differs.
+export const GROUP_PUBLISH_RETRYABLE_ERROR_PLACEHOLDER = 'TODO_REPLACE_WITH_RETRYABLE_PUBLISH_ERROR';
+export const GROUP_MESSAGE_MAX_FUTURE_SKEW_MS = 2 * 60 * 1000; // 2 minutes
+export const GROUP_MESSAGE_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
+export const GROUP_HEARTBEAT_MAX_AGE_MS = 5 * 60 * 1000; // 5 minutes
 export const GROUP_ROTATION_GRACE_WINDOW_MS = 60 * 1000; // 60 seconds - grace period after rotation for late messages
 export const GROUP_OFFLINE_BUCKET_PREFIX = '/kiyeovo-group-offline';
 export const GROUP_INFO_LATEST_PREFIX = '/kiyeovo-group-info-latest';

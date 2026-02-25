@@ -28,6 +28,7 @@ import { PeerId } from '@libp2p/interface';
 import { GroupMessageType, type GroupInvite } from './group/types.js';
 import { GroupCreator } from './group/group-creator.js';
 import { GroupResponder } from './group/group-responder.js';
+import { GroupMessaging } from './group/group-messaging.js';
 
 /**
  * Main message handler that orchestrates all message handling components
@@ -52,6 +53,7 @@ export class MessageHandler {
   private groupAckStartupTimer: ReturnType<typeof setTimeout> | null = null;
   private groupAckRepublishInFlight = false;
   private offlineCheckRunSeq = 0;
+  private groupMessaging: GroupMessaging;
 
   constructor(
     node: ChatNode,
@@ -80,7 +82,20 @@ export class MessageHandler {
     this.onOfflineMessagesFetchComplete = onOfflineMessagesFetchComplete;
     this.keyExchange = new KeyExchange(node, usernameRegistry, this.sessionManager, database, onKeyExchangeSent, onContactRequestReceived, onChatCreated, onKeyExchangeFailed);
     this.fileHandler = new FileHandler(node, this, database, onFileTransferProgress, onFileTransferComplete, onFileTransferFailed, onPendingFileReceived);
+    const userIdentity = this.usernameRegistry.getUserIdentity();
+    if (!userIdentity) {
+      throw new Error('User identity not available');
+    }
+    this.groupMessaging = new GroupMessaging({
+      node: this.node,
+      database: this.database,
+      userIdentity,
+      myPeerId: this.node.peerId.toString(),
+      myUsername: this.database.getUserByPeerId(this.node.peerId.toString())?.username || `user_${this.node.peerId.toString().slice(-8)}`,
+      onMessageReceived: this.onMessageReceived,
+    });
     this.setupProtocolHandler();
+    this.groupMessaging.start();
     this.cleanupPeerEvents = PeerConnectionHandler.setupPeerEvents(node, this.sessionManager);
     this.startSessionCleanup();
     this.startGroupAckRepublisher();
@@ -684,6 +699,26 @@ export class MessageHandler {
     }
   }
 
+  async sendGroupMessage(chatId: number, message: string): Promise<SendMessageResponse> {
+    const chat = this.database.getChatByIdWithUsernameAndLastMsg(chatId, this.node.peerId.toString());
+    if (!chat) {
+      return { success: false, messageSentStatus: null, error: 'Group chat not found' };
+    }
+    if (chat.type !== 'group') {
+      return { success: false, messageSentStatus: null, error: 'Chat is not a group chat' };
+    }
+    if (!chat.group_id) {
+      return { success: false, messageSentStatus: null, error: 'Group ID missing for chat' };
+    }
+
+    try {
+      return await this.groupMessaging.sendGroupMessage(chat.group_id, message);
+    } catch (error: unknown) {
+      const errorText = error instanceof Error ? error.message : String(error);
+      return { success: false, messageSentStatus: null, error: errorText };
+    }
+  }
+
   private async storeOfflineMessageDB(user: User, writeBucketKey: string, message: string): Promise<StrippedMessage> {
     try {
       const userIdentity = this.usernameRegistry.getUserIdentity();
@@ -1081,6 +1116,8 @@ export class MessageHandler {
   }
 
   cleanup(): void {
+    this.groupMessaging.cleanup();
+
     if (this.groupAckStartupTimer) {
       clearTimeout(this.groupAckStartupTimer);
       this.groupAckStartupTimer = null;
@@ -1231,6 +1268,14 @@ export class MessageHandler {
         case GroupMessageType.GROUP_WELCOME: {
           const responder = new GroupResponder(deps);
           await responder.handleGroupWelcome(parsed as any);
+          const groupId = (parsed as { groupId: string }).groupId;
+          await this.groupMessaging.subscribeToGroupTopic(groupId).catch((error: unknown) => {
+            console.warn(
+              `[GROUP-MSG] Failed to subscribe after welcome for ${groupId}: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          });
           console.log(`[GROUP] Processed GROUP_WELCOME from ${senderInfo.username}`);
           break;
         }
@@ -1239,6 +1284,17 @@ export class MessageHandler {
         case GroupMessageType.GROUP_INVITE_RESPONSE: {
           const creator = new GroupCreator(deps);
           await creator.processInviteResponse(parsed as any);
+          const groupId = (parsed as { groupId: string }).groupId;
+          const chat = this.database.getChatByGroupId(groupId);
+          if (chat?.group_status === 'active' && (chat.key_version ?? 0) > 0) {
+            await this.groupMessaging.subscribeToGroupTopic(groupId).catch((error: unknown) => {
+              console.warn(
+                `[GROUP-MSG] Failed to subscribe after activation for ${groupId}: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+              );
+            });
+          }
           console.log(`[GROUP] Processed GROUP_INVITE_RESPONSE from ${senderInfo.username}`);
           break;
         }

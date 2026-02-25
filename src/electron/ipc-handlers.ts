@@ -256,6 +256,31 @@ function setupMessagingHandlers(
       return { success: false, messageSentStatus: null, error: error instanceof Error ? error.message : "Failed to send message" };
     }
   });
+
+  ipcMain.handle(IPC_CHANNELS.SEND_GROUP_MESSAGE_REQUEST, async (_event, chatId: number, message: string) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, messageSentStatus: null, error: 'P2P core not initialized' };
+      }
+
+      if (!Number.isInteger(chatId) || chatId <= 0) {
+        return { success: false, messageSentStatus: null, error: 'Invalid group chat ID' };
+      }
+      if (!validateMessageLength(message)) {
+        return { success: false, messageSentStatus: null, error: 'Message too long' };
+      }
+
+      const response = await p2pCore.messageHandler.sendGroupMessage(chatId, message);
+      if (response.success) {
+        return { success: true, messageSentStatus: response.messageSentStatus, error: null, message: response.message };
+      }
+      return { success: false, messageSentStatus: null, error: response.error ?? 'Failed to send group message' };
+    } catch (error) {
+      console.error('[IPC] Failed to send group message:', error);
+      return { success: false, messageSentStatus: null, error: error instanceof Error ? error.message : 'Failed to send group message' };
+    }
+  });
 }
 
 /**

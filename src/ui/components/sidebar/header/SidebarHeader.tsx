@@ -155,6 +155,7 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
                     id: result.chat.id,
                     type: result.chat.type as 'direct' | 'group',
                     name: result.chat.name,
+                    groupId: result.chat.group_id,
                     lastMessage: '',
                     lastMessageTimestamp: new Date(result.chat.updated_at || result.chat.created_at).getTime(),
                     unreadCount: 0,

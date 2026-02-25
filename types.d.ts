@@ -42,6 +42,7 @@ declare global {
 
             // Send message
             sendMessage: (identifier: string, message: string) => Promise<SendMessageResponse>;
+            sendGroupMessage: (chatId: number, message: string) => Promise<SendMessageResponse>;
 
             // Key exchange events
             onKeyExchangeSent: (callback: (data: KeyExchangeEvent) => void) => () => void;

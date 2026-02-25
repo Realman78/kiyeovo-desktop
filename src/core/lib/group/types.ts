@@ -185,18 +185,28 @@ export interface GroupOfflineStore {
 
 // --- GossipSub group message ---
 
-export interface GroupChatMessage {
+interface GroupChatMessageBase {
+  type: typeof GroupMessageType.GROUP_MESSAGE;
   groupId: string;
   keyVersion: number;
   senderPeerId: string;
   messageId: string;
+  timestamp: number;
+  signature: string;
+}
+
+export interface GroupContentMessage extends GroupChatMessageBase {
+  messageType: 'text' | 'system';
   seq: number;
   encryptedContent: string;
   nonce: string;
-  timestamp: number;
-  messageType: 'text' | 'system';
-  signature: string;
 }
+
+export interface GroupHeartbeatMessage extends GroupChatMessageBase {
+  messageType: 'heartbeat';
+}
+
+export type GroupChatMessage = GroupContentMessage | GroupHeartbeatMessage;
 
 // --- Local state ---
 

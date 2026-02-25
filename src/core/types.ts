@@ -576,6 +576,7 @@ export const IPC_CHANNELS = {
   // Group chats
   GET_CONTACTS: 'group:getContacts',
   CREATE_GROUP: 'group:create',
+  SEND_GROUP_MESSAGE_REQUEST: 'group:sendMessage',
   GET_GROUP_MEMBERS: 'group:getMembers',
   GET_GROUP_INVITES: 'group:getInvites',
   RESPOND_TO_GROUP_INVITE: 'group:respondToInvite',

@@ -84,6 +84,7 @@ export const Main = () => {
                 id: dbChat.id,
                 type: dbChat.type,
                 name: dbChat.type === 'group' ? dbChat.name : (dbChat.username || dbChat.name),
+                groupId: dbChat.group_id,
                 peerId: dbChat.other_peer_id,
                 lastMessage: dbChat.last_message_content || 'SYSTEM: No messages yet',
                 lastMessageTimestamp: dbChat.last_message_timestamp
@@ -266,6 +267,7 @@ export const Main = () => {
             id: dbChat.id,
             type: dbChat.type,
             name: dbChat.type === 'group' ? dbChat.name : (dbChat.username || dbChat.name),
+            groupId: dbChat.group_id,
             peerId: dbChat.other_peer_id,
             lastMessage: dbChat.last_message_content || 'SYSTEM: No messages yet',
             lastMessageTimestamp: dbChat.last_message_timestamp
@@ -308,6 +310,7 @@ export const Main = () => {
                     id: dbChat.id,
                     type: dbChat.type,
                     name: dbChat.type === 'group' ? dbChat.name : (dbChat.username || dbChat.name),
+                    groupId: dbChat.group_id,
                     username: dbChat.username,
                     peerId: dbChat.other_peer_id,
                     lastMessage: dbChat.last_message_content || 'SYSTEM: No messages yet',
