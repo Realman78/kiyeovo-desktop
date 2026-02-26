@@ -34,7 +34,7 @@ import { torTransport, validateTorConnection, type TorTransportComponents } from
 dotenv.config();
 
 export function createTransportArray(torConfig: ReturnType<typeof getTorConfig>):
-    Array<(components: TCPComponents & TorTransportComponents) => Transport> {
+  Array<(components: TCPComponents & TorTransportComponents) => Transport> {
   if (torConfig.enabled) {
     // When Tor is enabled, we need both TCP (for listening) and Tor (for dialing)
     return [
@@ -196,7 +196,9 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
       connectionGater: createConnectionGater(database),
       services: {
         // TODO research kad dodes na grupe
-        pubsub: gossipsub(),
+        pubsub: gossipsub(
+          { emitSelf: false }
+        ),
         dht: kadDHT({
           protocol: DHT_PROTOCOL,
           peerInfoMapper: torConfig.enabled ? filterOnionAddressesMapper : removePublicAddressesMapper,

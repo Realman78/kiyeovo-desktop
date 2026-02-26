@@ -1279,6 +1279,20 @@ export class MessageHandler {
           console.log(`[GROUP] Processed GROUP_WELCOME from ${senderInfo.username}`);
           break;
         }
+        case GroupMessageType.GROUP_STATE_UPDATE: {
+          const responder = new GroupResponder(deps);
+          await responder.handleGroupStateUpdate(parsed as any);
+          const groupId = (parsed as { groupId: string }).groupId;
+          await this.groupMessaging.subscribeToGroupTopic(groupId).catch((error: unknown) => {
+            console.warn(
+              `[GROUP-MSG] Failed to subscribe after state update for ${groupId}: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          });
+          console.log(`[GROUP] Processed GROUP_STATE_UPDATE from ${senderInfo.username}`);
+          break;
+        }
 
         // --- Messages handled by GroupCreator (we are the creator) ---
         case GroupMessageType.GROUP_INVITE_RESPONSE: {
@@ -1312,7 +1326,6 @@ export class MessageHandler {
         }
 
         // --- Messages not yet implemented — consume without saving as text ---
-        case GroupMessageType.GROUP_STATE_UPDATE:
         case GroupMessageType.GROUP_LEAVE_REQUEST:
         case GroupMessageType.GROUP_KICK:
         case GroupMessageType.GROUP_MESSAGE:

@@ -1,6 +1,6 @@
 import { randomUUID, privateDecrypt } from 'crypto';
 import { ed25519 } from '@noble/curves/ed25519';
-import type { ChatNode, GroupChatActivatedEvent } from '../../types.js';
+import type { ChatNode, GroupChatActivatedEvent, GroupMembersUpdatedEvent } from '../../types.js';
 import type { ChatDatabase } from '../db/database.js';
 import type { EncryptedUserIdentity } from '../encrypted-user-identity.js';
 import { OfflineMessageManager } from '../offline-message-manager.js';
@@ -12,6 +12,7 @@ import {
   type GroupInviteResponse,
   type GroupInviteResponseAck,
   type GroupWelcome,
+  type GroupStateUpdate,
   type GroupControlAck,
   type GroupStatus,
 } from './types.js';
@@ -23,6 +24,7 @@ export interface GroupResponderDeps {
   myPeerId: string;
   myUsername: string;
   onGroupChatActivated?: (data: GroupChatActivatedEvent) => void;
+  onGroupMembersUpdated?: (data: GroupMembersUpdatedEvent) => void;
   nudgePeer?: (peerId: string) => void;
 }
 
@@ -376,6 +378,90 @@ export class GroupResponder {
     );
   }
 
+  async handleGroupStateUpdate(update: GroupStateUpdate): Promise<void> {
+    const { database, userIdentity } = this.deps;
+
+    const chat = database.getChatByGroupId(update.groupId);
+    if (!chat) {
+      console.log(`[GROUP][TRACE][STATE_UPDATE][DROP] group=${update.groupId} reason=unknown_group`);
+      return;
+    }
+
+    const creatorPeerId = chat.group_creator_peer_id;
+    if (!creatorPeerId) {
+      console.log(`[GROUP][TRACE][STATE_UPDATE][DROP] group=${update.groupId} reason=no_creator`);
+      return;
+    }
+
+    const creator = database.getUserByPeerId(creatorPeerId);
+    if (!creator) {
+      console.log(`[GROUP][TRACE][STATE_UPDATE][DROP] group=${update.groupId} reason=unknown_creator creator=${creatorPeerId.slice(-8)}`);
+      return;
+    }
+    this.verifySignature(update, creator.signing_public_key);
+
+    const currentKeyVersion = chat.key_version ?? 0;
+    if (currentKeyVersion >= update.keyVersion) {
+      await this.sendControlAck(
+        creatorPeerId,
+        update.groupId,
+        GroupMessageType.GROUP_STATE_UPDATE,
+        update.messageId,
+      );
+      console.log(
+        `[GROUP][TRACE][STATE_UPDATE][DUPLICATE] group=${update.groupId} msgId=${update.messageId} currentKeyVersion=${currentKeyVersion} incomingKeyVersion=${update.keyVersion}`,
+      );
+      return;
+    }
+
+    // Decrypt newly rotated group key
+    const groupKey = privateDecrypt(
+      userIdentity.offlinePrivateKey,
+      Buffer.from(update.encryptedGroupKey, 'base64'),
+    ).toString('base64');
+
+    database.insertGroupKeyHistory(update.groupId, update.keyVersion, groupKey);
+
+    // Ensure all roster members exist in users table (required by chat_participants FK)
+    for (const entry of update.roster) {
+      if (entry.peerId === this.deps.myPeerId) continue;
+      if (!database.getUserByPeerId(entry.peerId)) {
+        await database.createUser({
+          peer_id: entry.peerId,
+          username: entry.username,
+          signing_public_key: entry.signingPubKey,
+          offline_public_key: entry.offlinePubKey,
+          signature: '',
+        });
+      }
+    }
+
+    const participantPeerIds = update.roster.map(r => r.peerId);
+    database.updateGroupParticipants(chat.id, participantPeerIds);
+    database.updateChatKeyVersion(chat.id, update.keyVersion);
+    database.updateChatGroupStatus(chat.id, 'active');
+    database.updateChatStatus(chat.id, 'active');
+
+    if (chat.group_status !== 'active' || chat.status !== 'active') {
+      this.deps.onGroupChatActivated?.({ chatId: chat.id });
+    }
+    this.deps.onGroupMembersUpdated?.({
+      chatId: chat.id,
+      groupId: update.groupId,
+      memberPeerId: update.targetPeerId,
+    });
+
+    await this.sendControlAck(
+      creatorPeerId,
+      update.groupId,
+      GroupMessageType.GROUP_STATE_UPDATE,
+      update.messageId,
+    );
+    console.log(
+      `[GROUP][TRACE][STATE_UPDATE][APPLY] group=${update.groupId} msgId=${update.messageId} keyVersion=${update.keyVersion} rosterSize=${update.roster.length} event=${update.event} target=${update.targetPeerId.slice(-8)}`,
+    );
+  }
+
   async republishPendingControl(targetPeerId: string, payloadJson: string): Promise<void> {
     let parsed: object;
     try {
@@ -392,22 +478,15 @@ export class GroupResponder {
   private async sendWelcomeAck(welcome: GroupWelcome): Promise<void> {
     const creatorPeerId = this.deps.database.getChatByGroupId(welcome.groupId)?.group_creator_peer_id;
     if (!creatorPeerId) return;
-
-    const ack: Omit<GroupControlAck, 'signature'> = {
-      type: GroupMessageType.GROUP_CONTROL_ACK,
-      groupId: welcome.groupId,
-      ackedMessageType: GroupMessageType.GROUP_WELCOME,
-      ackedMessageId: welcome.messageId,
-      ackId: randomUUID(),
-    };
-
-    const signature = this.sign(ack);
-    const signedAck: GroupControlAck = { ...ack, signature };
-
-    console.log(
-      `[GROUP][TRACE][WELCOME_ACK][SEND] group=${welcome.groupId} to=${creatorPeerId.slice(-8)} ackedMsgId=${welcome.messageId} ackId=${signedAck.ackId}`,
+    await this.sendControlAck(
+      creatorPeerId,
+      welcome.groupId,
+      GroupMessageType.GROUP_WELCOME,
+      welcome.messageId,
     );
-    await this.sendControlMessageToPeer(creatorPeerId, signedAck);
+    console.log(
+      `[GROUP][TRACE][WELCOME_ACK][SEND] group=${welcome.groupId} to=${creatorPeerId.slice(-8)} ackedMsgId=${welcome.messageId}`,
+    );
   }
 
   private async sendInviteDeliveredAck(invite: GroupInvite): Promise<void> {
@@ -443,6 +522,25 @@ export class GroupResponder {
     if (!ed25519.verify(sigBytes, payloadBytes, pubKeyBytes)) {
       throw new Error('Signature verification failed');
     }
+  }
+
+  private async sendControlAck(
+    peerId: string,
+    groupId: string,
+    ackedMessageType: string,
+    ackedMessageId: string,
+  ): Promise<void> {
+    const ack: Omit<GroupControlAck, 'signature'> = {
+      type: GroupMessageType.GROUP_CONTROL_ACK,
+      groupId,
+      ackedMessageType,
+      ackedMessageId,
+      ackId: randomUUID(),
+    };
+
+    const signature = this.sign(ack);
+    const signedAck: GroupControlAck = { ...ack, signature };
+    await this.sendControlMessageToPeer(peerId, signedAck);
   }
 
   private async sendControlMessageToPeer(peerId: string, message: object): Promise<void> {

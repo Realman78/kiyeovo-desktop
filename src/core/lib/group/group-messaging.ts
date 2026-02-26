@@ -314,8 +314,10 @@ export class GroupMessaging {
 
   private async publish(topic: string, payload: Uint8Array): Promise<void> {
     const result = await this.deps.node.services.pubsub.publish(topic, payload);
-    if ((result.recipients?.length ?? 0) === 0) {
-      throw new Error('No peers subscribed to group topic');
+    const recipients = result.recipients ?? [];
+    const remoteRecipients = recipients.filter((peerId) => peerId.toString() !== this.deps.myPeerId);
+    if (remoteRecipients.length === 0) {
+      throw new Error('PublishError.NoPeersSubscribedToTopic');
     }
   }
 
@@ -438,6 +440,11 @@ export class GroupMessaging {
       const sender = this.deps.database.getUserByPeerId(parsed.senderPeerId);
       if (!sender) return;
       if (!this.verifySignature(parsed, sender.signing_public_key)) return;
+
+      // Ignore self-published echo from emitSelf; send path handles local persistence.
+      if (parsed.senderPeerId === this.deps.myPeerId) {
+        return;
+      }
 
       if (parsed.messageType === 'heartbeat') {
         return;
