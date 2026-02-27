@@ -112,6 +112,8 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
 
   const showEmptyState = !isPending && messages.length === 0;
   const isTrustedOutOfBand = activeChat?.trusted_out_of_band;
+  let previousSenderPeerId: string | null = null;
+  let senderStreak = 0;
 
   return <div className={`flex-1 overflow-y-auto p-6 space-y-2`}>
     {showEmptyState && (
@@ -150,17 +152,29 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
       </div>
     </div>}
     {messages.map((message, index) => {
+      if (message.senderPeerId === previousSenderPeerId) {
+        senderStreak += 1;
+      } else {
+        previousSenderPeerId = message.senderPeerId;
+        senderStreak = 1;
+      }
+
+      const senderChanged =
+        index === 0 || messages[index - 1].senderPeerId !== message.senderPeerId;
       const showTimestamp =
-        index === 0 ||
-        messages[index - 1].senderPeerId !== message.senderPeerId ||
+        senderChanged ||
         message.timestamp - messages[index - 1].timestamp > SHOW_TIMESTAMP_INTERVAL;
+      const showSenderLabel =
+        message.senderPeerId !== myPeerId &&
+        !!activeChat?.groupId &&
+        (senderChanged || senderStreak % 10 === 0);
 
       return (
         <div
           key={message.id}
           className={`flex flex-col animate-fade-in ${message.senderPeerId === myPeerId || !!activePendingKeyExchange ? "items-end" : "items-start"}`}
         >
-          {message.senderPeerId !== myPeerId && (index === 0 || message.senderPeerId !== messages[index - 1].senderPeerId) && !!activeChat?.groupId &&
+          {showSenderLabel &&
             <span className="text-xs text-muted-foreground font-mono">{message.senderUsername ?? message.senderPeerId}</span>
           }
           <div

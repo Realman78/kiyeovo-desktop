@@ -5,7 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { generalErrorHandler } from '../../utils/general-error.js';
 import type { ContactMode, OfflineMessage } from '../../types.js';
-import type { AckMessageType } from '../group/types.js';
+import type { AckMessageType, GroupOfflineMessage } from '../group/types.js';
 import { DEFAULT_BOOTSTRAP_NODES } from '../../default-bootstrap-nodes.js';
 import { PENDING_KEY_EXCHANGE_EXPIRATION } from '../../constants.js';
 
@@ -374,6 +374,17 @@ export class ChatDatabase {
         // This eliminates the need to query DHT before writing
         this.db.exec(`
             CREATE TABLE IF NOT EXISTS offline_sent_messages (
+                bucket_key TEXT PRIMARY KEY NOT NULL,
+                messages TEXT NOT NULL,
+                version INTEGER NOT NULL DEFAULT 0,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+        // Group offline sent messages table (local cache of messages we've sent to group DHT buckets)
+        // Allows optimistic local append/write without pre-read DHT GET.
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS group_offline_sent_messages (
                 bucket_key TEXT PRIMARY KEY NOT NULL,
                 messages TEXT NOT NULL,
                 version INTEGER NOT NULL DEFAULT 0,
@@ -1367,6 +1378,41 @@ export class ChatDatabase {
         stmt.run(bucketKey);
     }
 
+    // Group offline sent messages operations (local cache to avoid DHT reads before writes)
+    getGroupOfflineSentMessages(bucketKey: string): { messages: GroupOfflineMessage[]; version: number } {
+        const stmt = this.db.prepare('SELECT messages, version FROM group_offline_sent_messages WHERE bucket_key = ?');
+        const row = stmt.get(bucketKey) as { messages: string; version: number } | undefined;
+        if (!row) {
+            return { messages: [], version: 0 };
+        }
+        return {
+            messages: JSON.parse(row.messages) as GroupOfflineMessage[],
+            version: row.version
+        };
+    }
+
+    saveGroupOfflineSentMessages(bucketKey: string, messages: GroupOfflineMessage[], version: number): void {
+        const stmt = this.db.prepare(`
+            INSERT INTO group_offline_sent_messages (bucket_key, messages, version, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(bucket_key) DO UPDATE SET
+                messages = excluded.messages,
+                version = excluded.version,
+                updated_at = CURRENT_TIMESTAMP
+        `);
+        stmt.run(bucketKey, JSON.stringify(messages), version);
+    }
+
+    deleteGroupOfflineSentMessages(bucketKey: string): void {
+        const stmt = this.db.prepare('DELETE FROM group_offline_sent_messages WHERE bucket_key = ?');
+        stmt.run(bucketKey);
+    }
+
+    deleteGroupOfflineSentMessagesByPrefix(bucketKeyPrefix: string): void {
+        const stmt = this.db.prepare('DELETE FROM group_offline_sent_messages WHERE bucket_key LIKE ?');
+        stmt.run(`${bucketKeyPrefix}%`);
+    }
+
     // Message operations
     messageExists(messageId: string): boolean {
         const stmt = this.db.prepare(`SELECT id FROM messages WHERE id = ?`);
@@ -1835,6 +1881,11 @@ export class ChatDatabase {
         this.db.prepare('DELETE FROM group_key_history WHERE group_id = ?').run(groupId);
     }
 
+    deleteGroupKeyHistoryForEpoch(groupId: string, keyVersion: number): void {
+        this.db.prepare('DELETE FROM group_key_history WHERE group_id = ? AND key_version = ?')
+            .run(groupId, keyVersion);
+    }
+
     updateGroupKeyStateHash(groupId: string, keyVersion: number, stateHash: string): void {
         this.db.prepare('UPDATE group_key_history SET state_hash = ? WHERE group_id = ? AND key_version = ?')
             .run(stateHash, groupId, keyVersion);
@@ -1985,6 +2036,11 @@ export class ChatDatabase {
         this.db.prepare('DELETE FROM group_sender_seq WHERE group_id = ?').run(groupId);
     }
 
+    deleteGroupSenderSeqForEpoch(groupId: string, keyVersion: number): void {
+        this.db.prepare('DELETE FROM group_sender_seq WHERE group_id = ? AND key_version = ?')
+            .run(groupId, keyVersion);
+    }
+
     // --- Group member seq (observed seqs from all members) ---
 
     updateMemberSeq(groupId: string, keyVersion: number, senderPeerId: string, seq: number): void {
@@ -2013,6 +2069,11 @@ export class ChatDatabase {
 
     deleteGroupMemberSeqs(groupId: string): void {
         this.db.prepare('DELETE FROM group_member_seq WHERE group_id = ?').run(groupId);
+    }
+
+    deleteGroupMemberSeqsForEpoch(groupId: string, keyVersion: number): void {
+        this.db.prepare('DELETE FROM group_member_seq WHERE group_id = ? AND key_version = ?')
+            .run(groupId, keyVersion);
     }
 
     // --- Group chat column helpers ---

@@ -92,21 +92,16 @@ export class GroupOfflineManager {
     };
 
     await this.withBucketMutationLock(bucketKey, async () => {
-      const cached = this.getCachedStore(bucketKey);
-      const existing = cached ?? await this.getLatestStore(bucketKey);
-      console.log("[DEBUG] Existing before write", bucketKey, existing)
-      const existingMessages = existing?.messages ?? [];
-      const existingVersion = existing?.version ?? 0;
-      const existingHighestSeq = existing?.highestSeq ?? 0;
+      const local = this.deps.database.getGroupOfflineSentMessages(bucketKey);
+      const existingMessages = this.filterLiveMessages(local.messages, Date.now());
+      const existingVersion = local.version;
 
       const offlineMessageId = this.getOfflineMessageId(offlineMessage);
       if (existingMessages.some(m => this.getOfflineMessageId(m) === offlineMessageId)) {
         return;
       }
 
-      const now = Date.now();
-      const liveExistingMessages = this.filterLiveMessages(existingMessages, now);
-      const nextMessages = [...liveExistingMessages, offlineMessage]
+      const nextMessages = [...existingMessages, offlineMessage]
         .sort((a, b) => (a.seq - b.seq) || (a.timestamp - b.timestamp));
 
       if (nextMessages.length > GROUP_MAX_MESSAGES_PER_SENDER) {
@@ -117,12 +112,59 @@ export class GroupOfflineManager {
         );
       }
 
-      const highestSeq = Math.max(existingHighestSeq, offlineMessage.seq, ...nextMessages.map(m => m.seq));
+      const highestSeq = Math.max(offlineMessage.seq, ...nextMessages.map(m => m.seq));
       const version = existingVersion + 1;
       const signedStore = this.signStore(nextMessages, highestSeq, version, bucketKey);
-      await this.putStore(bucketKey, signedStore);
-      console.log("Stored to DHT", signedStore);
-      this.setCachedStore(bucketKey, signedStore);
+
+      try {
+        await this.putStore(bucketKey, signedStore);
+        this.deps.database.saveGroupOfflineSentMessages(bucketKey, nextMessages, version);
+        this.setCachedStore(bucketKey, signedStore);
+        return;
+      } catch (firstError: unknown) {
+        // Oversized stores cannot be recovered via remote merge.
+        if (this.isStoreTooLargeError(firstError)) {
+          throw firstError;
+        }
+
+        // Recovery path: local version may be stale (restart/cleanup race). Fetch once, merge, retry once.
+        this.localStoreCache.delete(bucketKey);
+        const remote = await this.getLatestStore(bucketKey);
+        if (!remote) {
+          // No remote state discovered -> likely connectivity issue; preserve original error.
+          throw firstError;
+        }
+
+        const remoteMessages = this.filterLiveMessages(remote.messages, Date.now());
+        const mergedById = new Map<string, GroupOfflineMessage>();
+
+        for (const msg of remoteMessages) {
+          mergedById.set(this.getOfflineMessageId(msg), msg);
+        }
+        for (const msg of existingMessages) {
+          mergedById.set(this.getOfflineMessageId(msg), msg);
+        }
+        mergedById.set(offlineMessageId, offlineMessage);
+
+        const mergedMessages = Array.from(mergedById.values())
+          .sort((a, b) => (a.seq - b.seq) || (a.timestamp - b.timestamp));
+
+        if (mergedMessages.length > GROUP_MAX_MESSAGES_PER_SENDER) {
+          const overflow = mergedMessages.length - GROUP_MAX_MESSAGES_PER_SENDER;
+          mergedMessages.splice(0, overflow);
+        }
+
+        const mergedVersion = remote.version + 1;
+        const mergedHighestSeq = Math.max(
+          remote.highestSeq,
+          offlineMessage.seq,
+          ...mergedMessages.map((m) => m.seq),
+        );
+        const mergedStore = this.signStore(mergedMessages, mergedHighestSeq, mergedVersion, bucketKey);
+        await this.putStore(bucketKey, mergedStore);
+        this.deps.database.saveGroupOfflineSentMessages(bucketKey, mergedMessages, mergedVersion);
+        this.setCachedStore(bucketKey, mergedStore);
+      }
     });
   }
 
@@ -139,9 +181,7 @@ export class GroupOfflineManager {
     }
 
     for (const chat of targetChats) {
-      console.log("processing for:", chat)
       const processed = await this.checkGroupChat(chat, unreadFromChats, gapWarnings);
-      console.log("processed:", processed, chat.id)
       if (processed) {
         checkedChatIds.push(chat.id);
       }
@@ -187,16 +227,11 @@ export class GroupOfflineManager {
 
     for (const epoch of history) {
       const versionMeta = await this.getVersionMeta(chat, epoch.key_version);
-      console.log("epoch", epoch)
-      console.log("chat.id", chat.id)
-      console.log("versionMeta", versionMeta)
       if (this.shouldSkipEpoch(chat, epoch, versionMeta)) {
-        console.log("skipping!")
         continue;
       }
 
       const keyBase64 = this.deps.database.getGroupKeyForEpoch(chat.group_id, epoch.key_version);
-      console.log("does group key for epch exist:", !!keyBase64)
       if (!keyBase64) continue;
 
       const keyBytes = Buffer.from(keyBase64, 'base64');
@@ -214,19 +249,11 @@ export class GroupOfflineManager {
         })
         .filter((item): item is { senderPeerId: string; sender: NonNullable<ReturnType<ChatDatabase['getUserByPeerId']>>; bucketKey: string } => item !== null);
 
-        console.log("Sender descriptors:", senderDescriptors.map(sender => {
-          return {
-            username: sender.sender.username,
-            peerId: sender.senderPeerId,
-            bucketKey: sender.bucketKey
-          }
-        }))
       const senderStores = await Promise.all(senderDescriptors.map(async (desc) => ({
         ...desc,
         store: await this.getLatestStore(desc.bucketKey),
       })));
 
-      console.log("Sender stores length", senderStores.length)
 
       for (const { senderPeerId, sender, store } of senderStores) {
         if (!store || store.messages.length === 0) continue;
@@ -471,6 +498,11 @@ export class GroupOfflineManager {
     }
   }
 
+  private isStoreTooLargeError(error: unknown): boolean {
+    const errorText = error instanceof Error ? error.message : String(error);
+    return errorText.includes('store too large');
+  }
+
   private decryptContent(encryptedContent: string, key: Uint8Array, nonceBase64: string): string {
     const nonce = Buffer.from(nonceBase64, 'base64');
     const encryptedBytes = Buffer.from(encryptedContent, 'base64');
@@ -650,23 +682,40 @@ export class GroupOfflineManager {
           );
           const signedStore = this.signStore(liveMessages, highestSeq, version, bucketKey);
           await this.putStore(bucketKey, signedStore);
+          this.deps.database.saveGroupOfflineSentMessages(bucketKey, liveMessages, version);
           this.setCachedStore(bucketKey, signedStore);
         });
       }
 
-      await this.cleanupConsumedEpochCursors(chat, history);
+      await this.cleanupConsumedEpochState(chat, history);
     }
   }
 
-  private async cleanupConsumedEpochCursors(
+  private async cleanupConsumedEpochState(
     chat: Chat,
     history: Array<{ key_version: number; used_until: number | null }>,
   ): Promise<void> {
     if (!chat.group_id) return;
+
     for (const epoch of history) {
       const versionMeta = await this.getVersionMeta(chat, epoch.key_version);
       if (!this.shouldPruneEpochCursors(chat, epoch, versionMeta)) continue;
+
       this.deps.database.deleteGroupOfflineCursorsForEpoch(chat.group_id, epoch.key_version);
+      this.deps.database.deleteGroupKeyHistoryForEpoch(chat.group_id, epoch.key_version);
+      this.deps.database.deleteGroupSenderSeqForEpoch(chat.group_id, epoch.key_version);
+      this.deps.database.deleteGroupMemberSeqsForEpoch(chat.group_id, epoch.key_version);
+
+      const versionMetaCacheKey = `${chat.group_id}:${epoch.key_version}`;
+      this.versionMetaCache.delete(versionMetaCacheKey);
+
+      const bucketPrefix = `${GROUP_OFFLINE_BUCKET_PREFIX}/${chat.group_id}/${epoch.key_version}/`;
+      this.deps.database.deleteGroupOfflineSentMessagesByPrefix(bucketPrefix);
+      for (const bucketKey of this.localStoreCache.keys()) {
+        if (bucketKey.startsWith(bucketPrefix)) {
+          this.localStoreCache.delete(bucketKey);
+        }
+      }
     }
   }
 
