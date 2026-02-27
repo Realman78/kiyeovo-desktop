@@ -185,11 +185,16 @@ export class GroupOfflineManager {
 
     for (const epoch of history) {
       const versionMeta = await this.getVersionMeta(chat, epoch.key_version);
+      console.log("epoch", epoch)
+      console.log("chat.id", chat.id)
+      console.log("versionMeta", versionMeta)
       if (this.shouldSkipEpoch(chat, epoch, versionMeta)) {
+        console.log("skipping!")
         continue;
       }
 
       const keyBase64 = this.deps.database.getGroupKeyForEpoch(chat.group_id, epoch.key_version);
+      console.log("does group key for epch exist:", !!keyBase64)
       if (!keyBase64) continue;
 
       const keyBytes = Buffer.from(keyBase64, 'base64');
@@ -207,6 +212,7 @@ export class GroupOfflineManager {
         })
         .filter((item): item is { senderPeerId: string; sender: NonNullable<ReturnType<ChatDatabase['getUserByPeerId']>>; bucketKey: string } => item !== null);
 
+        console.log("Sender descriptors:", senderDescriptors)
       const senderStores = await Promise.all(senderDescriptors.map(async (desc) => ({
         ...desc,
         store: await this.getLatestStore(desc.bucketKey),
