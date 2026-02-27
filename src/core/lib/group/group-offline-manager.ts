@@ -68,6 +68,7 @@ export class GroupOfflineManager {
   private readonly versionMetaCache = new Map<string, CachedVersionMetaEntry>();
   private lastCleanupAt = 0;
   private offlineCheckRunCounter = 0;
+  private cleanupInFlight: Promise<void> | null = null;
 
   constructor(deps: GroupOfflineManagerDeps) {
     this.deps = deps;
@@ -185,10 +186,20 @@ export class GroupOfflineManager {
     if (Date.now() - this.lastCleanupAt >= GROUP_OFFLINE_CLEANUP_INTERVAL_MS) {
       this.lastCleanupAt = Date.now();
       const cleanupStart = Date.now();
-      await this.cleanupExpiredBuckets(targetChats);
-      console.log(
-        `[GROUP-OFFLINE][TIMING][RUN:${runId}] cleanupExpiredBuckets took ${Date.now() - cleanupStart}ms`
-      );
+      if (!this.cleanupInFlight) {
+        this.cleanupInFlight = this.cleanupExpiredBuckets(targetChats)
+          .then(() => {
+            console.log(
+              `[GROUP-OFFLINE][TIMING][RUN:${runId}] cleanupExpiredBuckets took ${Date.now() - cleanupStart}ms`
+            );
+          })
+          .catch((error: unknown) => {
+            generalErrorHandler(error, '[GROUP-OFFLINE] cleanupExpiredBuckets failed');
+          })
+          .finally(() => {
+            this.cleanupInFlight = null;
+          });
+      }
     }
 
     for (const chat of targetChats) {
@@ -255,7 +266,10 @@ export class GroupOfflineManager {
       epochsProcessed++;
       const epochStart = Date.now();
       const metaStart = Date.now();
-      const versionMeta = await this.getVersionMeta(chat, epoch.key_version);
+      const isActiveEpoch = epoch.key_version === (chat.key_version ?? 0);
+      const versionMeta = isActiveEpoch
+        ? null
+        : await this.getVersionMeta(chat, epoch.key_version);
       const metaMs = Date.now() - metaStart;
       if (this.shouldSkipEpoch(chat, epoch, versionMeta)) {
         console.log(
@@ -778,6 +792,9 @@ export class GroupOfflineManager {
     if (!chat.group_id) return;
 
     for (const epoch of history) {
+      if (!this.canEpochBePrunedWithoutMeta(chat, epoch)) {
+        continue;
+      }
       const versionMeta = await this.getVersionMeta(chat, epoch.key_version);
       if (!this.shouldPruneEpochCursors(chat, epoch, versionMeta)) continue;
 
@@ -797,6 +814,17 @@ export class GroupOfflineManager {
         }
       }
     }
+  }
+
+  private canEpochBePrunedWithoutMeta(
+    chat: Chat,
+    epoch: { key_version: number; used_until: number | null },
+  ): boolean {
+    if (epoch.key_version >= (chat.key_version ?? 0)) return false;
+    if (epoch.used_until === null) return false;
+
+    const threshold = epoch.used_until + GROUP_ROTATION_GRACE_WINDOW_MS;
+    return Date.now() >= threshold;
   }
 
   private shouldPruneEpochCursors(
