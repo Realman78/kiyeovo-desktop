@@ -160,13 +160,13 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
           key={message.id}
           className={`flex flex-col animate-fade-in ${message.senderPeerId === myPeerId || !!activePendingKeyExchange ? "items-end" : "items-start"}`}
         >
+          {message.senderPeerId !== myPeerId && (index === 0 || message.senderPeerId !== messages[index - 1].senderPeerId) && !!activeChat?.groupId &&
+            <span className="text-xs text-muted-foreground font-mono">{message.senderUsername ?? message.senderPeerId}</span>
+          }
           <div
             className={`max-w-[70%] rounded-lg px-4 py-2.5 ${message.senderPeerId === myPeerId || !!activePendingKeyExchange ? "bg-message-sent text-message-sent-foreground rounded-br-sm" : "bg-message-received text-message-received-foreground rounded-bl-sm"}`}
             style={{ wordBreak: "break-word" }}
           >
-            {messages[index - 1].senderPeerId !== message.senderPeerId && !!activeChat?.groupId &&
-              <span className="text-xs text-muted-foreground font-mono">{message.senderUsername ?? message.senderPeerId}</span>
-            }
             {message.messageType === 'file' && message.fileName ? (
               <FileMessage
                 fileId={message.id}
