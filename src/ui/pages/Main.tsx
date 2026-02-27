@@ -111,6 +111,51 @@ export const Main = () => {
       }));
     });
 
+    // Group members updated — creator/member-side roster changes.
+    // Keep chat status/groupStatus in sync even if this chat is not currently selected.
+    const unsubGroupMembersUpdated = window.kiyeovoAPI.onGroupMembersUpdated((data) => {
+      void (async () => {
+        try {
+          const result = await window.kiyeovoAPI.getChatById(data.chatId);
+          if (!result.success || !result.chat) return;
+
+          const dbChat = result.chat;
+          const existing = store.getState().chat.chats.find(c => c.id === data.chatId);
+
+          if (!existing) {
+            const newChat: Chat = {
+              id: dbChat.id,
+              type: dbChat.type,
+              name: dbChat.type === 'group' ? dbChat.name : (dbChat.username || dbChat.name),
+              groupId: dbChat.group_id,
+              peerId: dbChat.other_peer_id,
+              lastMessage: dbChat.last_message_content || 'SYSTEM: No messages yet',
+              lastMessageTimestamp: dbChat.last_message_timestamp
+                ? new Date(dbChat.last_message_timestamp).getTime()
+                : new Date(dbChat.updated_at).getTime(),
+              unreadCount: 0,
+              status: dbChat.status,
+              fetchedOffline: dbChat.type === 'group',
+              isFetchingOffline: false,
+              groupStatus: dbChat.group_status,
+            };
+            dispatch(addChat(newChat));
+            return;
+          }
+
+          dispatch(updateChat({
+            id: data.chatId,
+            updates: {
+              status: dbChat.status,
+              groupStatus: dbChat.group_status,
+            },
+          }));
+        } catch (error) {
+          console.error(`[UI] Failed to sync group status for chat ${data.chatId}:`, error);
+        }
+      })();
+    });
+
     // Global listener for chat creation - always active regardless of UI state
     const unsubChatCreated = window.kiyeovoAPI.onChatCreated((data) => {
       console.log(`[UI] Chat created: ${data.chatId} for ${data.username} (peerId: ${data.peerId})`);
@@ -244,6 +289,7 @@ export const Main = () => {
       unsubKeyExchangeFailed();
       unsubMessageReceived();
       unsubGroupChatActivated();
+      unsubGroupMembersUpdated();
       unsubChatCreated();
       unsubFileTransferProgress();
       unsubFileTransferComplete();
