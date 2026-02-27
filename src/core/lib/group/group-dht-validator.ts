@@ -7,10 +7,35 @@ import {
   GROUP_INFO_VERSION_PREFIX,
   GROUP_MAX_MESSAGES_PER_SENDER,
 } from '../../constants.js';
-import type { GroupOfflineStore, GroupInfoLatest, GroupInfoVersioned } from './types.js';
+import type {
+  GroupContentMessage,
+  GroupInfoLatest,
+  GroupInfoVersioned,
+  GroupOfflineMessage,
+  GroupOfflineStore,
+} from './types.js';
 
 // --- Group offline bucket validator ---
 // Key format: /kiyeovo-group-offline/<groupId>/<keyVersion>/<senderPubKeyBase64url>
+
+function getOfflineMessageId(message: GroupOfflineMessage): string {
+  return message.messageId ?? message.id;
+}
+
+function toCanonicalUnsignedMessage(message: GroupOfflineMessage): Omit<GroupContentMessage, 'signature'> {
+  return {
+    type: message.type ?? 'GROUP_MESSAGE',
+    groupId: message.groupId,
+    keyVersion: message.keyVersion,
+    senderPeerId: message.senderPeerId,
+    messageId: getOfflineMessageId(message),
+    seq: message.seq,
+    encryptedContent: message.encryptedContent,
+    nonce: message.nonce,
+    timestamp: message.timestamp,
+    messageType: message.messageType ?? 'text',
+  };
+}
 
 export async function groupOfflineMessageValidator(
   key: Uint8Array,
@@ -61,7 +86,7 @@ export async function groupOfflineMessageValidator(
     throw new Error('Store bucketKey mismatch');
   }
 
-  const actualIds = store.messages.map(m => m.id);
+  const actualIds = store.messages.map((m) => getOfflineMessageId(m));
   const signedIds = store.storeSignedPayload.messageIds;
   if (actualIds.length !== signedIds.length || actualIds.some((id, i) => id !== signedIds[i])) {
     throw new Error('Store messageIds mismatch');
@@ -93,27 +118,33 @@ export async function groupOfflineMessageValidator(
   if (!Number.isInteger(pathKeyVersionNum) || pathKeyVersionNum < 1) {
     throw new Error(`Invalid keyVersion in key path: ${pathKeyVersion}`);
   }
+
   for (const msg of store.messages) {
+    const messageId = getOfflineMessageId(msg);
+
     if (!msg.signature) {
-      throw new Error(`Message ${msg.id} missing signature`);
+      throw new Error(`Message ${messageId} missing signature`);
     }
 
     // Verify message groupId and keyVersion match key path
     if (msg.groupId !== pathGroupId) {
-      throw new Error(`Message ${msg.id} groupId mismatch: payload=${msg.groupId}, keyPath=${pathGroupId}`);
+      throw new Error(`Message ${messageId} groupId mismatch: payload=${msg.groupId}, keyPath=${pathGroupId}`);
     }
     if (msg.keyVersion !== pathKeyVersionNum) {
-      throw new Error(`Message ${msg.id} keyVersion mismatch: payload=${msg.keyVersion}, keyPath=${pathKeyVersion}`);
+      throw new Error(`Message ${messageId} keyVersion mismatch: payload=${msg.keyVersion}, keyPath=${pathKeyVersion}`);
     }
 
-    const { signature, ...payload } = msg;
-    const payloadBytes = new TextEncoder().encode(JSON.stringify(payload));
-    const sigBytes = Buffer.from(signature, 'base64');
+    const canonicalUnsigned = toCanonicalUnsignedMessage(msg);
+    const payloadBytes = new TextEncoder().encode(JSON.stringify(canonicalUnsigned));
+    const sigBytes = Buffer.from(msg.signature, 'base64');
 
     if (!ed25519.verify(sigBytes, payloadBytes, senderPubKey)) {
-      throw new Error(`Message ${msg.id} signature verification failed`);
+      throw new Error(`Message ${messageId} signature verification failed`);
     }
   }
+  console.log(
+    `DHT validator: accepted write to ${keyStr.slice(0, 80)}... with ${store.messages.length} messages`
+  );
 }
 
 // --- Group offline bucket selector ---

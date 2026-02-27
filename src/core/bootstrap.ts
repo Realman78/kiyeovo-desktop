@@ -23,6 +23,7 @@ import {
 } from './constants.js';
 import { filterOnionAddressesMapper } from './utils/miscellaneous.js';
 import { offlineMessageSelector, offlineMessageValidateUpdate, offlineMessageValidator } from './lib/offline-message-validator.js';
+import { groupOfflineMessageValidator, groupInfoLatestValidator, groupInfoVersionedValidator, groupOfflineMessageSelector, groupInfoLatestSelector, groupOfflineValidateUpdate, groupInfoLatestValidateUpdate, groupInfoVersionedValidateUpdate } from './lib/group/group-dht-validator.js';
 
 dotenv.config();
 
@@ -114,21 +115,31 @@ async function createBootstrapNode(): Promise<ChatNode> {
         clientMode: false,
         kBucketSize: K_BUCKET_SIZE,
         prefixLength: PREFIX_LENGTH,
-        // DHT validators: verify write authorization for offline message buckets
         validators: {
-          'kiyeovo-offline': offlineMessageValidator
+          'kiyeovo-offline': offlineMessageValidator,
+          'kiyeovo-group-offline': groupOfflineMessageValidator,
+          'kiyeovo-group-info-latest': groupInfoLatestValidator,
+          'kiyeovo-group-info-v': groupInfoVersionedValidator,
         },
-        // DHT selectors: choose best record when multiple exist
         selectors: {
-          'kiyeovo-offline': offlineMessageSelector
+          'kiyeovo-offline': offlineMessageSelector,
+          'kiyeovo-group-offline': groupOfflineMessageSelector,
+          'kiyeovo-group-info-latest': groupInfoLatestSelector,
         },
-        // DHT validateUpdate: reject stale record overwrites (forked kad-dht feature)
         validateUpdate: async (key, existing, incoming) => {
           const keyStr = new TextDecoder().decode(key);
           if (keyStr.startsWith('/kiyeovo-offline/')) {
             return offlineMessageValidateUpdate(key, existing, incoming);
           }
-          // Unknown prefix — allow the write
+          if (keyStr.startsWith('/kiyeovo-group-offline/')) {
+            return groupOfflineValidateUpdate(key, existing, incoming);
+          }
+          if (keyStr.startsWith('/kiyeovo-group-info-latest/')) {
+            return groupInfoLatestValidateUpdate(key, existing, incoming);
+          }
+          if (keyStr.startsWith('/kiyeovo-group-info-v/')) {
+            return groupInfoVersionedValidateUpdate(key, existing, incoming);
+          }
         }
       }),
       identify: identify({
