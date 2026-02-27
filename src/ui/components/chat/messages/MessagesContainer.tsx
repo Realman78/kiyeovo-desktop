@@ -91,9 +91,9 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
       const timeout = setTimeout(() => {
         if (messages.length === 0) {
           console.log(`[MessagesContainer] Clearing justCreated flag for chat ${activeChat.id} after timeout`);
-          dispatch(updateChat({ 
-            id: activeChat.id, 
-            updates: { justCreated: false } 
+          dispatch(updateChat({
+            id: activeChat.id,
+            updates: { justCreated: false }
           }));
         }
       }, 10000);
@@ -123,8 +123,8 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
                 Created chat with trusted user {activeChat?.username}
               </div>
               <div className="text-muted-foreground text-xs">
-                If {activeChat?.username || activeChat.peerId || "the other user" } imported your profile, you can start sending messages. <br />
-                If {activeChat?.username || activeChat.peerId || "the other user" } did not import your profile, any messages you send will be lost.
+                If {activeChat?.username || activeChat.peerId || "the other user"} imported your profile, you can start sending messages. <br />
+                If {activeChat?.username || activeChat.peerId || "the other user"} did not import your profile, any messages you send will be lost.
               </div>
             </>
           ) : (
@@ -164,6 +164,9 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
             className={`max-w-[70%] rounded-lg px-4 py-2.5 ${message.senderPeerId === myPeerId || !!activePendingKeyExchange ? "bg-message-sent text-message-sent-foreground rounded-br-sm" : "bg-message-received text-message-received-foreground rounded-bl-sm"}`}
             style={{ wordBreak: "break-word" }}
           >
+            {messages[index - 1].senderPeerId !== message.senderPeerId && !!activeChat?.groupId &&
+              <span className="text-xs text-muted-foreground font-mono">{message.senderUsername ?? message.senderPeerId}</span>
+            }
             {message.messageType === 'file' && message.fileName ? (
               <FileMessage
                 fileId={message.id}
