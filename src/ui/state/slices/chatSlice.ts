@@ -160,12 +160,14 @@ const chatSlice = createSlice({
       const isDuplicate = state.messages.some(msg => msg.id === id);
 
       // Reconcile optimistic local message with authoritative sender-echo message.
+      // Match only the currently in-flight local message ("sending") to avoid
+      // ambiguity when same content is queued multiple times.
       if (!isDuplicate && isFromCurrentUser) {
         const pendingIndex = state.messages.findIndex((msg) =>
           msg.chatId === chatId &&
           msg.senderPeerId === action.payload.senderPeerId &&
           msg.content === action.payload.content &&
-          (msg.localSendState === 'queued' || msg.localSendState === 'sending') &&
+          msg.localSendState === 'sending' &&
           msg.id.startsWith('local-send-')
         );
 
