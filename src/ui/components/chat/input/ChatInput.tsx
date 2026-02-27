@@ -1,19 +1,22 @@
 import { useState, useEffect, useRef, type FC } from "react";
 import { Button } from "../../ui/Button";
-import { Loader2, Paperclip, Send } from "lucide-react";
+import { Paperclip, Send } from "lucide-react";
 import { Input } from "../../ui/Input";
 import { useToast } from "../../ui/use-toast";
 import { useDispatch, useSelector } from "react-redux";
 import type { RootState } from "../../../state/store";
 import { SendFileDialog } from "./SendFileDialog";
-import { addMessage, removeMessageById, updateChat, updateFileTransferStatus } from "../../../state/slices/chatSlice";
+import { addMessage, removeMessageById, updateChat, updateFileTransferStatus, updateLocalMessageSendState } from "../../../state/slices/chatSlice";
 import { FILE_ACCEPTANCE_TIMEOUT } from "../../../constants";
+
+type PendingSendJob =
+    | { type: 'direct'; chatId: number; peerId: string; content: string; localMessageId: string }
+    | { type: 'group'; chatId: number; content: string; localMessageId: string };
 
 export const ChatInput: FC = () => {
     const { toast } = useToast();
     const dispatch = useDispatch();
     const [draftByChatId, setDraftByChatId] = useState<Record<number, string>>({});
-    const [isSendingByChatId, setIsSendingByChatId] = useState<Record<number, boolean>>({});
     const [fileDialogOpen, setFileDialogOpen] = useState(false);
     const activeChat = useSelector((state: RootState) => state.chat.activeChat);
     const myPeerId = useSelector((state: RootState) => state.user.peerId);
@@ -21,6 +24,8 @@ export const ChatInput: FC = () => {
     const isBlocked = activeChat?.blocked || false;
     const isGroupPending = activeChat?.type === 'group' && activeChat?.groupStatus !== 'active';
     const isDisabled = isBlocked || isGroupPending;
+    const sendQueueRef = useRef<Record<number, PendingSendJob[]>>({});
+    const processingQueueRef = useRef<Record<number, boolean>>({});
     const inputRef = useRef<HTMLInputElement>(null);
 
     // Auto-focus input when chat changes
@@ -32,43 +37,35 @@ export const ChatInput: FC = () => {
 
     const activeChatId = activeChat?.id;
     const inputQuery = activeChatId ? (draftByChatId[activeChatId] ?? "") : "";
-    const isSending = activeChatId ? Boolean(isSendingByChatId[activeChatId]) : false;
-
-    const setSendingForChat = (chatId: number, isSendingNow: boolean) => {
-        setIsSendingByChatId((prev) => ({ ...prev, [chatId]: isSendingNow }));
-    };
 
     const setDraftForChat = (chatId: number, value: string) => {
         setDraftByChatId((prev) => ({ ...prev, [chatId]: value }));
     };
 
-    const handleSendMessage = async (peerIdOrUsername: string, messageContent: string, chatId: number) => {
+    const performSendMessage = async (peerIdOrUsername: string, messageContent: string): Promise<boolean> => {
         try {
             const { success, error } = await window.kiyeovoAPI.sendMessage(peerIdOrUsername, messageContent);
 
             if (!success) {
                 toast.error(error || 'Failed to send message');
+                return false;
             }
+            return true;
             // Note: Message will be added to Redux via onMessageReceived event in Main.tsx
             // This ensures single source of truth and correct sender information
         } catch (err) {
             console.error('Failed to send message:', err);
             toast.error(err instanceof Error ? err.message : 'Unexpected error occurred');
-        } finally {
-            setSendingForChat(chatId, false);
-            setTimeout(() => {
-                if (activeChat?.id === chatId) {
-                    inputRef.current?.focus();
-                }
-            }, 200)
+            return false;
         }
     };
 
-    const handleSendGroupMessage = async (chatId: number, messageContent: string) => {
+    const performSendGroupMessage = async (chatId: number, messageContent: string): Promise<boolean> => {
         try {
             const { success, error, warning, offlineBackupRetry } = await window.kiyeovoAPI.sendGroupMessage(chatId, messageContent);
             if (!success) {
                 toast.error(error || 'Failed to send group message');
+                return false;
             } else if (warning && offlineBackupRetry) {
                 toast.warningAction(
                     warning,
@@ -86,17 +83,50 @@ export const ChatInput: FC = () => {
                     },
                 );
             }
+            return true;
         } catch (err) {
             console.error('Failed to send group message:', err);
             toast.error(err instanceof Error ? err.message : 'Unexpected error occurred');
+            return false;
+        }
+    };
+
+    const processQueueForChat = async (chatId: number) => {
+        if (processingQueueRef.current[chatId]) return;
+        processingQueueRef.current[chatId] = true;
+
+        try {
+            while ((sendQueueRef.current[chatId]?.length ?? 0) > 0) {
+                const next = sendQueueRef.current[chatId]!.shift()!;
+                dispatch(updateLocalMessageSendState({ messageId: next.localMessageId, state: 'sending' }));
+
+                let success = false;
+                if (next.type === 'group') {
+                    success = await performSendGroupMessage(next.chatId, next.content);
+                } else {
+                    success = await performSendMessage(next.peerId, next.content);
+                }
+
+                if (!success) {
+                    dispatch(updateLocalMessageSendState({ messageId: next.localMessageId, state: 'failed' }));
+                }
+            }
         } finally {
-            setSendingForChat(chatId, false);
+            processingQueueRef.current[chatId] = false;
             setTimeout(() => {
                 if (activeChat?.id === chatId) {
                     inputRef.current?.focus();
                 }
             }, 200);
         }
+    };
+
+    const enqueueSendJob = (job: PendingSendJob) => {
+        if (!sendQueueRef.current[job.chatId]) {
+            sendQueueRef.current[job.chatId] = [];
+        }
+        sendQueueRef.current[job.chatId].push(job);
+        void processQueueForChat(job.chatId);
     };
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -110,17 +140,31 @@ export const ChatInput: FC = () => {
             return;
         }
         const chatId = activeChat.id;
-        setSendingForChat(chatId, true);
+        const messageContent = inputQuery.trim();
+        const localMessageId = `local-send-${chatId}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+        dispatch(addMessage({
+            id: localMessageId,
+            chatId,
+            senderPeerId: myPeerId || '',
+            senderUsername: myUsername || 'You',
+            content: messageContent,
+            timestamp: Date.now(),
+            messageType: 'text',
+            messageSentStatus: null,
+            currentUserPeerId: myPeerId,
+            localSendState: 'queued',
+        }));
 
         if (activeChat.type === 'group') {
-            await handleSendGroupMessage(chatId, inputQuery);
+            enqueueSendJob({ type: 'group', chatId, content: messageContent, localMessageId });
         } else {
             if (!activeChat.peerId) {
                 toast.error('No peer ID found for active chat');
-                setSendingForChat(chatId, false);
+                dispatch(updateLocalMessageSendState({ messageId: localMessageId, state: 'failed' }));
                 return;
             }
-            await handleSendMessage(activeChat.peerId, inputQuery, chatId);
+            enqueueSendJob({ type: 'direct', chatId, peerId: activeChat.peerId, content: messageContent, localMessageId });
         }
         setDraftForChat(chatId, '');
     };
@@ -224,7 +268,7 @@ export const ChatInput: FC = () => {
                 type="button"
                 variant="ghost"
                 size="icon"
-                disabled={isSending || isDisabled}
+                disabled={isDisabled}
                 onClick={() => setFileDialogOpen(true)}
                 className="text-sidebar-foreground hover:text-foreground"
             >
@@ -235,7 +279,7 @@ export const ChatInput: FC = () => {
                 placeholder={isBlocked ? "Cannot send messages to blocked users" : isGroupPending ? "Waiting for members to join..." : "Type a message..."}
                 parentClassName="flex flex-1 w-full"
                 value={inputQuery}
-                disabled={isSending || isDisabled}
+                disabled={isDisabled}
                 onChange={(e) => {
                     if (!activeChat) return;
                     setDraftForChat(activeChat.id, e.target.value);
@@ -243,10 +287,10 @@ export const ChatInput: FC = () => {
             />
             <Button
                 type="submit"
-                disabled={!inputQuery.trim() || isSending || isDisabled}
+                disabled={!inputQuery.trim() || isDisabled}
                 size="icon"
             >
-                {isSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                <Send className="w-4 h-4" />
             </Button>
         </form>
 

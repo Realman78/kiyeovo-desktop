@@ -28,6 +28,7 @@ export interface ChatMessage {
   transferProgress?: number; // Percentage 0-100
   transferError?: string;
   transferExpiresAt?: number;
+  localSendState?: 'queued' | 'sending' | 'failed';
 }
 
 export interface Chat {
@@ -71,6 +72,39 @@ const initialState: ChatState = {
   pendingKeyExchanges: [],
   messages: [],
   loading: false,
+};
+
+const compareMessageOrder = (a: ChatMessage, b: ChatMessage): number => {
+  return a.timestamp - b.timestamp;
+};
+
+const sortChatMessagesInPlace = (messages: ChatMessage[], chatId: number): void => {
+  const chatIndexes: number[] = [];
+  const chatMessages: ChatMessage[] = [];
+
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i].chatId === chatId) {
+      chatIndexes.push(i);
+      chatMessages.push(messages[i]);
+    }
+  }
+
+  if (chatMessages.length <= 1) return;
+  chatMessages.sort(compareMessageOrder);
+
+  for (let i = 0; i < chatIndexes.length; i++) {
+    messages[chatIndexes[i]] = chatMessages[i];
+  }
+};
+
+const getLastChatMessage = (messages: ChatMessage[], chatId: number, excludeId?: string): ChatMessage | null => {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.chatId !== chatId) continue;
+    if (excludeId && msg.id === excludeId) continue;
+    return msg;
+  }
+  return null;
 };
 
 const chatSlice = createSlice({
@@ -117,15 +151,53 @@ const chatSlice = createSlice({
     },
     addMessage: (state, action: PayloadAction<ChatMessage>) => {
       const { chatId, id } = action.payload;
+      const isFromCurrentUser = action.payload.currentUserPeerId &&
+                                 action.payload.senderPeerId === action.payload.currentUserPeerId;
+      let insertedOrUpdated = false;
+      let shouldSortForChat = false;
 
       // Check if message already exists (prevent duplicates)
       const isDuplicate = state.messages.some(msg => msg.id === id);
 
-      if (isDuplicate) {
+      // Reconcile optimistic local message with authoritative sender-echo message.
+      if (!isDuplicate && isFromCurrentUser) {
+        const pendingIndex = state.messages.findIndex((msg) =>
+          msg.chatId === chatId &&
+          msg.senderPeerId === action.payload.senderPeerId &&
+          msg.content === action.payload.content &&
+          (msg.localSendState === 'queued' || msg.localSendState === 'sending') &&
+          msg.id.startsWith('local-send-')
+        );
+
+        if (pendingIndex !== -1) {
+          state.messages[pendingIndex] = {
+            ...state.messages[pendingIndex],
+            ...action.payload,
+            localSendState: undefined,
+          };
+          insertedOrUpdated = true;
+          shouldSortForChat = true; // replacement can shift timestamp/order
+        } else {
+          state.messages.push(action.payload);
+          insertedOrUpdated = true;
+        }
+      } else if (isDuplicate) {
         console.log(`[Redux] Message ${id} already exists, skipping duplicate but updating chat metadata`);
       } else {
         // Only add to array if not duplicate
         state.messages.push(action.payload);
+        insertedOrUpdated = true;
+      }
+
+      if (insertedOrUpdated) {
+        const chat = state.chats.find((c) => c.id === chatId);
+        const lastMessageBeforeInsert = getLastChatMessage(state.messages, chatId, id);
+        const isOutOfOrder =
+          !!lastMessageBeforeInsert && compareMessageOrder(lastMessageBeforeInsert, action.payload) > 0;
+
+        if (chat?.isFetchingOffline || shouldSortForChat || isOutOfOrder) {
+          sortChatMessagesInPlace(state.messages, chatId);
+        }
       }
 
       // ALWAYS update chat metadata (even for duplicates)
@@ -146,8 +218,6 @@ const chatSlice = createSlice({
         // - Not a duplicate (already counted)
         // - Chat is not active
         // - Message is not from current user
-        const isFromCurrentUser = action.payload.currentUserPeerId &&
-                                   action.payload.senderPeerId === action.payload.currentUserPeerId;
         if (!isDuplicate && state.activeChat?.id !== chatId && !isFromCurrentUser) {
           chat.unreadCount += 1;
         }
@@ -226,7 +296,7 @@ const chatSlice = createSlice({
       }
     },
     setMessages: (state, action: PayloadAction<ChatMessage[]>) => {
-      state.messages = action.payload;
+      state.messages = [...action.payload].sort(compareMessageOrder);
     },
     setPendingKeyExchanges: (state, action: PayloadAction<PendingKeyExchange[]>) => {
       state.pendingKeyExchanges = action.payload;
@@ -306,6 +376,12 @@ const chatSlice = createSlice({
         message.transferError = action.payload.error;
       }
     },
+    updateLocalMessageSendState: (state, action: PayloadAction<{ messageId: string; state: 'queued' | 'sending' | 'failed' }>) => {
+      const message = state.messages.find((m) => m.id === action.payload.messageId);
+      if (message) {
+        message.localSendState = action.payload.state;
+      }
+    },
     setPendingFileStatus: (state, action: PayloadAction<{ chatId: number; hasPendingFile: boolean }>) => {
       const chat = state.chats.find((c) => c.id === action.payload.chatId);
       if (chat) {
@@ -338,6 +414,7 @@ export const {
   updateFileTransferProgress,
   updateFileTransferStatus,
   updateFileTransferError,
+  updateLocalMessageSendState,
   setPendingFileStatus,
   removeMessageById
 } = chatSlice.actions;

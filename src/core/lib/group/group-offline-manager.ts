@@ -67,6 +67,7 @@ export class GroupOfflineManager {
   private readonly localStoreCache = new Map<string, CachedStoreEntry>();
   private readonly versionMetaCache = new Map<string, CachedVersionMetaEntry>();
   private lastCleanupAt = 0;
+  private offlineCheckRunCounter = 0;
 
   constructor(deps: GroupOfflineManagerDeps) {
     this.deps = deps;
@@ -169,23 +170,46 @@ export class GroupOfflineManager {
   }
 
   async checkGroupOfflineMessages(chatIds?: number[]): Promise<GroupOfflineCheckResult> {
+    const runId = ++this.offlineCheckRunCounter;
+    const runStart = Date.now();
     this.pruneLocalCaches();
     const unreadFromChats = new Map<number, number>();
     const gapWarnings: GroupOfflineGapWarning[] = [];
     const checkedChatIds: number[] = [];
     const targetChats = this.resolveTargetChats(chatIds);
+    console.log(
+      `[GROUP-OFFLINE][TIMING][RUN:${runId}] start targetChats=${targetChats.length} ` +
+      `chatIds=${targetChats.map((c) => c.id).join(',') || 'none'}`
+    );
 
     if (Date.now() - this.lastCleanupAt >= GROUP_OFFLINE_CLEANUP_INTERVAL_MS) {
       this.lastCleanupAt = Date.now();
+      const cleanupStart = Date.now();
       await this.cleanupExpiredBuckets(targetChats);
+      console.log(
+        `[GROUP-OFFLINE][TIMING][RUN:${runId}] cleanupExpiredBuckets took ${Date.now() - cleanupStart}ms`
+      );
     }
 
     for (const chat of targetChats) {
+      const chatStart = Date.now();
+      const unreadBefore = unreadFromChats.get(chat.id) ?? 0;
       const processed = await this.checkGroupChat(chat, unreadFromChats, gapWarnings);
+      const unreadAfter = unreadFromChats.get(chat.id) ?? 0;
+      console.log(
+        `[GROUP-OFFLINE][TIMING][RUN:${runId}] chat=${chat.id} processed=${processed} ` +
+        `unreadAdded=${Math.max(0, unreadAfter - unreadBefore)} took=${Date.now() - chatStart}ms`
+      );
       if (processed) {
         checkedChatIds.push(chat.id);
       }
     }
+
+    const totalUnread = Array.from(unreadFromChats.values()).reduce((sum, count) => sum + count, 0);
+    console.log(
+      `[GROUP-OFFLINE][TIMING][RUN:${runId}] done checkedChats=${checkedChatIds.length} ` +
+      `totalUnread=${totalUnread} gaps=${gapWarnings.length} took=${Date.now() - runStart}ms`
+    );
 
     return {
       checkedChatIds,
@@ -219,15 +243,25 @@ export class GroupOfflineManager {
     gapWarnings: GroupOfflineGapWarning[],
   ): Promise<boolean> {
     if (!chat.group_id) return false;
+    const chatStart = Date.now();
 
     let sawAnyStore = false;
+    let epochsProcessed = 0;
     const history = this.deps.database.getGroupKeyHistory(chat.group_id)
       .filter(h => h.key_version <= (chat.key_version ?? 0))
       .sort((a, b) => a.key_version - b.key_version);
 
     for (const epoch of history) {
+      epochsProcessed++;
+      const epochStart = Date.now();
+      const metaStart = Date.now();
       const versionMeta = await this.getVersionMeta(chat, epoch.key_version);
+      const metaMs = Date.now() - metaStart;
       if (this.shouldSkipEpoch(chat, epoch, versionMeta)) {
+        console.log(
+          `[GROUP-OFFLINE][TIMING][CHAT:${chat.id}] epoch=${epoch.key_version} skipped ` +
+          `metaMs=${metaMs} totalMs=${Date.now() - epochStart}`
+        );
         continue;
       }
 
@@ -249,13 +283,17 @@ export class GroupOfflineManager {
         })
         .filter((item): item is { senderPeerId: string; sender: NonNullable<ReturnType<ChatDatabase['getUserByPeerId']>>; bucketKey: string } => item !== null);
 
+      const storesFetchStart = Date.now();
       const senderStores = await Promise.all(senderDescriptors.map(async (desc) => ({
         ...desc,
         store: await this.getLatestStore(desc.bucketKey),
       })));
+      const storesFetchMs = Date.now() - storesFetchStart;
 
+      let epochMessagesDelivered = 0;
 
       for (const { senderPeerId, sender, store } of senderStores) {
+        const senderStart = Date.now();
         if (!store || store.messages.length === 0) continue;
 
         sawAnyStore = true;
@@ -267,6 +305,10 @@ export class GroupOfflineManager {
         let lastReadMessageId = cursor?.last_read_message_id ?? '';
         let highestSeenSeq = this.deps.database.getMemberSeq(chat.group_id, epoch.key_version, senderPeerId);
         const senderBoundary = versionMeta?.senderSeqBoundaries?.[senderPeerId];
+        let deliveredForSender = 0;
+        let skippedSeen = 0;
+        let skippedInvalidSignature = 0;
+        let skippedByBoundary = 0;
 
         for (const msg of orderedMessages) {
           if (msg.groupId !== chat.group_id || msg.keyVersion !== epoch.key_version) continue;
@@ -278,15 +320,18 @@ export class GroupOfflineManager {
           }
 
           if (senderBoundary !== undefined && msg.seq > senderBoundary) {
+            skippedByBoundary++;
             continue;
           }
 
           if (!this.verifyOfflineMessageSignature(msg, sender.signing_public_key)) {
+            skippedInvalidSignature++;
             continue;
           }
 
           if (msg.seq <= highestSeenSeq) {
             ({ lastReadTs, lastReadMessageId } = this.advanceCursor(lastReadTs, lastReadMessageId, msg));
+            skippedSeen++;
             continue;
           }
 
@@ -324,6 +369,8 @@ export class GroupOfflineManager {
 
             const unread = unreadFromChats.get(chat.id) ?? 0;
             unreadFromChats.set(chat.id, unread + 1);
+            deliveredForSender++;
+            epochMessagesDelivered++;
 
             this.deps.onMessageReceived({
               chatId: chat.id,
@@ -347,8 +394,25 @@ export class GroupOfflineManager {
           lastReadTs,
           lastReadMessageId,
         );
+        console.log(
+          `[GROUP-OFFLINE][TIMING][CHAT:${chat.id}] epoch=${epoch.key_version} sender=${sender.username} ` +
+          `bucketMessages=${orderedMessages.length} delivered=${deliveredForSender} skippedSeen=${skippedSeen} ` +
+          `skippedBoundary=${skippedByBoundary} skippedSig=${skippedInvalidSignature} ` +
+          `took=${Date.now() - senderStart}ms`
+        );
       }
+
+      console.log(
+        `[GROUP-OFFLINE][TIMING][CHAT:${chat.id}] epoch=${epoch.key_version} ` +
+        `metaMs=${metaMs} storeFetchMs=${storesFetchMs} senderBuckets=${senderStores.length} ` +
+        `delivered=${epochMessagesDelivered} totalMs=${Date.now() - epochStart}`
+      );
     }
+
+    console.log(
+      `[GROUP-OFFLINE][TIMING][CHAT:${chat.id}] done epochs=${epochsProcessed} ` +
+      `sawAnyStore=${sawAnyStore} totalMs=${Date.now() - chatStart}ms`
+    );
 
     return sawAnyStore;
   }
@@ -443,15 +507,23 @@ export class GroupOfflineManager {
   }
 
   private async getLatestStore(bucketKey: string): Promise<GroupOfflineStore | null> {
+    const startedAt = Date.now();
     const cached = this.getCachedStore(bucketKey);
-    if (cached) return cached;
+    if (cached) {
+      console.log(
+        `[GROUP-OFFLINE][TIMING][STORE] bucket=*${bucketKey.slice(-10)} cacheHit=true took=${Date.now() - startedAt}ms`
+      );
+      return cached;
+    }
 
     const key = new TextEncoder().encode(bucketKey);
     let best: GroupOfflineStore | null = null;
+    let valueEvents = 0;
 
     try {
       for await (const event of this.deps.node.services.dht.get(key) as AsyncIterable<QueryEvent>) {
         if (event.name !== 'VALUE' || event.value.length === 0) continue;
+        valueEvents++;
         try {
           const decompressed = await gunzipAsync(Buffer.from(event.value));
           const store = JSON.parse(decompressed.toString('utf8')) as GroupOfflineStore;
@@ -467,12 +539,20 @@ export class GroupOfflineManager {
         }
       }
     } catch {
+      console.log(
+        `[GROUP-OFFLINE][TIMING][STORE] bucket=*${bucketKey.slice(-10)} cacheHit=false dhtError=true ` +
+        `valueEvents=${valueEvents} took=${Date.now() - startedAt}ms`
+      );
       return null;
     }
 
     if (best) {
       this.setCachedStore(bucketKey, best);
     }
+    console.log(
+      `[GROUP-OFFLINE][TIMING][STORE] bucket=*${bucketKey.slice(-10)} cacheHit=false hasStore=${!!best} ` +
+      `valueEvents=${valueEvents} took=${Date.now() - startedAt}ms`
+    );
     return best;
   }
 

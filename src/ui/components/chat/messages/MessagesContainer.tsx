@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { setMessages, updateChat, type ChatMessage } from "../../../state/slices/chatSlice";
+import { setMessages, updateChat, updateLocalMessageSendState, type ChatMessage } from "../../../state/slices/chatSlice";
 import type { RootState } from "../../../state/store";
 import { useDispatch, useSelector } from "react-redux";
 import { formatTimestampToHourMinute } from "../../../utils/dateUtils";
@@ -7,6 +7,8 @@ import { PendingNotifications } from "./PendingNotifications";
 import { FileMessage } from "./FileMessage";
 import type { MessageSentStatus } from "../../../types";
 import { FILE_ACCEPTANCE_TIMEOUT, SHOW_TIMESTAMP_INTERVAL } from "../../../constants";
+import { Loader2 } from "lucide-react";
+import { useToast } from "../../ui/use-toast";
 
 type MessagesContainerProps = {
   messages: ChatMessage[];
@@ -18,6 +20,7 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
   const activeChat = useSelector((state: RootState) => state.chat.activeChat);
   const activePendingKeyExchange = useSelector((state: RootState) => state.chat.activePendingKeyExchange);
   const dispatch = useDispatch();
+  const { toast } = useToast();
 
   const [error, setError] = useState<string | null>(null);
 
@@ -115,6 +118,55 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
   let previousSenderPeerId: string | null = null;
   let senderStreak = 0;
 
+  const handleRetryFailedMessage = async (message: ChatMessage) => {
+    if (!activeChat) return;
+    dispatch(updateLocalMessageSendState({ messageId: message.id, state: 'sending' }));
+
+    try {
+      if (activeChat.type === 'group') {
+        const { success, error, warning, offlineBackupRetry } = await window.kiyeovoAPI.sendGroupMessage(activeChat.id, message.content);
+        if (!success) {
+          dispatch(updateLocalMessageSendState({ messageId: message.id, state: 'failed' }));
+          toast.error(error || 'Failed to resend group message');
+          return;
+        }
+        if (warning && offlineBackupRetry) {
+          toast.warningAction(
+            warning,
+            'Try again',
+            async () => {
+              const retry = await window.kiyeovoAPI.retryGroupOfflineBackup(
+                offlineBackupRetry.chatId,
+                offlineBackupRetry.messageId,
+              );
+              if (retry.success) {
+                toast.success('Group offline backup synced');
+              } else {
+                toast.error(retry.error || 'Failed to retry group offline backup');
+              }
+            },
+          );
+        }
+        return;
+      }
+
+      if (!activeChat.peerId) {
+        dispatch(updateLocalMessageSendState({ messageId: message.id, state: 'failed' }));
+        toast.error('No peer ID found for active chat');
+        return;
+      }
+
+      const { success, error } = await window.kiyeovoAPI.sendMessage(activeChat.peerId, message.content);
+      if (!success) {
+        dispatch(updateLocalMessageSendState({ messageId: message.id, state: 'failed' }));
+        toast.error(error || 'Failed to resend message');
+      }
+    } catch (err) {
+      dispatch(updateLocalMessageSendState({ messageId: message.id, state: 'failed' }));
+      toast.error(err instanceof Error ? err.message : 'Unexpected resend error');
+    }
+  };
+
   return <div className={`flex-1 overflow-y-auto p-6 space-y-2`}>
     {showEmptyState && (
       <div className="w-full flex justify-center items-center h-full">
@@ -161,7 +213,9 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
 
       const senderChanged =
         index === 0 || messages[index - 1].senderPeerId !== message.senderPeerId;
+      const hasPendingSendState = !!message.localSendState;
       const showTimestamp =
+        hasPendingSendState ||
         senderChanged ||
         message.timestamp - messages[index - 1].timestamp > SHOW_TIMESTAMP_INTERVAL;
       const showSenderLabel =
@@ -199,9 +253,30 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
             )}
           </div>
           {showTimestamp && (
-            <span className="text-xs text-muted-foreground mt-1 font-mono">
+            <span className="text-xs text-muted-foreground mt-1 font-mono inline-flex items-center gap-1">
               {formatTimestampToHourMinute(message.timestamp)}
-              {message.messageSentStatus === 'offline' && " • offline"}
+              {message.localSendState === 'sending' && (
+                <>
+                  <span>•</span>
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  <span>Sending...</span>
+                </>
+              )}
+              {message.localSendState === 'queued' && " • Queued for sending"}
+              {message.localSendState === 'failed' && " • Failed to send"}
+              {!message.localSendState && message.messageSentStatus === 'offline' && " • offline"}
+              {message.localSendState === 'failed' && (
+                <>
+                  <span>•</span>
+                  <button
+                    type="button"
+                    className="underline underline-offset-2 hover:text-foreground"
+                    onClick={() => { void handleRetryFailedMessage(message); }}
+                  >
+                    Retry
+                  </button>
+                </>
+              )}
             </span>
           )}
         </div>
