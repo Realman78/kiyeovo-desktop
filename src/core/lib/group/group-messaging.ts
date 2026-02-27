@@ -180,7 +180,25 @@ export class GroupMessaging {
     };
 
     const payloadBytes = new TextEncoder().encode(JSON.stringify(signedMessage));
-    await this.publishWithRetry(ctx, payloadBytes);
+    const publishedOnline = await this.publishWithRetry(ctx, payloadBytes);
+
+    let warning: string | null = publishedOnline
+      ? null
+      : 'No online group peers subscribed; queued for offline delivery.';
+    let offlineBackupRetry: { chatId: number; messageId: string } | null = null;
+    try {
+      await this.deps.groupOfflineManager.storeGroupMessage(signedMessage);
+      this.pendingOfflineBackups.delete(signedMessage.messageId);
+    } catch (error: unknown) {
+      const errorText = error instanceof Error ? error.message : String(error);
+      if (!publishedOnline) {
+        throw new Error(`Failed to deliver group message: no online peers and offline backup failed: ${errorText}`);
+      }
+      warning = `Message delivered online, but offline group backup failed: ${errorText}`;
+      offlineBackupRetry = { chatId: ctx.chatId, messageId: signedMessage.messageId };
+      this.pendingOfflineBackups.set(signedMessage.messageId, signedMessage);
+      console.warn(`[GROUP-OFFLINE] ${warning}`);
+    }
 
     // emitSelf=true can deliver our own publish back before this point
     if (!this.deps.database.messageExists(signedMessage.messageId)) {
@@ -201,22 +219,9 @@ export class GroupMessaging {
         senderPeerId: this.deps.myPeerId,
         senderUsername: this.deps.myUsername,
         timestamp,
-        messageSentStatus: 'online',
+        messageSentStatus: publishedOnline ? 'online' : 'offline',
         messageType: 'text',
       });
-    }
-
-    let warning: string | null = null;
-    let offlineBackupRetry: { chatId: number; messageId: string } | null = null;
-    try {
-      await this.deps.groupOfflineManager.storeGroupMessage(signedMessage);
-      this.pendingOfflineBackups.delete(signedMessage.messageId);
-    } catch (error: unknown) {
-      const errorText = error instanceof Error ? error.message : String(error);
-      warning = `Message delivered online, but offline group backup failed: ${errorText}`;
-      offlineBackupRetry = { chatId: ctx.chatId, messageId: signedMessage.messageId };
-      this.pendingOfflineBackups.set(signedMessage.messageId, signedMessage);
-      console.warn(`[GROUP-OFFLINE] ${warning}`);
     }
 
     const strippedMessage: StrippedMessage = {
@@ -230,7 +235,7 @@ export class GroupMessaging {
     return {
       success: true,
       message: strippedMessage,
-      messageSentStatus: 'online',
+      messageSentStatus: publishedOnline ? 'online' : 'offline',
       error: null,
       warning,
       offlineBackupRetry,
@@ -279,10 +284,10 @@ export class GroupMessaging {
     this.groupTopics.set(groupId, topic);
   }
 
-  private async publishWithRetry(ctx: GroupContext, payload: Uint8Array): Promise<void> {
+  private async publishWithRetry(ctx: GroupContext, payload: Uint8Array): Promise<boolean> {
     try {
       await this.publish(ctx.topic, payload);
-      return;
+      return true;
     } catch (firstError: unknown) {
       if (!this.isRetryablePublishError(firstError)) {
         throw firstError;
@@ -298,7 +303,20 @@ export class GroupMessaging {
     await new Promise<void>((resolve) => {
       setTimeout(resolve, GROUP_PUBLISH_RETRY_DELAY_MS);
     });
-    await this.publish(ctx.topic, payload);
+    try {
+      await this.publish(ctx.topic, payload);
+      return true;
+    } catch (secondError: unknown) {
+      if (this.isRetryablePublishError(secondError)) {
+        console.warn(
+          `[GROUP-MSG] Falling back to offline delivery for group=${ctx.groupId}: ${
+            secondError instanceof Error ? secondError.message : String(secondError)
+          }`,
+        );
+        return false;
+      }
+      throw secondError;
+    }
   }
 
   private isRetryablePublishError(error: unknown): boolean {
