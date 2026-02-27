@@ -137,6 +137,7 @@ export const Main = () => {
               status: dbChat.status,
               fetchedOffline: dbChat.type === 'group'
                 ? !(dbChat.status === 'active' && dbChat.group_status === 'active')
+                // OR ? dbChat.group_status !== 'active'
                 : false,
               isFetchingOffline: false,
               groupStatus: dbChat.group_status,
@@ -324,7 +325,7 @@ export const Main = () => {
             unreadCount: 0,
             status: dbChat.status,
             fetchedOffline: dbChat.type === 'group'
-              ? !(dbChat.status === 'active' && dbChat.group_status === 'active')
+              ? dbChat.group_status !== 'active'
               : false,
             isFetchingOffline: false,
             blocked: dbChat.blocked,
@@ -340,7 +341,7 @@ export const Main = () => {
             .slice(0, 15);
 
           const topGroupChatIds = startupChats
-            .filter((c: any) => c.type === 'group' && c.status === 'active' && c.groupStatus === 'active')
+            .filter((c: any) => c.type === 'group' && c.groupStatus === 'active')
             .map((chat: any) => chat.id);
           const topDirectChatIds = startupChats
             .filter((c: any) => c.type === 'direct')
@@ -348,6 +349,7 @@ export const Main = () => {
 
           const groupCheckTask = async () => {
             if (topGroupChatIds.length === 0 || !isConnected) return;
+            console.log(`[UI] Checking missed group messages for chats: ${topGroupChatIds.join(', ')}`);
             topGroupChatIds.forEach((chatId) => {
               dispatch(setOfflineFetchStatus({ chatId, isFetching: true }));
             });
@@ -359,6 +361,7 @@ export const Main = () => {
                 });
                 return;
               }
+              console.log(`[UI] Group offline message check complete - checked chats: ${groupResult.checkedChatIds.join(', ')}`);
               dispatch(markOfflineFetched(topGroupChatIds));
 
               const unreadMap = groupResult.unreadFromChats instanceof Map
@@ -416,7 +419,7 @@ export const Main = () => {
                     status: dbChat.status,
                     fetchedOffline: currentChats.find(c => c.id === dbChat.id)?.fetchedOffline
                       ?? (dbChat.type === 'group'
-                        ? !(dbChat.status === 'active' && dbChat.group_status === 'active')
+                        ? dbChat.group_status !== 'active'
                         : fetchedChatIds.includes(dbChat.id)),
                     isFetchingOffline: currentChats.find(c => c.id === dbChat.id)?.isFetchingOffline ?? false,
                     blocked: dbChat.blocked,

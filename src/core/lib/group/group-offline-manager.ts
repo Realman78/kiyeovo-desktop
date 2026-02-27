@@ -137,7 +137,9 @@ export class GroupOfflineManager {
     }
 
     for (const chat of targetChats) {
+      console.log("processing for:", chat)
       const processed = await this.checkGroupChat(chat, unreadFromChats, gapWarnings);
+      console.log("processed:", processed, chat.id)
       if (processed) {
         checkedChatIds.push(chat.id);
       }
@@ -155,7 +157,6 @@ export class GroupOfflineManager {
       .filter(c =>
         c.type === 'group'
         && !!c.group_id
-        && c.status === 'active'
         && c.group_status === 'active'
         && (c.key_version ?? 0) > 0,
       );
@@ -317,10 +318,17 @@ export class GroupOfflineManager {
       return cached.value;
     }
 
-    const creator = this.deps.database.getUserByPeerId(chat.group_creator_peer_id);
-    if (!creator) return null;
+    let creatorPubBytes: Uint8Array | null = null;
+    if (chat.group_creator_peer_id === this.deps.myPeerId) {
+      creatorPubBytes = this.deps.userIdentity.signingPublicKey;
+    } else {
+      const creator = this.deps.database.getUserByPeerId(chat.group_creator_peer_id);
+      if (creator) {
+        creatorPubBytes = Buffer.from(creator.signing_public_key, 'base64');
+      }
+    }
+    if (!creatorPubBytes) return null;
 
-    const creatorPubBytes = Buffer.from(creator.signing_public_key, 'base64');
     const creatorPubKeyBase64url = toBase64Url(creatorPubBytes);
     const dhtKey = `${GROUP_INFO_VERSION_PREFIX}/${chat.group_id}/${creatorPubKeyBase64url}/${keyVersion}`;
     const keyBytes = new TextEncoder().encode(dhtKey);
