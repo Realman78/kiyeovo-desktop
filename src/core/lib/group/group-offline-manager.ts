@@ -94,6 +94,7 @@ export class GroupOfflineManager {
     await this.withBucketMutationLock(bucketKey, async () => {
       const cached = this.getCachedStore(bucketKey);
       const existing = cached ?? await this.getLatestStore(bucketKey);
+      console.log("[DEBUG] Existing before write", bucketKey, existing)
       const existingMessages = existing?.messages ?? [];
       const existingVersion = existing?.version ?? 0;
       const existingHighestSeq = existing?.highestSeq ?? 0;
@@ -120,6 +121,7 @@ export class GroupOfflineManager {
       const version = existingVersion + 1;
       const signedStore = this.signStore(nextMessages, highestSeq, version, bucketKey);
       await this.putStore(bucketKey, signedStore);
+      console.log("Stored to DHT", signedStore);
       this.setCachedStore(bucketKey, signedStore);
     });
   }
@@ -212,11 +214,19 @@ export class GroupOfflineManager {
         })
         .filter((item): item is { senderPeerId: string; sender: NonNullable<ReturnType<ChatDatabase['getUserByPeerId']>>; bucketKey: string } => item !== null);
 
-        console.log("Sender descriptors:", senderDescriptors)
+        console.log("Sender descriptors:", senderDescriptors.map(sender => {
+          return {
+            username: sender.sender.username,
+            peerId: sender.senderPeerId,
+            bucketKey: sender.bucketKey
+          }
+        }))
       const senderStores = await Promise.all(senderDescriptors.map(async (desc) => ({
         ...desc,
         store: await this.getLatestStore(desc.bucketKey),
       })));
+
+      console.log("Sender stores length", senderStores.length)
 
       for (const { senderPeerId, sender, store } of senderStores) {
         if (!store || store.messages.length === 0) continue;
