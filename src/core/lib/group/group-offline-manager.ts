@@ -55,6 +55,12 @@ interface CachedVersionMetaEntry {
   cachedAt: number;
 }
 
+interface GroupChatCheckResult {
+  processed: boolean;
+  unreadAdded: number;
+  gapWarnings: GroupOfflineGapWarning[];
+}
+
 export interface GroupOfflineCheckResult {
   checkedChatIds: number[];
   unreadFromChats: Map<number, number>;
@@ -66,6 +72,7 @@ export class GroupOfflineManager {
   private readonly bucketMutationQueues = new Map<string, Promise<void>>();
   private readonly localStoreCache = new Map<string, CachedStoreEntry>();
   private readonly versionMetaCache = new Map<string, CachedVersionMetaEntry>();
+  private readonly groupCheckInFlight = new Map<string, Promise<GroupChatCheckResult>>();
   private lastCleanupAt = 0;
   private offlineCheckRunCounter = 0;
   private cleanupInFlight: Promise<void> | null = null;
@@ -204,12 +211,20 @@ export class GroupOfflineManager {
 
     for (const chat of targetChats) {
       const chatStart = Date.now();
-      const unreadBefore = unreadFromChats.get(chat.id) ?? 0;
-      const processed = await this.checkGroupChat(chat, unreadFromChats, gapWarnings);
-      const unreadAfter = unreadFromChats.get(chat.id) ?? 0;
+      const result = await this.runGroupCheckWithSingleFlight(chat);
+      const processed = result.processed;
+
+      if (result.unreadAdded > 0) {
+        const prev = unreadFromChats.get(chat.id) ?? 0;
+        unreadFromChats.set(chat.id, prev + result.unreadAdded);
+      }
+      if (result.gapWarnings.length > 0) {
+        gapWarnings.push(...result.gapWarnings);
+      }
+
       console.log(
         `[GROUP-OFFLINE][TIMING][RUN:${runId}] chat=${chat.id} processed=${processed} ` +
-        `unreadAdded=${Math.max(0, unreadAfter - unreadBefore)} took=${Date.now() - chatStart}ms`
+        `unreadAdded=${result.unreadAdded} took=${Date.now() - chatStart}ms`
       );
       if (processed) {
         checkedChatIds.push(chat.id);
@@ -248,16 +263,41 @@ export class GroupOfflineManager {
     return groups.filter(c => wanted.has(c.id));
   }
 
+  private async runGroupCheckWithSingleFlight(chat: Chat): Promise<GroupChatCheckResult> {
+    if (!chat.group_id) {
+      return { processed: false, unreadAdded: 0, gapWarnings: [] };
+    }
+
+    const existing = this.groupCheckInFlight.get(chat.group_id);
+    if (existing) {
+      console.log(
+        `[GROUP-OFFLINE][TIMING][CHAT:${chat.id}] reusing in-flight check for group=${chat.group_id.slice(0, 8)}`
+      );
+      return existing;
+    }
+
+    let checkPromise!: Promise<GroupChatCheckResult>;
+    checkPromise = this.checkGroupChat(chat)
+      .finally(() => {
+        if (this.groupCheckInFlight.get(chat.group_id!) === checkPromise) {
+          this.groupCheckInFlight.delete(chat.group_id!);
+        }
+      });
+
+    this.groupCheckInFlight.set(chat.group_id, checkPromise);
+    return checkPromise;
+  }
+
   private async checkGroupChat(
     chat: Chat,
-    unreadFromChats: Map<number, number>,
-    gapWarnings: GroupOfflineGapWarning[],
-  ): Promise<boolean> {
-    if (!chat.group_id) return false;
+  ): Promise<GroupChatCheckResult> {
+    if (!chat.group_id) return { processed: false, unreadAdded: 0, gapWarnings: [] };
     const chatStart = Date.now();
 
     let sawAnyStore = false;
     let epochsProcessed = 0;
+    let unreadAdded = 0;
+    const gapWarnings: GroupOfflineGapWarning[] = [];
     const history = this.deps.database.getGroupKeyHistory(chat.group_id)
       .filter(h => h.key_version <= (chat.key_version ?? 0))
       .sort((a, b) => a.key_version - b.key_version);
@@ -381,8 +421,7 @@ export class GroupOfflineManager {
               timestamp: new Date(msg.timestamp),
             });
 
-            const unread = unreadFromChats.get(chat.id) ?? 0;
-            unreadFromChats.set(chat.id, unread + 1);
+            unreadAdded++;
             deliveredForSender++;
             epochMessagesDelivered++;
 
@@ -428,7 +467,11 @@ export class GroupOfflineManager {
       `sawAnyStore=${sawAnyStore} totalMs=${Date.now() - chatStart}ms`
     );
 
-    return sawAnyStore;
+    return {
+      processed: sawAnyStore,
+      unreadAdded,
+      gapWarnings,
+    };
   }
 
   private async getVersionMeta(chat: Chat, keyVersion: number): Promise<GroupOfflineVersionMeta | null> {
