@@ -30,6 +30,11 @@ export interface SendMessageResponse {
   message?: StrippedMessage | null;
   messageSentStatus: 'online' | 'offline' | null;
   error: string | null;
+  warning?: string | null;
+  offlineBackupRetry?: {
+    chatId: number;
+    messageId: string;
+  } | null;
 }
 
 // We dont have to send sender info because we have it in the chat state
@@ -518,6 +523,8 @@ export const IPC_CHANNELS = {
   // Offline messages
   CHECK_OFFLINE_MESSAGES: 'offlineMessages:check',
   CHECK_OFFLINE_MESSAGES_FOR_CHAT: 'offlineMessages:checkForChat',
+  CHECK_GROUP_OFFLINE_MESSAGES: 'groupOfflineMessages:check',
+  CHECK_GROUP_OFFLINE_MESSAGES_FOR_CHAT: 'groupOfflineMessages:checkForChat',
   OFFLINE_MESSAGES_FETCH_START: 'offlineMessages:fetchStart',
   OFFLINE_MESSAGES_FETCH_COMPLETE: 'offlineMessages:fetchComplete',
 
@@ -577,6 +584,7 @@ export const IPC_CHANNELS = {
   GET_CONTACTS: 'group:getContacts',
   CREATE_GROUP: 'group:create',
   SEND_GROUP_MESSAGE_REQUEST: 'group:sendMessage',
+  RETRY_GROUP_OFFLINE_BACKUP: 'group:retryOfflineBackup',
   GET_GROUP_MEMBERS: 'group:getMembers',
   GET_GROUP_INVITES: 'group:getInvites',
   RESPOND_TO_GROUP_INVITE: 'group:respondToInvite',
@@ -645,6 +653,15 @@ export interface GroupMembersUpdatedEvent {
   chatId: number;
   groupId: string;
   memberPeerId: string;
+}
+
+export interface GroupOfflineGapWarning {
+  chatId: number;
+  groupId: string;
+  keyVersion: number;
+  senderPeerId: string;
+  expectedSeq: number;
+  actualSeq: number;
 }
 
 export interface AppConfig {

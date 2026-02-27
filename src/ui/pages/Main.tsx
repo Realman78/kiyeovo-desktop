@@ -92,7 +92,7 @@ export const Main = () => {
                   : new Date(dbChat.updated_at).getTime(),
                 unreadCount: 0,
                 status: 'active',
-                fetchedOffline: dbChat.type === 'group',
+                fetchedOffline: false,
                 isFetchingOffline: false,
                 groupStatus: 'active',
               };
@@ -107,7 +107,7 @@ export const Main = () => {
 
       dispatch(updateChat({
         id: data.chatId,
-        updates: { status: 'active', groupStatus: 'active' },
+        updates: { status: 'active', groupStatus: 'active', fetchedOffline: false, isFetchingOffline: false },
       }));
     });
 
@@ -135,7 +135,9 @@ export const Main = () => {
                 : new Date(dbChat.updated_at).getTime(),
               unreadCount: 0,
               status: dbChat.status,
-              fetchedOffline: dbChat.type === 'group',
+              fetchedOffline: dbChat.type === 'group'
+                ? !(dbChat.status === 'active' && dbChat.group_status === 'active')
+                : false,
               isFetchingOffline: false,
               groupStatus: dbChat.group_status,
             };
@@ -321,7 +323,9 @@ export const Main = () => {
               : new Date(dbChat.updated_at).getTime(),
             unreadCount: 0,
             status: dbChat.status,
-            fetchedOffline: dbChat.type === 'group', // Groups don't need offline fetch
+            fetchedOffline: dbChat.type === 'group'
+              ? !(dbChat.status === 'active' && dbChat.group_status === 'active')
+              : false,
             isFetchingOffline: false,
             blocked: dbChat.blocked,
             muted: dbChat.muted,
@@ -330,28 +334,73 @@ export const Main = () => {
 
           dispatch(setChats(mappedChats));
 
-          // After loading chats, check for offline messages for top 10 most recent direct chats
-          const directChats = mappedChats.filter((c: any) => c.type === 'direct');
-          if (directChats.length > 0 && isConnected) {
-            // Sort by most recent activity (latest message) and take top 10
-            const sortedChats = [...directChats].sort((a: any, b: any) => b.lastMessageTimestamp - a.lastMessageTimestamp);
-            const top10ChatIds = sortedChats.slice(0, 10).map((chat: any) => chat.id);
+          // Unified startup scope: latest 15 chats total (direct + group), then split by type.
+          const startupChats = [...mappedChats]
+            .sort((a: any, b: any) => b.lastMessageTimestamp - a.lastMessageTimestamp)
+            .slice(0, 15);
 
-            console.log(`[UI] Checking offline messages for ${top10ChatIds.length} most recent chats (IDs: ${top10ChatIds.join(', ')})...`);
-            top10ChatIds.forEach((chatId) => {
+          const topGroupChatIds = startupChats
+            .filter((c: any) => c.type === 'group' && c.status === 'active' && c.groupStatus === 'active')
+            .map((chat: any) => chat.id);
+          const topDirectChatIds = startupChats
+            .filter((c: any) => c.type === 'direct')
+            .map((chat: any) => chat.id);
+
+          const groupCheckTask = async () => {
+            if (topGroupChatIds.length === 0 || !isConnected) return;
+            topGroupChatIds.forEach((chatId) => {
               dispatch(setOfflineFetchStatus({ chatId, isFetching: true }));
             });
             try {
-              const result = await window.kiyeovoAPI.checkOfflineMessages(top10ChatIds);
-              if (result.success && result.checkedChatIds.length > 0) {
-                console.log(`[UI] Offline message check complete - checked ${result.checkedChatIds.length} chats (IDs: ${result.checkedChatIds.join(', ')})`);
-                dispatch(markOfflineFetched(result.checkedChatIds));
+              const groupResult = await window.kiyeovoAPI.checkGroupOfflineMessages(topGroupChatIds);
+              if (!groupResult.success) {
+                topGroupChatIds.forEach((chatId) => {
+                  dispatch(setOfflineFetchStatus({ chatId, isFetching: false }));
+                });
+                return;
+              }
+              dispatch(markOfflineFetched(topGroupChatIds));
+
+              const unreadMap = groupResult.unreadFromChats instanceof Map
+                ? groupResult.unreadFromChats
+                : new Map<number, number>();
+              const unreadCount = Array.from(unreadMap.values())
+                .reduce((sum, count) => sum + count, 0);
+              if (unreadCount > 0) {
+                toast.info(`Fetched ${unreadCount} missed group message${unreadCount === 1 ? '' : 's'}`);
+              }
+              if (groupResult.gapWarnings.length > 0) {
+                toast.warning(`Detected ${groupResult.gapWarnings.length} group sequence gap(s); some old messages may be missing`);
+              }
+            } catch (error) {
+              topGroupChatIds.forEach((chatId) => {
+                dispatch(setOfflineFetchStatus({ chatId, isFetching: false }));
+              });
+              console.error('[UI] Failed to check group offline messages:', error);
+            }
+          };
+
+          const directCheckTask = async () => {
+            if (topDirectChatIds.length === 0 || !isConnected) return;
+
+            console.log(`[UI] Checking offline messages for ${topDirectChatIds.length} recent direct chats (IDs: ${topDirectChatIds.join(', ')})...`);
+            topDirectChatIds.forEach((chatId) => {
+              dispatch(setOfflineFetchStatus({ chatId, isFetching: true }));
+            });
+
+            try {
+              const result = await window.kiyeovoAPI.checkOfflineMessages(topDirectChatIds);
+              if (result.success) {
+                const fetchedChatIds = result.checkedChatIds.length > 0 ? result.checkedChatIds : topDirectChatIds;
+                console.log(`[UI] Offline message check complete - checked ${fetchedChatIds.length} chats (IDs: ${fetchedChatIds.join(', ')})`);
+                dispatch(markOfflineFetched(fetchedChatIds));
 
                 // Refresh chats to pick up new offline messages (unread counts, last message, etc.)
                 console.log('[UI] Refreshing chats to show offline messages...');
                 console.log(`[UI] Unread from chats: ${JSON.stringify(result.unreadFromChats)}`);
                 const refreshResult = await window.kiyeovoAPI.getChats();
                 if (refreshResult.success) {
+                  const currentChats = store.getState().chat.chats;
                   const refreshedChats = refreshResult.chats.map((dbChat: any) => ({
                     id: dbChat.id,
                     type: dbChat.type,
@@ -365,8 +414,11 @@ export const Main = () => {
                       : new Date(dbChat.updated_at).getTime(),
                     unreadCount: result.unreadFromChats.get(dbChat.id) ?? 0,
                     status: dbChat.status,
-                    fetchedOffline: dbChat.type === 'group' || result.checkedChatIds.includes(dbChat.id),
-                    isFetchingOffline: false,
+                    fetchedOffline: currentChats.find(c => c.id === dbChat.id)?.fetchedOffline
+                      ?? (dbChat.type === 'group'
+                        ? !(dbChat.status === 'active' && dbChat.group_status === 'active')
+                        : fetchedChatIds.includes(dbChat.id)),
+                    isFetchingOffline: currentChats.find(c => c.id === dbChat.id)?.isFetchingOffline ?? false,
                     blocked: dbChat.blocked,
                     muted: dbChat.muted,
                     groupStatus: dbChat.group_status,
@@ -374,19 +426,21 @@ export const Main = () => {
                   dispatch(setChats(refreshedChats));
                   console.log('[UI] Chats refreshed successfully');
                 }
-              } else if (!result.success) {
+              } else {
                 console.error('[UI] Failed to check offline messages:', result.error);
-                top10ChatIds.forEach((chatId) => {
+                topDirectChatIds.forEach((chatId) => {
                   dispatch(setOfflineFetchStatus({ chatId, isFetching: false }));
                 });
               }
             } catch (error) {
               console.error('[UI] Failed to check offline messages:', error);
-              top10ChatIds.forEach((chatId) => {
+              topDirectChatIds.forEach((chatId) => {
                 dispatch(setOfflineFetchStatus({ chatId, isFetching: false }));
               });
             }
-          }
+          };
+
+          await Promise.allSettled([groupCheckTask(), directCheckTask()]);
         } else {
           console.error('[UI] Failed to fetch chats:', result.error);
         }

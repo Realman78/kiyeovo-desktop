@@ -66,9 +66,25 @@ export const ChatInput: FC = () => {
 
     const handleSendGroupMessage = async (chatId: number, messageContent: string) => {
         try {
-            const { success, error } = await window.kiyeovoAPI.sendGroupMessage(chatId, messageContent);
+            const { success, error, warning, offlineBackupRetry } = await window.kiyeovoAPI.sendGroupMessage(chatId, messageContent);
             if (!success) {
                 toast.error(error || 'Failed to send group message');
+            } else if (warning && offlineBackupRetry) {
+                toast.warningAction(
+                    warning,
+                    'Try again',
+                    async () => {
+                        const retry = await window.kiyeovoAPI.retryGroupOfflineBackup(
+                            offlineBackupRetry.chatId,
+                            offlineBackupRetry.messageId,
+                        );
+                        if (retry.success) {
+                            toast.success('Group offline backup synced');
+                        } else {
+                            toast.error(retry.error || 'Failed to retry group offline backup');
+                        }
+                    },
+                );
             }
         } catch (err) {
             console.error('Failed to send group message:', err);

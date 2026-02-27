@@ -273,7 +273,14 @@ function setupMessagingHandlers(
 
       const response = await p2pCore.messageHandler.sendGroupMessage(chatId, message);
       if (response.success) {
-        return { success: true, messageSentStatus: response.messageSentStatus, error: null, message: response.message };
+        return {
+          success: true,
+          messageSentStatus: response.messageSentStatus,
+          error: null,
+          message: response.message,
+          warning: response.warning ?? null,
+          offlineBackupRetry: response.offlineBackupRetry ?? null,
+        };
       }
       return { success: false, messageSentStatus: null, error: response.error ?? 'Failed to send group message' };
     } catch (error) {
@@ -1361,6 +1368,61 @@ function setupGroupHandlers(
   ipcMain: IpcMain,
   getP2PCore: () => P2PCore | null
 ): void {
+  ipcMain.handle(IPC_CHANNELS.CHECK_GROUP_OFFLINE_MESSAGES, async (_event, chatIds?: number[]) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, checkedChatIds: [], unreadFromChats: new Map(), gapWarnings: [], error: 'P2P core not initialized' };
+      }
+
+      const result = await p2pCore.messageHandler.checkGroupOfflineMessages(chatIds);
+      return { success: true, ...result, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to check group offline messages:', error);
+      return {
+        success: false,
+        checkedChatIds: [],
+        unreadFromChats: new Map(),
+        gapWarnings: [],
+        error: error instanceof Error ? error.message : 'Failed to check group offline messages',
+      };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.CHECK_GROUP_OFFLINE_MESSAGES_FOR_CHAT, async (_event, chatId: number) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, checkedChatIds: [], unreadFromChats: new Map(), gapWarnings: [], error: 'P2P core not initialized' };
+      }
+
+      const result = await p2pCore.messageHandler.checkGroupOfflineMessages([chatId]);
+      return { success: true, ...result, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to check group offline messages for chat:', error);
+      return {
+        success: false,
+        checkedChatIds: [],
+        unreadFromChats: new Map(),
+        gapWarnings: [],
+        error: error instanceof Error ? error.message : 'Failed to check group offline messages',
+      };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.RETRY_GROUP_OFFLINE_BACKUP, async (_event, chatId: number, messageId: string) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+      return await p2pCore.messageHandler.retryGroupOfflineBackup(chatId, messageId);
+    } catch (error) {
+      console.error('[IPC] Failed to retry group offline backup:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to retry group offline backup' };
+    }
+  });
+
   ipcMain.handle(IPC_CHANNELS.GET_CONTACTS, async () => {
     try {
       const p2pCore = getP2PCore();

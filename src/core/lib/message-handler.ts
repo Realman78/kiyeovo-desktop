@@ -1,5 +1,5 @@
 import { peerIdFromString } from '@libp2p/peer-id';
-import type { ChatNode, StreamHandlerContext, AuthenticatedEncryptedMessage, OfflineMessage, OfflineSenderInfo, ConversationSession, EncryptedMessage, ContactMode, KeyExchangeEvent, ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent, SendMessageResponse, StrippedMessage, MessageSentStatus, FileTransferProgressEvent, FileTransferCompleteEvent, FileTransferFailedEvent, PendingFileReceivedEvent, GroupChatActivatedEvent, GroupMembersUpdatedEvent } from '../types.js';
+import type { ChatNode, StreamHandlerContext, AuthenticatedEncryptedMessage, OfflineMessage, OfflineSenderInfo, ConversationSession, EncryptedMessage, ContactMode, KeyExchangeEvent, ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent, SendMessageResponse, StrippedMessage, MessageSentStatus, FileTransferProgressEvent, FileTransferCompleteEvent, FileTransferFailedEvent, PendingFileReceivedEvent, GroupChatActivatedEvent, GroupMembersUpdatedEvent, GroupOfflineGapWarning } from '../types.js';
 import {
   CHAT_PROTOCOL,
   CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES,
@@ -29,6 +29,7 @@ import { GroupMessageType, type GroupInvite } from './group/types.js';
 import { GroupCreator } from './group/group-creator.js';
 import { GroupResponder } from './group/group-responder.js';
 import { GroupMessaging } from './group/group-messaging.js';
+import { GroupOfflineManager } from './group/group-offline-manager.js';
 
 /**
  * Main message handler that orchestrates all message handling components
@@ -53,6 +54,7 @@ export class MessageHandler {
   private groupAckStartupTimer: ReturnType<typeof setTimeout> | null = null;
   private groupAckRepublishInFlight = false;
   private offlineCheckRunSeq = 0;
+  private groupOfflineManager: GroupOfflineManager;
   private groupMessaging: GroupMessaging;
 
   constructor(
@@ -86,6 +88,13 @@ export class MessageHandler {
     if (!userIdentity) {
       throw new Error('User identity not available');
     }
+    this.groupOfflineManager = new GroupOfflineManager({
+      node: this.node,
+      database: this.database,
+      userIdentity,
+      myPeerId: this.node.peerId.toString(),
+      onMessageReceived: this.onMessageReceived,
+    });
     this.groupMessaging = new GroupMessaging({
       node: this.node,
       database: this.database,
@@ -93,6 +102,7 @@ export class MessageHandler {
       myPeerId: this.node.peerId.toString(),
       myUsername: this.database.getUserByPeerId(this.node.peerId.toString())?.username || `user_${this.node.peerId.toString().slice(-8)}`,
       onMessageReceived: this.onMessageReceived,
+      groupOfflineManager: this.groupOfflineManager,
     });
     this.setupProtocolHandler();
     this.groupMessaging.start();
@@ -716,6 +726,31 @@ export class MessageHandler {
     } catch (error: unknown) {
       const errorText = error instanceof Error ? error.message : String(error);
       return { success: false, messageSentStatus: null, error: errorText };
+    }
+  }
+
+  async retryGroupOfflineBackup(chatId: number, messageId: string): Promise<{ success: boolean; error: string | null }> {
+    try {
+      await this.groupMessaging.retryOfflineBackup(chatId, messageId);
+      return { success: true, error: null };
+    } catch (error: unknown) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  async checkGroupOfflineMessages(chatIds?: number[]): Promise<{
+    checkedChatIds: number[];
+    unreadFromChats: Map<number, number>;
+    gapWarnings: GroupOfflineGapWarning[];
+  }> {
+    try {
+      return await this.groupOfflineManager.checkGroupOfflineMessages(chatIds);
+    } catch (error: unknown) {
+      generalErrorHandler(error, '[GROUP-OFFLINE] Failed to check group offline messages');
+      return { checkedChatIds: [], unreadFromChats: new Map(), gapWarnings: [] };
     }
   }
 

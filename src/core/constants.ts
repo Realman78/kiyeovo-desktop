@@ -161,7 +161,7 @@ export const GROUP_DEADLINE = 1000 * 60 * 60 * 6; // 6 hours
 export const KEY_ROTATION_CHECK_INTERVAL = 10 * 60 * 1000; // 10 minutes
 export const SESSION_MANAGER_CLEANUP_INTERVAL = 60 * 1000; // 1 minute
 export const KEEP_ALIVE_INTERVAL = 90000; // 90 seconds
-export const OFFLINE_MESSAGE_LIMIT = 100; // 100 messages
+export const OFFLINE_MESSAGE_LIMIT = 50; // 50 messages
 export const OFFLINE_MESSAGE_CHECK_INTERVAL = 300 * 1000; // 5 minutes
 export const KEY_ROTATION_TIMEOUT = 30 * 1000; // 30 seconds
 export const PENDING_KEY_EXCHANGE_EXPIRATION = 5 * 60 * 1000; // 5 minutes
@@ -197,7 +197,8 @@ export const CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES = 10;
  */
 export const GROUP_INVITE_LIFETIME = 14 * 24 * 60 * 60 * 1000; // 14 days
 export const GROUP_MAX_MEMBERS = 10;
-export const GROUP_MAX_MESSAGES_PER_SENDER = 50;
+// Keep aligned with direct offline limit for now; can be tuned independently later.
+export const GROUP_MAX_MESSAGES_PER_SENDER = OFFLINE_MESSAGE_LIMIT;
 export const GROUP_ACK_REPUBLISH_STARTUP_DELAY = 60 * 1000; // 60 seconds
 export const GROUP_ACK_REPUBLISH_INTERVAL = 10 * 60 * 1000; // 10 minutes
 export const GROUP_ACK_REPUBLISH_JITTER = 2 * 60 * 1000; // ±2 minutes
@@ -215,3 +216,9 @@ export const GROUP_INFO_LATEST_PREFIX = '/kiyeovo-group-info-latest';
 export const GROUP_INFO_VERSION_PREFIX = '/kiyeovo-group-info-v';
 export const GROUP_DHT_REPUBLISH_INTERVAL = 30 * 60 * 1000; // 30 minutes
 export const GROUP_DHT_REPUBLISH_JITTER = 5 * 60 * 1000; // ±5 minutes
+// Defensive cap to keep group offline DHT values bounded even when message limit is increased.
+export const GROUP_OFFLINE_STORE_MAX_COMPRESSED_BYTES = 64 * 1024; // 64KB
+export const GROUP_OFFLINE_LOCAL_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+export const GROUP_OFFLINE_LOCAL_CACHE_MAX_ENTRIES = 256;
+export const GROUP_OFFLINE_CLEANUP_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+export const GROUP_OFFLINE_MESSAGE_TTL_MS = MESSAGE_TTL;

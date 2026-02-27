@@ -1,5 +1,6 @@
 import {
   Toast,
+  ToastAction,
   ToastClose,
   ToastDescription,
   ToastProvider,
@@ -21,6 +22,11 @@ export function Toaster() {
               <ToastDescription>{toast.description}</ToastDescription>
             )}
           </div>
+          {toast.actionLabel && toast.onAction && (
+            <ToastAction altText={toast.actionAltText || toast.actionLabel} onClick={toast.onAction}>
+              {toast.actionLabel}
+            </ToastAction>
+          )}
           <ToastClose />
         </Toast>
       ))}

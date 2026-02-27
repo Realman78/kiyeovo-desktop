@@ -145,6 +145,7 @@ export interface GroupKeyHistory {
 
 export interface GroupOfflineCursor {
     group_id: string
+    key_version: number
     sender_peer_id: string
     last_read_timestamp: number
     last_read_message_id: string
@@ -429,11 +430,12 @@ export class ChatDatabase {
         this.db.exec(`
             CREATE TABLE IF NOT EXISTS group_offline_cursors (
                 group_id TEXT NOT NULL,
+                key_version INTEGER NOT NULL DEFAULT 1,
                 sender_peer_id TEXT NOT NULL,
                 last_read_timestamp INTEGER NOT NULL DEFAULT 0,
                 last_read_message_id TEXT NOT NULL DEFAULT '',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (group_id, sender_peer_id)
+                PRIMARY KEY (group_id, key_version, sender_peer_id)
             )
         `);
 
@@ -1851,31 +1853,40 @@ export class ChatDatabase {
 
     // --- Group offline cursors ---
 
-    upsertGroupOfflineCursor(groupId: string, senderPeerId: string, timestamp: number, messageId: string): void {
+    upsertGroupOfflineCursor(groupId: string, keyVersion: number, senderPeerId: string, timestamp: number, messageId: string): void {
         const stmt = this.db.prepare(`
-            INSERT INTO group_offline_cursors (group_id, sender_peer_id, last_read_timestamp, last_read_message_id, updated_at)
-            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(group_id, sender_peer_id) DO UPDATE SET
+            INSERT INTO group_offline_cursors (group_id, key_version, sender_peer_id, last_read_timestamp, last_read_message_id, updated_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(group_id, key_version, sender_peer_id) DO UPDATE SET
                 last_read_timestamp = excluded.last_read_timestamp,
                 last_read_message_id = excluded.last_read_message_id,
                 updated_at = CURRENT_TIMESTAMP
         `);
-        stmt.run(groupId, senderPeerId, timestamp, messageId);
+        stmt.run(groupId, keyVersion, senderPeerId, timestamp, messageId);
     }
 
-    getGroupOfflineCursor(groupId: string, senderPeerId: string): GroupOfflineCursor | null {
-        const stmt = this.db.prepare('SELECT * FROM group_offline_cursors WHERE group_id = ? AND sender_peer_id = ?');
-        const row = stmt.get(groupId, senderPeerId) as GroupOfflineCursor | undefined;
+    getGroupOfflineCursor(groupId: string, keyVersion: number, senderPeerId: string): GroupOfflineCursor | null {
+        const stmt = this.db.prepare('SELECT * FROM group_offline_cursors WHERE group_id = ? AND key_version = ? AND sender_peer_id = ?');
+        const row = stmt.get(groupId, keyVersion, senderPeerId) as GroupOfflineCursor | undefined;
         return row ?? null;
     }
 
-    getGroupOfflineCursors(groupId: string): GroupOfflineCursor[] {
-        const stmt = this.db.prepare('SELECT * FROM group_offline_cursors WHERE group_id = ?');
-        return stmt.all(groupId) as GroupOfflineCursor[];
+    getGroupOfflineCursors(groupId: string, keyVersion?: number): GroupOfflineCursor[] {
+        if (keyVersion === undefined) {
+            const stmt = this.db.prepare('SELECT * FROM group_offline_cursors WHERE group_id = ?');
+            return stmt.all(groupId) as GroupOfflineCursor[];
+        }
+        const stmt = this.db.prepare('SELECT * FROM group_offline_cursors WHERE group_id = ? AND key_version = ?');
+        return stmt.all(groupId, keyVersion) as GroupOfflineCursor[];
     }
 
     deleteGroupOfflineCursors(groupId: string): void {
         this.db.prepare('DELETE FROM group_offline_cursors WHERE group_id = ?').run(groupId);
+    }
+
+    deleteGroupOfflineCursorsForEpoch(groupId: string, keyVersion: number): void {
+        this.db.prepare('DELETE FROM group_offline_cursors WHERE group_id = ? AND key_version = ?')
+            .run(groupId, keyVersion);
     }
 
     // --- Group pending ACKs ---

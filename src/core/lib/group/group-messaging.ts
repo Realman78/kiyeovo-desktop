@@ -20,6 +20,7 @@ import {
   type GroupHeartbeatMessage,
 } from './types.js';
 import { generalErrorHandler } from '../../utils/general-error.js';
+import { GroupOfflineManager } from './group-offline-manager.js';
 
 interface GroupMessagingDeps {
   node: ChatNode;
@@ -28,6 +29,7 @@ interface GroupMessagingDeps {
   myPeerId: string;
   myUsername: string;
   onMessageReceived: (data: MessageReceivedEvent) => void;
+  groupOfflineManager: GroupOfflineManager;
 }
 
 interface GroupContext {
@@ -47,6 +49,9 @@ export class GroupMessaging {
   private started = false;
   private reconcileInFlight = false;
   private heartbeatInFlight = false;
+  // In-memory only for V1: if app restarts before retry, user must resend/ignore warning.
+  // TODO: persist failed offline backup retries in DB if we need restart-safe retries.
+  private readonly pendingOfflineBackups = new Map<string, GroupContentMessage>();
 
   private readonly onPubsubMessage = (evt: CustomEvent<unknown>): void => {
     void this.handleIncomingPubsubEvent(evt.detail);
@@ -201,6 +206,19 @@ export class GroupMessaging {
       });
     }
 
+    let warning: string | null = null;
+    let offlineBackupRetry: { chatId: number; messageId: string } | null = null;
+    try {
+      await this.deps.groupOfflineManager.storeGroupMessage(signedMessage);
+      this.pendingOfflineBackups.delete(signedMessage.messageId);
+    } catch (error: unknown) {
+      const errorText = error instanceof Error ? error.message : String(error);
+      warning = `Message delivered online, but offline group backup failed: ${errorText}`;
+      offlineBackupRetry = { chatId: ctx.chatId, messageId: signedMessage.messageId };
+      this.pendingOfflineBackups.set(signedMessage.messageId, signedMessage);
+      console.warn(`[GROUP-OFFLINE] ${warning}`);
+    }
+
     const strippedMessage: StrippedMessage = {
       chatId: ctx.chatId,
       messageId: signedMessage.messageId,
@@ -214,7 +232,27 @@ export class GroupMessaging {
       message: strippedMessage,
       messageSentStatus: 'online',
       error: null,
+      warning,
+      offlineBackupRetry,
     };
+  }
+
+  async retryOfflineBackup(chatId: number, messageId: string): Promise<void> {
+    const pending = this.pendingOfflineBackups.get(messageId);
+    if (!pending) {
+      throw new Error('No pending offline backup found for this message');
+    }
+
+    const chat = this.deps.database.getChatByIdWithUsernameAndLastMsg(chatId, this.deps.myPeerId);
+    if (!chat || chat.type !== 'group' || !chat.group_id) {
+      throw new Error('Invalid group chat for offline backup retry');
+    }
+    if (pending.groupId !== chat.group_id) {
+      throw new Error('Offline backup retry chat/group mismatch');
+    }
+
+    await this.deps.groupOfflineManager.storeGroupMessage(pending);
+    this.pendingOfflineBackups.delete(messageId);
   }
 
   private scheduleReconcile(delayMs: number): void {
@@ -429,6 +467,7 @@ export class GroupMessaging {
       if (!this.isGroupChatMessage(parsed)) return;
       if (parsed.type !== GroupMessageType.GROUP_MESSAGE) return;
       if (!this.hasValidTimestamp(parsed)) return;
+      // emitSelf can deliver our own publish back; local message is already inserted on send.
       if (parsed.senderPeerId === this.deps.myPeerId) return;
 
       const ctx = this.resolveIncomingGroupContext(parsed.groupId, parsed.keyVersion, maybe.topic);
@@ -440,11 +479,6 @@ export class GroupMessaging {
       const sender = this.deps.database.getUserByPeerId(parsed.senderPeerId);
       if (!sender) return;
       if (!this.verifySignature(parsed, sender.signing_public_key)) return;
-
-      // Ignore self-published echo from emitSelf; send path handles local persistence.
-      if (parsed.senderPeerId === this.deps.myPeerId) {
-        return;
-      }
 
       if (parsed.messageType === 'heartbeat') {
         return;

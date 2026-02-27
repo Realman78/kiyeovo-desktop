@@ -29,7 +29,9 @@ export const ChatList: FC = () => {
             dispatch(setOfflineFetchStatus({ chatId, isFetching: true }));
 
             try {
-                const result = await window.kiyeovoAPI.checkOfflineMessagesForChat(chatId);
+                const result = chat.type === 'group'
+                    ? await window.kiyeovoAPI.checkGroupOfflineMessagesForChat(chatId)
+                    : await window.kiyeovoAPI.checkOfflineMessagesForChat(chatId);
                 if (result.success && result.checkedChatIds.length > 0) {
                     console.log(`[UI] Offline messages fetched for chat(s): ${result.checkedChatIds.join(', ')}`);
                     dispatch(markOfflineFetched(result.checkedChatIds));

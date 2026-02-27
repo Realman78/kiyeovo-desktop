@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useSelector, useDispatch } from "react-redux";
 import type { RootState } from "../../../state/store";
 import { Button } from "../../ui/Button";
-import { Bell, BellOff, MoreVertical, Shield, UserPlus, Ban, UserCheck, Info, Trash2, AlertCircle, Users, Clock } from "lucide-react";
+import { Bell, BellOff, MoreVertical, Shield, UserPlus, Ban, UserCheck, Info, Trash2, AlertCircle, Users, Clock, RefreshCw } from "lucide-react";
 import { DropdownMenu, DropdownMenuItem } from "../../ui/DropdownMenu";
 import { updateChat, clearMessages, removeChat } from "../../../state/slices/chatSlice";
 import { AboutUserModal } from "./AboutUserModal";
@@ -180,6 +180,40 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
     setDropdownOpen(false);
   };
 
+  const handleCheckMissedGroupMessages = async () => {
+    if (!chatId) return;
+    setDropdownOpen(false);
+
+    try {
+      const result = await window.kiyeovoAPI.checkGroupOfflineMessagesForChat(chatId);
+      if (!result.success) {
+        toast.error(result.error || 'Failed to check missed group messages');
+        return;
+      }
+
+      const unreadMap = result.unreadFromChats instanceof Map
+        ? result.unreadFromChats
+        : new Map<number, number>();
+      const unread = unreadMap.get(chatId) ?? 0;
+      const chatWarnings = result.gapWarnings.filter(w => w.chatId === chatId);
+
+      if (unread > 0) {
+        toast.success(`Fetched ${unread} missed group message${unread === 1 ? '' : 's'}`);
+      } else {
+        toast.info('No missed group messages found');
+      }
+
+      if (chatWarnings.length > 0) {
+        toast.warning(`Detected ${chatWarnings.length} sequence gap(s); some old messages may be missing`);
+      }
+
+      await fetchGroupMembers();
+    } catch (error) {
+      console.error('Failed to check missed group messages:', error);
+      toast.error('Failed to check missed group messages');
+    }
+  };
+
   const confirmDeleteAllMessages = async () => {
     if (!activeChat) return;
 
@@ -317,6 +351,12 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
               onClick={handleToggleMute}
             >
               {activeChat?.muted ? 'Enable notifications' : 'Disable notifications'}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              icon={<RefreshCw className="w-4 h-4" />}
+              onClick={handleCheckMissedGroupMessages}
+            >
+              Check missed messages
             </DropdownMenuItem>
           </>
         ) : (

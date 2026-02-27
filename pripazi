@@ -25,6 +25,10 @@ If one invite send fails mid-loop, IPC returns failure even though earlier invit
 
 1.3 ako oden rejectat nesto i faila mi reject. zac ne maknut samo?
 
+1.4 offline messages limit je 100, treba to testirat i vidit dal ce radit jer je mozda previse
+
+1.5 OPTIMIZIACIJA - protobuf umisto JSON-a za offline poruke
+
 2. Timestamp forgery - ca ako korisnici sami mijenjaju timestamp
 
 2.5 what if a user changes public keys

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { InitStatus, IPC_CHANNELS, KeyExchangeEvent, MessageSentStatus, PasswordRequest, ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent, GroupChatActivatedEvent, GroupMembersUpdatedEvent } from '../core';
+import { InitStatus, IPC_CHANNELS, KeyExchangeEvent, MessageSentStatus, PasswordRequest, ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent, GroupChatActivatedEvent, GroupMembersUpdatedEvent, SendMessageResponse, GroupOfflineGapWarning } from '../core';
 import { ContactAttempt, Message } from '../core/lib/db/database';
 
 contextBridge.exposeInMainWorld('kiyeovoAPI', {
@@ -79,8 +79,11 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     sendMessage: async (identifier: string, message: string): Promise<{ success: boolean; messageSentStatus: MessageSentStatus; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.SEND_MESSAGE_REQUEST, identifier, message);
     },
-    sendGroupMessage: async (chatId: number, message: string): Promise<{ success: boolean; messageSentStatus: MessageSentStatus; error: string | null }> => {
+    sendGroupMessage: async (chatId: number, message: string): Promise<SendMessageResponse> => {
         return ipcRenderer.invoke(IPC_CHANNELS.SEND_GROUP_MESSAGE_REQUEST, chatId, message);
+    },
+    retryGroupOfflineBackup: async (chatId: number, messageId: string): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.RETRY_GROUP_OFFLINE_BACKUP, chatId, messageId);
     },
 
     // Key exchange event
@@ -297,6 +300,12 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     },
     checkOfflineMessagesForChat: async (chatId: number): Promise<{ success: boolean; checkedChatIds: number[]; unreadFromChats: Map<number, number>; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.CHECK_OFFLINE_MESSAGES_FOR_CHAT, chatId);
+    },
+    checkGroupOfflineMessages: async (chatIds?: number[]): Promise<{ success: boolean; checkedChatIds: number[]; unreadFromChats: Map<number, number>; gapWarnings: GroupOfflineGapWarning[]; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.CHECK_GROUP_OFFLINE_MESSAGES, chatIds);
+    },
+    checkGroupOfflineMessagesForChat: async (chatId: number): Promise<{ success: boolean; checkedChatIds: number[]; unreadFromChats: Map<number, number>; gapWarnings: GroupOfflineGapWarning[]; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.CHECK_GROUP_OFFLINE_MESSAGES_FOR_CHAT, chatId);
     },
     onOfflineMessagesFetchStart: (callback: (data: { chatIds: number[] }) => void) => {
         const listener = (_event: any, data: { chatIds: number[] }) => callback(data);

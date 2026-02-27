@@ -1,4 +1,4 @@
-import type { ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, InitStatus, PasswordRequest, MessageReceivedEvent, KeyExchangeEvent, SendMessageResponse, GroupChatActivatedEvent, GroupMembersUpdatedEvent } from './src/core/types';
+import type { ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, InitStatus, PasswordRequest, MessageReceivedEvent, KeyExchangeEvent, SendMessageResponse, GroupChatActivatedEvent, GroupMembersUpdatedEvent, GroupOfflineGapWarning } from './src/core/types';
 import type { Chat, Message } from './src/core/lib/db/database';
 
 declare global {
@@ -43,6 +43,7 @@ declare global {
             // Send message
             sendMessage: (identifier: string, message: string) => Promise<SendMessageResponse>;
             sendGroupMessage: (chatId: number, message: string) => Promise<SendMessageResponse>;
+            retryGroupOfflineBackup: (chatId: number, messageId: string) => Promise<{ success: boolean; error: string | null }>;
 
             // Key exchange events
             onKeyExchangeSent: (callback: (data: KeyExchangeEvent) => void) => () => void;
@@ -87,6 +88,8 @@ declare global {
             // Offline message events
             checkOfflineMessages: (chatIds?: number[]) => Promise<{ success: boolean; checkedChatIds: number[]; unreadFromChats: Map<number, number>; error: string | null }>;
             checkOfflineMessagesForChat: (chatId: number) => Promise<{ success: boolean; checkedChatIds: number[]; unreadFromChats: Map<number, number>; error: string | null }>;
+            checkGroupOfflineMessages: (chatIds?: number[]) => Promise<{ success: boolean; checkedChatIds: number[]; unreadFromChats: Map<number, number>; gapWarnings: GroupOfflineGapWarning[]; error: string | null }>;
+            checkGroupOfflineMessagesForChat: (chatId: number) => Promise<{ success: boolean; checkedChatIds: number[]; unreadFromChats: Map<number, number>; gapWarnings: GroupOfflineGapWarning[]; error: string | null }>;
             onOfflineMessagesFetchStart: (callback: (data: { chatIds: number[] }) => void) => () => void;
             onOfflineMessagesFetchComplete: (callback: (data: { chatIds: number[] }) => void) => () => void;
 
