@@ -1,3 +1,5 @@
+import { MAX_MESSAGE_CONTENT_LENGTH } from "../constants";
+
 export function validateUsername(username: string): boolean {
     // Allow alphanumeric, underscore, hyphen, dot (reasonable for usernames)
     // Length: 1-32 characters
@@ -23,7 +25,7 @@ export function validateFileId(fileId: string): boolean {
     return true;
 }
 
-export function validateMessageLength(message: string, maxLength: number = 1000): boolean {
+export function validateMessageLength(message: string, maxLength: number = MAX_MESSAGE_CONTENT_LENGTH): boolean {
     if (message.length > maxLength) {
         console.log(`Message too long (${message.length} chars, max ${maxLength} chars)`);
         return false;

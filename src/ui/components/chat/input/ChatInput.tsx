@@ -7,7 +7,7 @@ import { useDispatch, useSelector } from "react-redux";
 import type { RootState } from "../../../state/store";
 import { SendFileDialog } from "./SendFileDialog";
 import { addMessage, removeMessageById, updateChat, updateFileTransferStatus, updateLocalMessageSendState } from "../../../state/slices/chatSlice";
-import { FILE_ACCEPTANCE_TIMEOUT } from "../../../constants";
+import { FILE_ACCEPTANCE_TIMEOUT, MAX_MESSAGE_CONTENT_LENGTH } from "../../../constants";
 
 type PendingSendJob =
     | { type: 'direct'; chatId: number; peerId: string; content: string; localMessageId: string }
@@ -136,11 +136,15 @@ export const ChatInput: FC = () => {
             toast.error('No active chat selected');
             return;
         }
-        if (!inputQuery.trim()) {
+        const messageContent = inputQuery.trim();
+        if (!messageContent) {
+            return;
+        }
+        if (messageContent.length > MAX_MESSAGE_CONTENT_LENGTH) {
+            toast.error(`Message too long. Max ${MAX_MESSAGE_CONTENT_LENGTH} characters`);
             return;
         }
         const chatId = activeChat.id;
-        const messageContent = inputQuery.trim();
         const localMessageId = `local-send-${chatId}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
         dispatch(addMessage({
