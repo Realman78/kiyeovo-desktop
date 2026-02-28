@@ -12,7 +12,10 @@ import {
   BUCKET_NUDGE_RETRY_DELAY_MS,
   GROUP_ACK_REPUBLISH_STARTUP_DELAY,
   GROUP_ACK_REPUBLISH_INTERVAL,
-  GROUP_ACK_REPUBLISH_JITTER
+  GROUP_ACK_REPUBLISH_JITTER,
+  GROUP_INFO_REPUBLISH_STARTUP_DELAY,
+  GROUP_INFO_REPUBLISH_INTERVAL,
+  GROUP_INFO_REPUBLISH_JITTER,
 } from '../constants.js';
 import { SessionManager } from './session-manager.js';
 import { MessageEncryption } from './message-encryption.js';
@@ -25,11 +28,13 @@ import { UsernameRegistry } from './username-registry.js';
 import { FileHandler } from './file-handler.js';
 import { generalErrorHandler } from '../utils/general-error.js';
 import { PeerId } from '@libp2p/interface';
-import { GroupMessageType, type GroupInvite } from './group/types.js';
+import { GroupMessageType } from './group/types.js';
 import { GroupCreator } from './group/group-creator.js';
 import { GroupResponder } from './group/group-responder.js';
 import { GroupMessaging } from './group/group-messaging.js';
 import { GroupOfflineManager } from './group/group-offline-manager.js';
+import { GroupAckRepublisher } from './group/group-ack-republisher.js';
+import { GroupInfoRepublisher } from './group/group-info-republisher.js';
 
 /**
  * Main message handler that orchestrates all message handling components
@@ -52,10 +57,13 @@ export class MessageHandler {
   private peerActivityCheckCooldowns = new Map<string, number>();
   private groupAckRepublishTimer: ReturnType<typeof setTimeout> | null = null;
   private groupAckStartupTimer: ReturnType<typeof setTimeout> | null = null;
-  private groupAckRepublishInFlight = false;
+  private groupInfoRepublishTimer: ReturnType<typeof setTimeout> | null = null;
+  private groupInfoStartupTimer: ReturnType<typeof setTimeout> | null = null;
   private offlineCheckRunSeq = 0;
   private groupOfflineManager: GroupOfflineManager;
   private groupMessaging: GroupMessaging;
+  private groupAckRepublisher: GroupAckRepublisher;
+  private groupInfoRepublisher: GroupInfoRepublisher;
 
   constructor(
     node: ChatNode,
@@ -104,11 +112,24 @@ export class MessageHandler {
       onMessageReceived: this.onMessageReceived,
       groupOfflineManager: this.groupOfflineManager,
     });
+    this.groupAckRepublisher = new GroupAckRepublisher({
+      node: this.node,
+      database: this.database,
+      usernameRegistry: this.usernameRegistry,
+      onGroupChatActivated: this.onGroupChatActivated,
+      onGroupMembersUpdated: this.onGroupMembersUpdated,
+      nudgePeer: this.nudgePeer.bind(this),
+    });
+    this.groupInfoRepublisher = new GroupInfoRepublisher({
+      node: this.node,
+      database: this.database,
+    });
     this.setupProtocolHandler();
     this.groupMessaging.start();
     this.cleanupPeerEvents = PeerConnectionHandler.setupPeerEvents(node, this.sessionManager);
     this.startSessionCleanup();
     this.startGroupAckRepublisher();
+    this.startGroupInfoRepublisher();
   }
 
   // Get configuration value from database with fallback to constant
@@ -363,116 +384,34 @@ export class MessageHandler {
   }
 
   private async runGroupAckRepublishCycle(): Promise<void> {
-    if (this.groupAckRepublishInFlight) return;
-    this.groupAckRepublishInFlight = true;
-    try {
-      // No peers connected means no useful republish work right now.
-      if (this.node.getConnections().length === 0) return;
+    await this.groupAckRepublisher.runCycle();
+  }
 
-      const pendingAcks = this.database.getAllPendingAcks();
-      if (pendingAcks.length === 0) return;
-      console.log(
-        `[GROUP-ACK][CYCLE][START] pendingCount=${pendingAcks.length} connectedPeers=${this.node.getConnections().length}`,
-      );
-
-      const userIdentity = this.usernameRegistry.getUserIdentity();
-      if (!userIdentity) return;
-
-      const myPeerId = this.node.peerId.toString();
-      const myUser = this.database.getUserByPeerId(myPeerId);
-      const myUsername = myUser?.username || `user_${myPeerId.slice(-8)}`;
-
-      const deps = {
-        node: this.node,
-        database: this.database,
-        userIdentity,
-        myPeerId,
-        myUsername,
-        onGroupChatActivated: this.onGroupChatActivated,
-        onGroupMembersUpdated: this.onGroupMembersUpdated,
-        nudgePeer: this.nudgePeer.bind(this),
-      };
-
-      const creator = new GroupCreator(deps);
-      const responder = new GroupResponder(deps);
-      let rePublished = 0;
-      let skippedDelivered = 0;
-      let removedInvalid = 0;
-      let failed = 0;
-
-      for (const pending of pendingAcks) {
-        try {
-          console.log(
-            `[GROUP-ACK][ITEM][START] type=${pending.message_type} group=${pending.group_id} target=${pending.target_peer_id.slice(-8)} ${this.describePendingPayload(pending.message_payload)}`,
-          );
-          if (pending.message_type === 'GROUP_INVITE') {
-            let inviteId: string | null = null;
-            try {
-              const invite = JSON.parse(pending.message_payload) as GroupInvite;
-              inviteId = invite.inviteId;
-            } catch {
-              console.warn(
-                `[GROUP-ACK] Removing invalid pending payload: type=${pending.message_type} group=${pending.group_id} target=${pending.target_peer_id.slice(-8)}`
-              );
-              this.database.removePendingAck(
-                pending.group_id,
-                pending.target_peer_id,
-                pending.message_type,
-              );
-              removedInvalid++;
-              continue;
-            }
-
-            if (
-              inviteId &&
-              this.database.isInviteDeliveryAckReceived(
-                pending.group_id,
-                pending.target_peer_id,
-                inviteId,
-              )
-            ) {
-              console.log(
-                `[GROUP-ACK] Skipping delivered invite ${inviteId} for ${pending.target_peer_id.slice(-8)}`
-              );
-              skippedDelivered++;
-              continue;
-            }
-          }
-
-          // TODO extend to support other group message types
-          if (pending.message_type === 'GROUP_INVITE_RESPONSE') {
-            // Responder -> creator flow
-            // eslint-disable-next-line no-await-in-loop
-            await responder.republishPendingControl(pending.target_peer_id, pending.message_payload);
-          } else {
-            // Creator -> members flow
-            // eslint-disable-next-line no-await-in-loop
-            await creator.republishPendingControl(pending.target_peer_id, pending.message_payload);
-          }
-
-          this.database.updatePendingAckLastPublished(
-            pending.group_id,
-            pending.target_peer_id,
-            pending.message_type,
-          );
-          rePublished++;
-          console.log(
-            `[GROUP-ACK][ITEM][DONE] type=${pending.message_type} group=${pending.group_id} target=${pending.target_peer_id.slice(-8)}`,
-          );
-        } catch (error: unknown) {
-          failed++;
-          generalErrorHandler(
-            error,
-            `[GROUP-ACK] Failed to re-publish ${pending.message_type} to ${pending.target_peer_id.slice(-8)}`,
-          );
-        }
-      }
-      console.log(
-        `[GROUP-ACK][CYCLE][DONE] rePublished=${rePublished} skippedDelivered=${skippedDelivered} removedInvalid=${removedInvalid} failed=${failed}`,
-      );
-    } finally {
-      this.groupAckRepublishInFlight = false;
+  private startGroupInfoRepublisher(): void {
+    if (this.groupInfoStartupTimer) {
+      clearTimeout(this.groupInfoStartupTimer);
     }
+    this.groupInfoStartupTimer = setTimeout(() => {
+      this.groupInfoStartupTimer = null;
+      void this.runGroupInfoRepublishCycle();
+      this.scheduleNextGroupInfoRepublish();
+    }, GROUP_INFO_REPUBLISH_STARTUP_DELAY);
+  }
+
+  private scheduleNextGroupInfoRepublish(): void {
+    if (this.groupInfoRepublishTimer) {
+      clearTimeout(this.groupInfoRepublishTimer);
+    }
+    const jitter = (Math.random() * 2 - 1) * GROUP_INFO_REPUBLISH_JITTER;
+    const delay = Math.max(1000, GROUP_INFO_REPUBLISH_INTERVAL + jitter);
+    this.groupInfoRepublishTimer = setTimeout(() => {
+      void this.runGroupInfoRepublishCycle();
+      this.scheduleNextGroupInfoRepublish();
+    }, delay);
+  }
+
+  private async runGroupInfoRepublishCycle(): Promise<void> {
+    await this.groupInfoRepublisher.runCycle();
   }
 
   /**
@@ -1161,6 +1100,14 @@ export class MessageHandler {
       clearTimeout(this.groupAckRepublishTimer);
       this.groupAckRepublishTimer = null;
     }
+    if (this.groupInfoStartupTimer) {
+      clearTimeout(this.groupInfoStartupTimer);
+      this.groupInfoStartupTimer = null;
+    }
+    if (this.groupInfoRepublishTimer) {
+      clearTimeout(this.groupInfoRepublishTimer);
+      this.groupInfoRepublishTimer = null;
+    }
     for (const timer of this.nudgeFetchTimers.values()) {
       clearTimeout(timer);
     }
@@ -1390,14 +1337,5 @@ export class MessageHandler {
     const ackedMessageId = typeof parsed.ackedMessageId === 'string' ? parsed.ackedMessageId : 'n/a';
     const ackId = typeof parsed.ackId === 'string' ? parsed.ackId : 'n/a';
     return `type=${type} group=${groupId} inviteId=${inviteId} msgId=${messageId} ackedMsgId=${ackedMessageId} ackId=${ackId}`;
-  }
-
-  private describePendingPayload(payloadJson: string): string {
-    try {
-      const parsed = JSON.parse(payloadJson) as Record<string, unknown>;
-      return this.describeParsedGroupMessage(parsed);
-    } catch {
-      return 'type=invalid_json group=n/a inviteId=n/a msgId=n/a ackedMsgId=n/a ackId=n/a';
-    }
   }
 } 

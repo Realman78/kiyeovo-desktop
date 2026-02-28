@@ -1,4 +1,5 @@
 import { randomUUID, publicEncrypt } from 'crypto';
+import { gunzipSync } from 'zlib';
 import { ed25519 } from '@noble/curves/ed25519';
 import { sha256 } from '@noble/hashes/sha2';
 import type { ChatNode, GroupMembersUpdatedEvent } from '../../types.js';
@@ -11,6 +12,9 @@ import {
   GROUP_MAX_MEMBERS,
   GROUP_INFO_LATEST_PREFIX,
   GROUP_INFO_VERSION_PREFIX,
+  GROUP_OFFLINE_BUCKET_PREFIX,
+  GROUP_INFO_REPUBLISH_RETRY_BASE_DELAY,
+  GROUP_ROTATION_IO_CONCURRENCY,
 } from '../../constants.js';
 import {
   GroupMessageType,
@@ -24,9 +28,11 @@ import {
   type GroupRosterEntry,
   type GroupInfoLatest,
   type GroupInfoVersioned,
+  type GroupOfflineStore,
   type GroupStatus,
   type AckMessageType,
 } from './types.js';
+import { putJsonToDHT } from './group-dht-publish.js';
 
 export interface GroupCreatorDeps {
   node: ChatNode;
@@ -429,66 +435,108 @@ export class GroupCreator {
     const acceptedUser = database.getUserByPeerId(acceptedPeerId);
     if (!acceptedUser) throw new Error(`User ${acceptedPeerId} not found`);
 
-    // Rotate key (join always triggers rotation)
-    const { groupKey, keyVersion } = await this.rotateGroupKey(groupId, acceptedPeerId, 'join');
+    const previousGroupStatus = (chat.group_status ?? 'active') as GroupStatus;
+    let rotationCommitted = false;
+    database.updateChatGroupStatus(chat.id, 'rekeying');
 
-    // Build roster (creator + all existing active members + new joiner)
-    const participants = database.getChatParticipants(chat.id);
-    const roster = this.buildRoster(participants.map(p => p.peer_id));
+    try {
+      const preRotationParticipants = database.getChatParticipants(chat.id).map(p => p.peer_id);
+      const prevVersion = chat.key_version ?? 0;
+      const prevEpochBoundaries = prevVersion > 0
+        ? await this.snapshotPrevEpochBoundaries(groupId, prevVersion, preRotationParticipants)
+        : {};
 
-    // RSA-encrypt group key for the new joiner
-    const recipientPubKeyPem = Buffer.from(acceptedUser.offline_public_key, 'base64').toString();
-    const encryptedGroupKey = publicEncrypt(
-      recipientPubKeyPem,
-      Buffer.from(groupKey, 'base64'),
-    ).toString('base64');
+      // Rotate key (join always triggers rotation)
+      const { groupKey, keyVersion } = await this.rotateGroupKey(groupId, acceptedPeerId, 'join');
+      rotationCommitted = true;
 
-    // Construct GroupWelcome
-    const creatorPubKeyBase64url = toBase64Url(userIdentity.signingPublicKey);
-    const groupInfoLatestDhtKey = `${GROUP_INFO_LATEST_PREFIX}/${groupId}/${creatorPubKeyBase64url}`;
+      // Build roster (creator + all existing active members + new joiner)
+      const participants = database.getChatParticipants(chat.id);
+      const roster = this.buildRoster(participants.map(p => p.peer_id));
 
-    const welcome: Omit<GroupWelcome, 'signature'> = {
-      type: GroupMessageType.GROUP_WELCOME,
-      groupId,
-      groupName: chat.name,
-      keyVersion,
-      encryptedGroupKey,
-      roster,
-      groupInfoLatestDhtKey,
-      messageId: randomUUID(),
-    };
+      // RSA-encrypt group key for the new joiner
+      const recipientPubKeyPem = Buffer.from(acceptedUser.offline_public_key, 'base64').toString();
+      const encryptedGroupKey = publicEncrypt(
+        recipientPubKeyPem,
+        Buffer.from(groupKey, 'base64'),
+      ).toString('base64');
 
-    const signature = this.sign(welcome);
-    const signedWelcome: GroupWelcome = { ...welcome, signature };
+      // Construct GroupWelcome
+      const creatorPubKeyBase64url = toBase64Url(userIdentity.signingPublicKey);
+      const groupInfoLatestDhtKey = `${GROUP_INFO_LATEST_PREFIX}/${groupId}/${creatorPubKeyBase64url}`;
 
-    // Store in pending ACKs first, then send. If send fails, re-publisher can still deliver later.
-    database.insertPendingAck(groupId, acceptedPeerId, 'GROUP_WELCOME', JSON.stringify(signedWelcome));
-    console.log(
-      `[GROUP][TRACE][WELCOME][CREATE] group=${groupId} to=${acceptedPeerId.slice(-8)} msgId=${signedWelcome.messageId} keyVersion=${keyVersion}`,
-    );
+      const welcome: Omit<GroupWelcome, 'signature'> = {
+        type: GroupMessageType.GROUP_WELCOME,
+        groupId,
+        groupName: chat.name,
+        keyVersion,
+        encryptedGroupKey,
+        roster,
+        groupInfoLatestDhtKey,
+        messageId: randomUUID(),
+      };
 
-    // Deliver to new member via pairwise offline bucket
-    await this.sendControlMessageToPeer(acceptedPeerId, signedWelcome);
-    console.log(
-      `[GROUP][TRACE][WELCOME][SENT] group=${groupId} to=${acceptedPeerId.slice(-8)} msgId=${signedWelcome.messageId}`,
-    );
+      const signature = this.sign(welcome);
+      const signedWelcome: GroupWelcome = { ...welcome, signature };
 
-    // Send GroupStateUpdate to all existing members (excluding new joiner — they get welcome)
-    await this.sendGroupStateUpdate(groupId, keyVersion, groupKey, roster, 'join', acceptedPeerId);
+      // Store in pending ACKs first, then send. If send fails, re-publisher can still deliver later.
+      database.insertPendingAck(groupId, acceptedPeerId, 'GROUP_WELCOME', JSON.stringify(signedWelcome));
+      console.log(
+        `[GROUP][TRACE][WELCOME][CREATE] group=${groupId} to=${acceptedPeerId.slice(-8)} msgId=${signedWelcome.messageId} keyVersion=${keyVersion}`,
+      );
 
-    // Publish group-info DHT records
-    await this.publishGroupInfoRecords(groupId, keyVersion, roster);
+      // Deliver to new member via pairwise offline bucket (best effort, pending ACK persists retries).
+      try {
+        await this.sendControlMessageToPeer(acceptedPeerId, signedWelcome);
+        console.log(
+          `[GROUP][TRACE][WELCOME][SENT] group=${groupId} to=${acceptedPeerId.slice(-8)} msgId=${signedWelcome.messageId}`,
+        );
+      } catch (error: unknown) {
+        const reason = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[GROUP][TRACE][WELCOME][QUEUE_RETRY] group=${groupId} to=${acceptedPeerId.slice(-8)} reason=${reason}`,
+        );
+      }
 
-    // Transition group_status to 'active' now that at least one member has been welcomed
-    database.updateChatGroupStatus(chat.id, 'active');
-    console.log(
-      `[GROUP][TRACE][WELCOME][DONE] group=${groupId} activated=true welcomedPeer=${acceptedPeerId.slice(-8)} keyVersion=${keyVersion}`,
-    );
-    this.deps.onGroupMembersUpdated?.({
-      chatId: chat.id,
-      groupId,
-      memberPeerId: acceptedPeerId,
-    });
+      // Send GroupStateUpdate to all existing members (excluding new joiner — they get welcome).
+      await this.sendGroupStateUpdate(groupId, keyVersion, groupKey, roster, 'join', acceptedPeerId);
+
+      // Publish group-info DHT records (best effort). Missing records should not roll back
+      // already-committed rotation; retries can heal later.
+      try {
+        await this.publishGroupInfoRecords(groupId, keyVersion, roster, prevEpochBoundaries);
+      } catch (error: unknown) {
+        const reason = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[GROUP][TRACE][WELCOME][GROUP_INFO_RETRY_NEEDED] group=${groupId} keyVersion=${keyVersion} reason=${reason}`,
+        );
+      }
+
+      // Transition group_status to 'active' now that rotation pipeline has completed.
+      database.updateChatGroupStatus(chat.id, 'active');
+      console.log(
+        `[GROUP][TRACE][WELCOME][DONE] group=${groupId} activated=true welcomedPeer=${acceptedPeerId.slice(-8)} keyVersion=${keyVersion}`,
+      );
+      this.deps.onGroupMembersUpdated?.({
+        chatId: chat.id,
+        groupId,
+        memberPeerId: acceptedPeerId,
+      });
+    } catch (error: unknown) {
+      if (rotationCommitted) {
+        // Rotation already changed keyVersion/participants locally; don't roll status back to a pre-rotation value.
+        // Keep group active and rely persisted pending ACKs / retries for eventual delivery.
+        database.updateChatGroupStatus(chat.id, 'active');
+        const reason = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[GROUP][TRACE][WELCOME][PARTIAL_FAILURE] group=${groupId} welcomedPeer=${acceptedPeerId.slice(-8)} status=active reason=${reason}`,
+        );
+        return;
+      }
+
+      database.updateChatGroupStatus(chat.id, previousGroupStatus);
+      throw error;
+    }
   }
 
   async rotateGroupKey(
@@ -559,44 +607,72 @@ export class GroupCreator {
 
     const participants = database.getChatParticipants(chat.id);
 
-    for (const participant of participants) {
-      // Skip self and the target of the event (joiner gets welcome, leaver/kicked gets nothing or kick msg)
-      if (participant.peer_id === myPeerId || participant.peer_id === targetPeerId) continue;
+    const recipients = participants.filter(
+      (participant) => participant.peer_id !== myPeerId && participant.peer_id !== targetPeerId,
+    );
+    let attempted = 0;
+    let sent = 0;
+    let failed = 0;
+    let skippedMissingUser = 0;
 
-      const user = database.getUserByPeerId(participant.peer_id);
-      if (!user) continue;
+    await this.mapWithConcurrency(
+      recipients,
+      GROUP_ROTATION_IO_CONCURRENCY,
+      async (participant) => {
+        attempted++;
+        const user = database.getUserByPeerId(participant.peer_id);
+        if (!user) {
+          skippedMissingUser++;
+          return;
+        }
 
-      // RSA-encrypt the new group key for this member
-      const recipientPubKeyPem = Buffer.from(user.offline_public_key, 'base64').toString();
-      const encryptedGroupKey = publicEncrypt(
-        recipientPubKeyPem,
-        Buffer.from(groupKey, 'base64'),
-      ).toString('base64');
+        // RSA-encrypt the new group key for this member
+        const recipientPubKeyPem = Buffer.from(user.offline_public_key, 'base64').toString();
+        const encryptedGroupKey = publicEncrypt(
+          recipientPubKeyPem,
+          Buffer.from(groupKey, 'base64'),
+        ).toString('base64');
 
-      const update: Omit<GroupStateUpdate, 'signature'> = {
-        type: GroupMessageType.GROUP_STATE_UPDATE,
-        groupId,
-        keyVersion,
-        encryptedGroupKey,
-        roster,
-        event,
-        targetPeerId,
-        messageId: randomUUID(),
-      };
+        const update: Omit<GroupStateUpdate, 'signature'> = {
+          type: GroupMessageType.GROUP_STATE_UPDATE,
+          groupId,
+          keyVersion,
+          encryptedGroupKey,
+          roster,
+          event,
+          targetPeerId,
+          messageId: randomUUID(),
+        };
 
-      const signature = this.sign(update);
-      const signedUpdate: GroupStateUpdate = { ...update, signature };
+        const signature = this.sign(update);
+        const signedUpdate: GroupStateUpdate = { ...update, signature };
 
-      // Store in pending ACKs first, then send.
-      database.insertPendingAck(groupId, participant.peer_id, 'GROUP_STATE_UPDATE', JSON.stringify(signedUpdate));
-      await this.sendControlMessageToPeer(participant.peer_id, signedUpdate);
-    }
+        // Store in pending ACKs first, then send (best effort).
+        database.insertPendingAck(groupId, participant.peer_id, 'GROUP_STATE_UPDATE', JSON.stringify(signedUpdate));
+        try {
+          await this.sendControlMessageToPeer(participant.peer_id, signedUpdate);
+          sent++;
+        } catch (error: unknown) {
+          failed++;
+          const reason = error instanceof Error ? error.message : String(error);
+          console.warn(
+            `[GROUP][TRACE][STATE_UPDATE][QUEUE_RETRY] group=${groupId} to=${participant.peer_id.slice(-8)} reason=${reason}`,
+          );
+        }
+      },
+    );
+
+    console.log(
+      `[GROUP][TRACE][STATE_UPDATE][SUMMARY] group=${groupId} keyVersion=${keyVersion} ` +
+      `attempted=${attempted} sent=${sent} failed=${failed} skippedMissingUser=${skippedMissingUser}`,
+    );
   }
 
   private async publishGroupInfoRecords(
     groupId: string,
     keyVersion: number,
     roster: GroupRosterEntry[],
+    prevEpochBoundaries?: Record<string, number>,
   ): Promise<void> {
     const { database, userIdentity } = this.deps;
     const creatorPubKeyBase64url = toBase64Url(userIdentity.signingPublicKey);
@@ -622,17 +698,25 @@ export class GroupCreator {
     // Includes observed seqs from all members (tracked on message receipt) + our own sending seq
     const senderSeqBoundaries: Record<string, number> = {};
     if (prevVersion >= 1) {
-      const observed = database.getAllMemberSeqs(groupId, prevVersion);
-      for (const [peerId, seq] of Object.entries(observed)) {
-        senderSeqBoundaries[peerId] = seq;
-      }
-      // Also include our own sending seq (may be higher than what we've "observed" from ourselves)
-      const mySeq = database.getCurrentSeq(groupId, prevVersion);
-      if (mySeq > 0) {
-        senderSeqBoundaries[this.deps.myPeerId] = Math.max(
-          senderSeqBoundaries[this.deps.myPeerId] ?? 0,
-          mySeq,
-        );
+      if (prevEpochBoundaries) {
+        for (const [peerId, seq] of Object.entries(prevEpochBoundaries)) {
+          if (seq > 0) {
+            senderSeqBoundaries[peerId] = seq;
+          }
+        }
+      } else {
+        const observed = database.getAllMemberSeqs(groupId, prevVersion);
+        for (const [peerId, seq] of Object.entries(observed)) {
+          senderSeqBoundaries[peerId] = seq;
+        }
+        // Also include our own sending seq (may be higher than what we've "observed" from ourselves)
+        const mySeq = database.getCurrentSeq(groupId, prevVersion);
+        if (mySeq > 0) {
+          senderSeqBoundaries[this.deps.myPeerId] = Math.max(
+            senderSeqBoundaries[this.deps.myPeerId] ?? 0,
+            mySeq,
+          );
+        }
       }
     }
 
@@ -660,15 +744,6 @@ export class GroupCreator {
 
     // Publish versioned record
     const versionedDhtKey = `${GROUP_INFO_VERSION_PREFIX}/${groupId}/${creatorPubKeyBase64url}/${keyVersion}`;
-    await this.putJsonToDHT(versionedDhtKey, signedVersioned);
-
-    // Store stateHash locally for hash chain continuity
-    database.updateGroupKeyStateHash(groupId, keyVersion, stateHash);
-
-    // Mark previous version as superseded
-    if (prevVersion >= 1) {
-      database.markGroupKeyUsedUntil(groupId, prevVersion, Date.now());
-    }
 
     // Publish latest pointer
     const latestPayload: Omit<GroupInfoLatest, 'creatorSignature'> = {
@@ -682,7 +757,120 @@ export class GroupCreator {
     const signedLatest: GroupInfoLatest = { ...latestPayload, creatorSignature: latestSignature };
 
     const latestDhtKey = `${GROUP_INFO_LATEST_PREFIX}/${groupId}/${creatorPubKeyBase64url}`;
-    await this.putJsonToDHT(latestDhtKey, signedLatest);
+    try {
+      await putJsonToDHT(this.deps.node, versionedDhtKey, signedVersioned, { warnOnQueryError: true, warnPrefix: 'GROUP' });
+      await putJsonToDHT(this.deps.node, latestDhtKey, signedLatest, { warnOnQueryError: true, warnPrefix: 'GROUP' });
+      database.removePendingGroupInfoPublish(groupId, keyVersion);
+    } catch (error: unknown) {
+      const reason = error instanceof Error ? error.message : String(error);
+      database.upsertPendingGroupInfoPublish(
+        groupId,
+        keyVersion,
+        versionedDhtKey,
+        JSON.stringify(signedVersioned),
+        latestDhtKey,
+        JSON.stringify(signedLatest),
+        Date.now() + GROUP_INFO_REPUBLISH_RETRY_BASE_DELAY,
+        reason,
+      );
+      throw error;
+    }
+
+    // Store stateHash locally for hash chain continuity
+    database.updateGroupKeyStateHash(groupId, keyVersion, stateHash);
+
+    // Mark previous version as superseded
+    if (prevVersion >= 1) {
+      database.markGroupKeyUsedUntil(groupId, prevVersion, Date.now());
+    }
+  }
+
+  private async snapshotPrevEpochBoundaries(
+    groupId: string,
+    prevVersion: number,
+    participantPeerIds: string[],
+  ): Promise<Record<string, number>> {
+    const { database, myPeerId } = this.deps;
+    const boundaries: Record<string, number> = {};
+
+    const observed = database.getAllMemberSeqs(groupId, prevVersion);
+    for (const [peerId, seq] of Object.entries(observed)) {
+      if (seq > 0) {
+        boundaries[peerId] = seq;
+      }
+    }
+
+    const mySeq = database.getCurrentSeq(groupId, prevVersion);
+    if (mySeq > 0) {
+      boundaries[myPeerId] = Math.max(boundaries[myPeerId] ?? 0, mySeq);
+    }
+
+    const uniqueParticipants = [...new Set(participantPeerIds)];
+    const dhtTargets = uniqueParticipants.filter((peerId) => peerId !== myPeerId);
+
+    await this.mapWithConcurrency(
+      dhtTargets,
+      GROUP_ROTATION_IO_CONCURRENCY,
+      async (peerId) => {
+        try {
+          const dhtHighest = await this.fetchHighestSeqFromSenderBucket(groupId, prevVersion, peerId);
+          if (dhtHighest > 0) {
+            boundaries[peerId] = Math.max(boundaries[peerId] ?? 0, dhtHighest);
+          }
+        } catch (error: unknown) {
+          const reason = error instanceof Error ? error.message : String(error);
+          console.warn(
+            `[GROUP][TRACE][ROTATE][BOUNDARY_DHT_READ_FAIL] group=${groupId} peer=${peerId.slice(-8)} keyVersion=${prevVersion} reason=${reason}`,
+          );
+        }
+      },
+    );
+
+    console.log(
+      `[GROUP][TRACE][ROTATE][BOUNDARIES] group=${groupId} prevVersion=${prevVersion} peers=${Object.keys(boundaries).length}`,
+    );
+    return boundaries;
+  }
+
+  private async fetchHighestSeqFromSenderBucket(
+    groupId: string,
+    keyVersion: number,
+    senderPeerId: string,
+  ): Promise<number> {
+    const { database, node } = this.deps;
+    const sender = database.getUserByPeerId(senderPeerId);
+    if (!sender) return 0;
+
+    const senderPubKeyBase64url = toBase64Url(Buffer.from(sender.signing_public_key, 'base64'));
+    const bucketKey = `${GROUP_OFFLINE_BUCKET_PREFIX}/${groupId}/${keyVersion}/${senderPubKeyBase64url}`;
+    const keyBytes = new TextEncoder().encode(bucketKey);
+
+    let best: GroupOfflineStore | null = null;
+
+    for await (const event of node.services.dht.get(keyBytes) as AsyncIterable<import('@libp2p/kad-dht').QueryEvent>) {
+      if (event.name !== 'VALUE' || event.value.length === 0) continue;
+      let parsed: GroupOfflineStore;
+      try {
+        const decompressed = gunzipSync(Buffer.from(event.value));
+        parsed = JSON.parse(decompressed.toString('utf8')) as GroupOfflineStore;
+      } catch {
+        continue;
+      }
+
+      if (
+        !best
+        || parsed.version > best.version
+        || (parsed.version === best.version && parsed.lastUpdated > best.lastUpdated)
+      ) {
+        best = parsed;
+      }
+    }
+
+    if (!best) return 0;
+    const maxSeqInMessages = best.messages.length > 0
+      ? Math.max(...best.messages.map((m) => m.seq))
+      : 0;
+    return Math.max(best.highestSeq ?? 0, maxSeqInMessages);
   }
 
   // --- Helpers ---
@@ -787,15 +975,29 @@ export class GroupCreator {
     return `type=${type} group=${groupId} inviteId=${inviteId} msgId=${messageId} ackedMsgId=${ackedMessageId} ackId=${ackId}`;
   }
 
-  private async putJsonToDHT(dhtKey: string, data: object): Promise<void> {
-    const { node } = this.deps;
-    const keyBytes = new TextEncoder().encode(dhtKey);
-    const valueBytes = new TextEncoder().encode(JSON.stringify(data));
+  private async mapWithConcurrency<T>(
+    items: T[],
+    maxConcurrency: number,
+    worker: (item: T, index: number) => Promise<void>,
+  ): Promise<void> {
+    if (items.length === 0) return;
+    const limit = Math.max(1, maxConcurrency);
+    let cursor = 0;
 
-    for await (const event of node.services.dht.put(keyBytes, valueBytes) as AsyncIterable<import('@libp2p/kad-dht').QueryEvent>) {
-      if (event.name === 'QUERY_ERROR') {
-        console.warn(`[GROUP] DHT put error for ${dhtKey.slice(0, 50)}`);
+    const runWorker = async () => {
+      while (true) {
+        const index = cursor;
+        if (index >= items.length) return;
+        cursor += 1;
+        const item = items[index];
+        if (item === undefined) {
+          return;
+        }
+        await worker(item, index);
       }
-    }
+    };
+
+    const workers = Array.from({ length: Math.min(limit, items.length) }, () => runWorker());
+    await Promise.all(workers);
   }
 }

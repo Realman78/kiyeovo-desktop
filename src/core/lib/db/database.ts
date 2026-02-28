@@ -161,6 +161,20 @@ export interface GroupPendingAck {
     last_published_at: string
 }
 
+export interface GroupPendingInfoPublish {
+    group_id: string
+    key_version: number
+    versioned_dht_key: string
+    versioned_payload: string
+    latest_dht_key: string
+    latest_payload: string
+    attempts: number
+    next_retry_at: number
+    last_error: string | null
+    created_at: string
+    updated_at: string
+}
+
 export interface GroupInviteDeliveryAck {
     group_id: string
     target_peer_id: string
@@ -463,6 +477,24 @@ export class ChatDatabase {
             )
         `);
 
+        // Group info pending publishes — retries for versioned/latest DHT records
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS group_pending_info_publishes (
+                group_id TEXT NOT NULL,
+                key_version INTEGER NOT NULL,
+                versioned_dht_key TEXT NOT NULL,
+                versioned_payload TEXT NOT NULL,
+                latest_dht_key TEXT NOT NULL,
+                latest_payload TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                next_retry_at INTEGER NOT NULL,
+                last_error TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (group_id, key_version)
+            )
+        `);
+
         // Group invite delivery ACKs — recipient confirmed invite was received.
         // Used to stop invite re-publishing while still keeping invite pending row
         // for later response validation.
@@ -517,6 +549,7 @@ export class ChatDatabase {
       -- Group indexes
       CREATE INDEX IF NOT EXISTS idx_group_key_history_group ON group_key_history(group_id);
       CREATE INDEX IF NOT EXISTS idx_group_pending_acks_group ON group_pending_acks(group_id);
+      CREATE INDEX IF NOT EXISTS idx_group_pending_info_next_retry ON group_pending_info_publishes(next_retry_at);
       CREATE INDEX IF NOT EXISTS idx_group_invite_delivery_acks_group ON group_invite_delivery_acks(group_id);
       CREATE INDEX IF NOT EXISTS idx_chats_group_id ON chats(group_id);
         `);
@@ -1980,6 +2013,62 @@ export class ChatDatabase {
     updatePendingAckLastPublished(groupId: string, targetPeerId: string, messageType: AckMessageType): void {
         const stmt = this.db.prepare('UPDATE group_pending_acks SET last_published_at = CURRENT_TIMESTAMP WHERE group_id = ? AND target_peer_id = ? AND message_type = ?');
         stmt.run(groupId, targetPeerId, messageType);
+    }
+
+    // --- Group info pending publishes ---
+
+    upsertPendingGroupInfoPublish(
+        groupId: string,
+        keyVersion: number,
+        versionedDhtKey: string,
+        versionedPayload: string,
+        latestDhtKey: string,
+        latestPayload: string,
+        nextRetryAt: number,
+        lastError?: string | null,
+    ): void {
+        const stmt = this.db.prepare(`
+            INSERT INTO group_pending_info_publishes (
+                group_id, key_version, versioned_dht_key, versioned_payload, latest_dht_key, latest_payload, attempts, next_retry_at, last_error
+            )
+            VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
+            ON CONFLICT(group_id, key_version) DO UPDATE SET
+                versioned_dht_key = excluded.versioned_dht_key,
+                versioned_payload = excluded.versioned_payload,
+                latest_dht_key = excluded.latest_dht_key,
+                latest_payload = excluded.latest_payload,
+                next_retry_at = excluded.next_retry_at,
+                last_error = excluded.last_error,
+                updated_at = CURRENT_TIMESTAMP
+        `);
+        stmt.run(groupId, keyVersion, versionedDhtKey, versionedPayload, latestDhtKey, latestPayload, nextRetryAt, lastError ?? null);
+    }
+
+    markPendingGroupInfoPublishAttempt(groupId: string, keyVersion: number, nextRetryAt: number, lastError: string): void {
+        const stmt = this.db.prepare(`
+            UPDATE group_pending_info_publishes
+            SET attempts = attempts + 1,
+                next_retry_at = ?,
+                last_error = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE group_id = ? AND key_version = ?
+        `);
+        stmt.run(nextRetryAt, lastError, groupId, keyVersion);
+    }
+
+    removePendingGroupInfoPublish(groupId: string, keyVersion: number): void {
+        this.db.prepare('DELETE FROM group_pending_info_publishes WHERE group_id = ? AND key_version = ?')
+            .run(groupId, keyVersion);
+    }
+
+    getDuePendingGroupInfoPublishes(nowMs: number, limit = 50): GroupPendingInfoPublish[] {
+        const stmt = this.db.prepare(`
+            SELECT * FROM group_pending_info_publishes
+            WHERE next_retry_at <= ?
+            ORDER BY next_retry_at ASC
+            LIMIT ?
+        `);
+        return stmt.all(nowMs, limit) as GroupPendingInfoPublish[];
     }
 
     markInviteDeliveryAckReceived(groupId: string, targetPeerId: string, inviteId: string): void {

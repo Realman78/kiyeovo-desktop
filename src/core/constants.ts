@@ -201,13 +201,14 @@ export const GROUP_MAX_MEMBERS = 10;
 // Keep aligned with direct offline limit for now; can be tuned independently later.
 export const GROUP_MAX_MESSAGES_PER_SENDER = OFFLINE_MESSAGE_LIMIT;
 export const GROUP_ACK_REPUBLISH_STARTUP_DELAY = 60 * 1000; // 60 seconds
-export const GROUP_ACK_REPUBLISH_INTERVAL = 10 * 60 * 1000; // 10 minutes
-export const GROUP_ACK_REPUBLISH_JITTER = 2 * 60 * 1000; // ±2 minutes
+export const GROUP_ACK_REPUBLISH_INTERVAL = 30 * 60 * 1000; // 30 minutes
+export const GROUP_ACK_REPUBLISH_JITTER = 5 * 60 * 1000; // ±5 minutes
 export const GROUP_GOSSIPSUB_HEARTBEAT_INTERVAL = 90 * 1000; // 90 seconds
 export const GROUP_TOPIC_RECONCILE_INTERVAL = 10 * 60 * 1000; // 10 minutes
 export const GROUP_PUBLISH_RETRY_DELAY_MS = 750; // Retry shortly after re-subscribing
 // Replace with your preferred publish error marker if libp2p error text differs.
 export const GROUP_PUBLISH_RETRYABLE_ERROR_PLACEHOLDER = 'TODO_REPLACE_WITH_RETRYABLE_PUBLISH_ERROR';
+export const GROUP_ROTATION_IO_CONCURRENCY = 5;
 export const GROUP_MESSAGE_MAX_FUTURE_SKEW_MS = 2 * 60 * 1000; // 2 minutes
 export const GROUP_MESSAGE_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
 export const GROUP_HEARTBEAT_MAX_AGE_MS = 5 * 60 * 1000; // 5 minutes
@@ -217,6 +218,12 @@ export const GROUP_INFO_LATEST_PREFIX = '/kiyeovo-group-info-latest';
 export const GROUP_INFO_VERSION_PREFIX = '/kiyeovo-group-info-v';
 export const GROUP_DHT_REPUBLISH_INTERVAL = 30 * 60 * 1000; // 30 minutes
 export const GROUP_DHT_REPUBLISH_JITTER = 5 * 60 * 1000; // ±5 minutes
+export const GROUP_INFO_REPUBLISH_STARTUP_DELAY = 60 * 1000; // 60 seconds
+export const GROUP_INFO_REPUBLISH_INTERVAL = 15 * 60 * 1000; // 15 minutes
+export const GROUP_INFO_REPUBLISH_JITTER = 60 * 1000; // ±1 minute
+export const GROUP_INFO_REPUBLISH_RETRY_BASE_DELAY = 60 * 1000; // 1 minute
+export const GROUP_INFO_REPUBLISH_RETRY_STEADY_DELAY = 10 * 60 * 1000; // 10 minutes
+export const GROUP_INFO_REPUBLISH_MAX_ATTEMPTS = 20;
 // Defensive cap to keep group offline DHT values bounded even when message limit is increased.
 export const GROUP_OFFLINE_STORE_MAX_COMPRESSED_BYTES = 64 * 1024; // 64KB
 export const GROUP_OFFLINE_LOCAL_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
