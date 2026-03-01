@@ -23,6 +23,7 @@ const ChatWrapper = ({
   const activeContactAttempt = useSelector((state: RootState) => state.chat.activeContactAttempt);
   const activePendingKeyExchange = useSelector((state: RootState) => state.chat.activePendingKeyExchange);
   const messages = useSelector((state: RootState) => state.chat.messages);
+  const sendingMessages = useSelector((state: RootState) => state.chat.sendingMessages);
 
   //   useEffect(() => {
   //     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -50,8 +51,11 @@ const ChatWrapper = ({
     if (activePendingKeyExchange) {
       return [createPendingMessage(activePendingKeyExchange.messageContent ?? "Message not found.", -78, activePendingKeyExchange.peerId, activePendingKeyExchange.username)]
     }
-    return activeChat ? messages.filter((m) => m.chatId === activeChat?.id) ?? [] : [];
-  }, [activePendingKeyExchange, activeContactAttempt, activeChat, messages]);
+    if (!activeChat) return [];
+    const persisted = messages.filter((m) => m.chatId === activeChat.id);
+    const sending = sendingMessages.filter((m) => m.chatId === activeChat.id);
+    return [...persisted, ...sending].sort((a, b) => a.timestamp - b.timestamp);
+  }, [activePendingKeyExchange, activeContactAttempt, activeChat, messages, sendingMessages]);
 
   const FooterToDisplay = useMemo(() => {
     if (activeContactAttempt) {

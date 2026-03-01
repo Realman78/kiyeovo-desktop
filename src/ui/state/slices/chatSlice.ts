@@ -60,6 +60,7 @@ interface ChatState {
   activePendingKeyExchange: PendingKeyExchange | null;
   pendingKeyExchanges: PendingKeyExchange[];
   messages: ChatMessage[];
+  sendingMessages: ChatMessage[];
   loading: boolean;
 }
 
@@ -71,6 +72,7 @@ const initialState: ChatState = {
   activePendingKeyExchange: null,
   pendingKeyExchanges: [],
   messages: [],
+  sendingMessages: [],
   loading: false,
 };
 
@@ -154,36 +156,11 @@ const chatSlice = createSlice({
       const isFromCurrentUser = action.payload.currentUserPeerId &&
                                  action.payload.senderPeerId === action.payload.currentUserPeerId;
       let insertedOrUpdated = false;
-      let shouldSortForChat = false;
 
       // Check if message already exists (prevent duplicates)
       const isDuplicate = state.messages.some(msg => msg.id === id);
 
-      // Reconcile optimistic local message with authoritative sender-echo message.
-      // Match only the currently in-flight local message ("sending") to avoid
-      // ambiguity when same content is queued multiple times.
-      if (!isDuplicate && isFromCurrentUser) {
-        const pendingIndex = state.messages.findIndex((msg) =>
-          msg.chatId === chatId &&
-          msg.senderPeerId === action.payload.senderPeerId &&
-          msg.content === action.payload.content &&
-          msg.localSendState === 'sending' &&
-          msg.id.startsWith('local-send-')
-        );
-
-        if (pendingIndex !== -1) {
-          state.messages[pendingIndex] = {
-            ...state.messages[pendingIndex],
-            ...action.payload,
-            localSendState: undefined,
-          };
-          insertedOrUpdated = true;
-          shouldSortForChat = true; // replacement can shift timestamp/order
-        } else {
-          state.messages.push(action.payload);
-          insertedOrUpdated = true;
-        }
-      } else if (isDuplicate) {
+      if (isDuplicate) {
         console.log(`[Redux] Message ${id} already exists, skipping duplicate but updating chat metadata`);
       } else {
         // Only add to array if not duplicate
@@ -197,7 +174,7 @@ const chatSlice = createSlice({
         const isOutOfOrder =
           !!lastMessageBeforeInsert && compareMessageOrder(lastMessageBeforeInsert, action.payload) > 0;
 
-        if (chat?.isFetchingOffline || shouldSortForChat || isOutOfOrder) {
+        if (chat?.isFetchingOffline || isOutOfOrder) {
           sortChatMessagesInPlace(state.messages, chatId);
         }
       }
@@ -232,6 +209,7 @@ const chatSlice = createSlice({
       const { messageId, chatId } = action.payload;
       const initialLength = state.messages.length;
       state.messages = state.messages.filter((m) => m.id !== messageId);
+      state.sendingMessages = state.sendingMessages.filter((m) => m.id !== messageId);
 
       if (state.messages.length === initialLength) {
         return;
@@ -272,15 +250,17 @@ const chatSlice = createSlice({
     },
     removeChat: (state, action: PayloadAction<number>) => {
       state.chats = state.chats.filter((chat) => chat.id !== action.payload);
-      delete state.messages[action.payload];
+      state.sendingMessages = state.sendingMessages.filter((m) => m.chatId !== action.payload);
       if (state.activeChat?.id === action.payload) {
         state.messages = [];
+        state.sendingMessages = [];
         state.activeChat = null;
       }
     },
     // clear messages for a specific chat
     clearMessages: (state, action: PayloadAction<number>) => {
       state.messages = state.messages.filter((m) => m.chatId !== action.payload);
+      state.sendingMessages = state.sendingMessages.filter((m) => m.chatId !== action.payload);
     },
     setLoading: (state, action: PayloadAction<boolean>) => {
       state.loading = action.payload;
@@ -299,6 +279,22 @@ const chatSlice = createSlice({
     },
     setMessages: (state, action: PayloadAction<ChatMessage[]>) => {
       state.messages = [...action.payload].sort(compareMessageOrder);
+    },
+    addSendingMessage: (state, action: PayloadAction<ChatMessage>) => {
+      if (!state.sendingMessages.some((m) => m.id === action.payload.id)) {
+        state.sendingMessages.push(action.payload);
+      }
+    },
+    removeSendingMessage: (state, action: PayloadAction<string>) => {
+      state.sendingMessages = state.sendingMessages.filter((m) => m.id !== action.payload);
+    },
+    finalizeSendingMessage: (state, action: PayloadAction<{ localMessageId: string; finalMessage: ChatMessage }>) => {
+      state.sendingMessages = state.sendingMessages.filter((m) => m.id !== action.payload.localMessageId);
+      const isDuplicate = state.messages.some((m) => m.id === action.payload.finalMessage.id);
+      if (!isDuplicate) {
+        state.messages.push(action.payload.finalMessage);
+      }
+      state.messages.sort(compareMessageOrder);
     },
     setPendingKeyExchanges: (state, action: PayloadAction<PendingKeyExchange[]>) => {
       state.pendingKeyExchanges = action.payload;
@@ -379,7 +375,8 @@ const chatSlice = createSlice({
       }
     },
     updateLocalMessageSendState: (state, action: PayloadAction<{ messageId: string; state: 'queued' | 'sending' | 'failed' }>) => {
-      const message = state.messages.find((m) => m.id === action.payload.messageId);
+      const message = state.sendingMessages.find((m) => m.id === action.payload.messageId)
+        ?? state.messages.find((m) => m.id === action.payload.messageId);
       if (message) {
         message.localSendState = action.payload.state;
       }
@@ -408,6 +405,9 @@ export const {
   addContactAttempt,
   removeContactAttempt,
   setMessages,
+  addSendingMessage,
+  removeSendingMessage,
+  finalizeSendingMessage,
   setPendingKeyExchanges,
   addPendingKeyExchange,
   removePendingKeyExchange,

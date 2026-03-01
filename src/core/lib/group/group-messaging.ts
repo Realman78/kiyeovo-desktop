@@ -153,6 +153,7 @@ export class GroupMessaging {
   }
 
   async sendGroupMessage(groupId: string, content: string): Promise<SendMessageResponse> {
+    const sendStartedAt = Date.now();
     const ctx = this.resolveActiveGroupContext(groupId);
     this.ensureTopicSubscription(groupId, ctx.topic);
 
@@ -178,14 +179,19 @@ export class GroupMessaging {
       ...unsignedMessage,
       signature: this.sign(unsignedMessage),
     };
+    const sendTag = `group=${groupId.slice(0, 8)} msg=${signedMessage.messageId.slice(0, 8)}`;
+    console.log(`[GROUP-MSG][TIMING][SEND] ${sendTag} start`);
 
     const payloadBytes = new TextEncoder().encode(JSON.stringify(signedMessage));
+    const publishStartedAt = Date.now();
     const publishedOnline = await this.publishWithRetry(ctx, payloadBytes);
+    const publishMs = Date.now() - publishStartedAt;
 
     let warning: string | null = publishedOnline
       ? null
       : 'No online group peers subscribed; queued for offline delivery.';
     let offlineBackupRetry: { chatId: number; messageId: string } | null = null;
+    const offlineStoreStartedAt = Date.now();
     try {
       await this.deps.groupOfflineManager.storeGroupMessage(signedMessage);
       this.pendingOfflineBackups.delete(signedMessage.messageId);
@@ -199,8 +205,10 @@ export class GroupMessaging {
       this.pendingOfflineBackups.set(signedMessage.messageId, signedMessage);
       console.warn(`[GROUP-OFFLINE] ${warning}`);
     }
+    const offlineStoreMs = Date.now() - offlineStoreStartedAt;
 
     // emitSelf=true can deliver our own publish back before this point
+    const localPersistStartedAt = Date.now();
     if (!this.deps.database.messageExists(signedMessage.messageId)) {
       await this.deps.database.createMessage({
         id: signedMessage.messageId,
@@ -223,6 +231,7 @@ export class GroupMessaging {
         messageType: 'text',
       });
     }
+    const localPersistMs = Date.now() - localPersistStartedAt;
 
     const strippedMessage: StrippedMessage = {
       chatId: ctx.chatId,
@@ -232,7 +241,7 @@ export class GroupMessaging {
       messageType: 'text',
     };
 
-    return {
+    const response: SendMessageResponse = {
       success: true,
       message: strippedMessage,
       messageSentStatus: publishedOnline ? 'online' : 'offline',
@@ -240,6 +249,14 @@ export class GroupMessaging {
       warning,
       offlineBackupRetry,
     };
+
+    console.log(
+      `[GROUP-MSG][TIMING][SEND] ${sendTag} done totalMs=${Date.now() - sendStartedAt} ` +
+      `publishMs=${publishMs} offlineStoreMs=${offlineStoreMs} localPersistMs=${localPersistMs} ` +
+      `sentStatus=${publishedOnline ? 'online' : 'offline'}`
+    );
+
+    return response;
   }
 
   async retryOfflineBackup(chatId: number, messageId: string): Promise<void> {
@@ -285,17 +302,27 @@ export class GroupMessaging {
   }
 
   private async publishWithRetry(ctx: GroupContext, payload: Uint8Array): Promise<boolean> {
+    const startedAt = Date.now();
     try {
+      const attemptStartedAt = Date.now();
       await this.publish(ctx.topic, payload);
+      console.log(
+        `[GROUP-MSG][TIMING][PUBLISH] group=${ctx.groupId.slice(0, 8)} attempt=1 ok took=${Date.now() - attemptStartedAt}ms`
+      );
       return true;
     } catch (firstError: unknown) {
+      const firstAttemptMs = Date.now() - startedAt;
       if (!this.isRetryablePublishError(firstError)) {
+        console.log(
+          `[GROUP-MSG][TIMING][PUBLISH] group=${ctx.groupId.slice(0, 8)} attempt=1 fail_non_retryable ` +
+          `took=${firstAttemptMs}ms`
+        );
         throw firstError;
       }
       console.warn(
         `[GROUP-MSG] Retrying publish for group=${ctx.groupId} after retryable error: ${
           firstError instanceof Error ? firstError.message : String(firstError)
-        }`,
+        } (attempt1Ms=${firstAttemptMs})`,
       );
     }
 
@@ -304,17 +331,26 @@ export class GroupMessaging {
       setTimeout(resolve, GROUP_PUBLISH_RETRY_DELAY_MS);
     });
     try {
+      const retryStartedAt = Date.now();
       await this.publish(ctx.topic, payload);
+      console.log(
+        `[GROUP-MSG][TIMING][PUBLISH] group=${ctx.groupId.slice(0, 8)} attempt=2 ok ` +
+        `attemptMs=${Date.now() - retryStartedAt} totalMs=${Date.now() - startedAt}`
+      );
       return true;
     } catch (secondError: unknown) {
       if (this.isRetryablePublishError(secondError)) {
         console.warn(
           `[GROUP-MSG] Falling back to offline delivery for group=${ctx.groupId}: ${
             secondError instanceof Error ? secondError.message : String(secondError)
-          }`,
+          } (totalMs=${Date.now() - startedAt})`,
         );
         return false;
       }
+      console.log(
+        `[GROUP-MSG][TIMING][PUBLISH] group=${ctx.groupId.slice(0, 8)} attempt=2 fail_non_retryable ` +
+        `totalMs=${Date.now() - startedAt}`
+      );
       throw secondError;
     }
   }

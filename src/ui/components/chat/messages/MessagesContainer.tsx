@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { setMessages, updateChat, updateLocalMessageSendState, type ChatMessage } from "../../../state/slices/chatSlice";
+import { finalizeSendingMessage, setMessages, updateChat, updateLocalMessageSendState, type ChatMessage } from "../../../state/slices/chatSlice";
 import type { RootState } from "../../../state/store";
 import { useDispatch, useSelector } from "react-redux";
 import { formatTimestampToHourMinute } from "../../../utils/dateUtils";
@@ -124,7 +124,7 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
 
     try {
       if (activeChat.type === 'group') {
-        const { success, error, warning, offlineBackupRetry } = await window.kiyeovoAPI.sendGroupMessage(activeChat.id, message.content);
+        const { success, error, warning, offlineBackupRetry, message: sentMessage, messageSentStatus } = await window.kiyeovoAPI.sendGroupMessage(activeChat.id, message.content);
         if (!success) {
           dispatch(updateLocalMessageSendState({ messageId: message.id, state: 'failed' }));
           toast.error(error || 'Failed to resend group message');
@@ -147,6 +147,18 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
             },
           );
         }
+        if (sentMessage?.messageId) {
+          dispatch(finalizeSendingMessage({
+            localMessageId: message.id,
+            finalMessage: {
+              ...message,
+              id: sentMessage.messageId,
+              timestamp: sentMessage.timestamp ?? Date.now(),
+              messageSentStatus: messageSentStatus ?? 'online',
+              localSendState: undefined,
+            },
+          }));
+        }
         return;
       }
 
@@ -156,10 +168,21 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
         return;
       }
 
-      const { success, error } = await window.kiyeovoAPI.sendMessage(activeChat.peerId, message.content);
+      const { success, error, message: sentMessage, messageSentStatus } = await window.kiyeovoAPI.sendMessage(activeChat.peerId, message.content);
       if (!success) {
         dispatch(updateLocalMessageSendState({ messageId: message.id, state: 'failed' }));
         toast.error(error || 'Failed to resend message');
+      } else if (sentMessage?.messageId) {
+        dispatch(finalizeSendingMessage({
+          localMessageId: message.id,
+          finalMessage: {
+            ...message,
+            id: sentMessage.messageId,
+            timestamp: sentMessage.timestamp ?? Date.now(),
+            messageSentStatus: messageSentStatus ?? 'online',
+            localSendState: undefined,
+          },
+        }));
       }
     } catch (err) {
       dispatch(updateLocalMessageSendState({ messageId: message.id, state: 'failed' }));

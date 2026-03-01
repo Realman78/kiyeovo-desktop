@@ -614,9 +614,12 @@ export class GroupOfflineManager {
   }
 
   private async putStore(bucketKey: string, store: GroupOfflineStore): Promise<void> {
+    const startedAt = Date.now();
     const key = new TextEncoder().encode(bucketKey);
     const payload = Buffer.from(JSON.stringify(store), 'utf8');
+    const compressStartedAt = Date.now();
     const compressed = await gzipAsync(payload);
+    const compressMs = Date.now() - compressStartedAt;
     if (compressed.length > GROUP_OFFLINE_STORE_MAX_COMPRESSED_BYTES) {
       throw new Error(
         `Group offline store too large (${compressed.length}B > ${GROUP_OFFLINE_STORE_MAX_COMPRESSED_BYTES}B)`,
@@ -624,11 +627,26 @@ export class GroupOfflineManager {
     }
 
     let successCount = 0;
+    let eventCount = 0;
+    let firstPeerResponseMs: number | null = null;
+    const putStartedAt = Date.now();
     for await (const event of this.deps.node.services.dht.put(key, compressed) as AsyncIterable<QueryEvent>) {
+      eventCount++;
       if (event.name === 'PEER_RESPONSE') {
         successCount++;
+        if (firstPeerResponseMs === null) {
+          firstPeerResponseMs = Date.now() - putStartedAt;
+        }
       }
     }
+    const putMs = Date.now() - putStartedAt;
+    const totalMs = Date.now() - startedAt;
+    console.log(
+      `[GROUP-OFFLINE][TIMING][PUT] bucket=*${bucketKey.slice(-10)} ` +
+      `payload=${payload.length}B gz=${compressed.length}B compressMs=${compressMs} ` +
+      `putMs=${putMs} firstPeerMs=${firstPeerResponseMs ?? -1} peerResponses=${successCount} ` +
+      `events=${eventCount} totalMs=${totalMs}`
+    );
 
     if (successCount === 0) {
       throw new Error('Failed to store group offline message: no successful DHT peers');

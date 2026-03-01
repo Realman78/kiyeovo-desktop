@@ -6,12 +6,19 @@ import { useToast } from "../../ui/use-toast";
 import { useDispatch, useSelector } from "react-redux";
 import type { RootState } from "../../../state/store";
 import { SendFileDialog } from "./SendFileDialog";
-import { addMessage, removeMessageById, updateChat, updateFileTransferStatus, updateLocalMessageSendState } from "../../../state/slices/chatSlice";
+import { addMessage, addSendingMessage, finalizeSendingMessage, removeMessageById, updateChat, updateFileTransferStatus, updateLocalMessageSendState } from "../../../state/slices/chatSlice";
 import { FILE_ACCEPTANCE_TIMEOUT, MAX_MESSAGE_CONTENT_LENGTH } from "../../../constants";
 
 type PendingSendJob =
     | { type: 'direct'; chatId: number; peerId: string; content: string; localMessageId: string }
     | { type: 'group'; chatId: number; content: string; localMessageId: string };
+
+type SendResult = {
+    success: boolean;
+    messageId?: string;
+    timestamp?: number;
+    messageSentStatus?: 'online' | 'offline' | null;
+};
 
 export const ChatInput: FC = () => {
     const { toast } = useToast();
@@ -42,30 +49,35 @@ export const ChatInput: FC = () => {
         setDraftByChatId((prev) => ({ ...prev, [chatId]: value }));
     };
 
-    const performSendMessage = async (peerIdOrUsername: string, messageContent: string): Promise<boolean> => {
+    const performSendMessage = async (peerIdOrUsername: string, messageContent: string): Promise<SendResult> => {
         try {
-            const { success, error } = await window.kiyeovoAPI.sendMessage(peerIdOrUsername, messageContent);
+            const { success, error, message, messageSentStatus } = await window.kiyeovoAPI.sendMessage(peerIdOrUsername, messageContent);
 
             if (!success) {
                 toast.error(error || 'Failed to send message');
-                return false;
+                return { success: false };
             }
-            return true;
+            return {
+                success: true,
+                messageId: message?.messageId,
+                timestamp: message?.timestamp,
+                messageSentStatus: messageSentStatus ?? undefined,
+            };
             // Note: Message will be added to Redux via onMessageReceived event in Main.tsx
             // This ensures single source of truth and correct sender information
         } catch (err) {
             console.error('Failed to send message:', err);
             toast.error(err instanceof Error ? err.message : 'Unexpected error occurred');
-            return false;
+            return { success: false };
         }
     };
 
-    const performSendGroupMessage = async (chatId: number, messageContent: string): Promise<boolean> => {
+    const performSendGroupMessage = async (chatId: number, messageContent: string): Promise<SendResult> => {
         try {
-            const { success, error, warning, offlineBackupRetry } = await window.kiyeovoAPI.sendGroupMessage(chatId, messageContent);
+            const { success, error, warning, offlineBackupRetry, message, messageSentStatus } = await window.kiyeovoAPI.sendGroupMessage(chatId, messageContent);
             if (!success) {
                 toast.error(error || 'Failed to send group message');
-                return false;
+                return { success: false };
             } else if (warning && offlineBackupRetry) {
                 toast.warningAction(
                     warning,
@@ -83,11 +95,16 @@ export const ChatInput: FC = () => {
                     },
                 );
             }
-            return true;
+            return {
+                success: true,
+                messageId: message?.messageId,
+                timestamp: message?.timestamp,
+                messageSentStatus: messageSentStatus ?? undefined,
+            };
         } catch (err) {
             console.error('Failed to send group message:', err);
             toast.error(err instanceof Error ? err.message : 'Unexpected error occurred');
-            return false;
+            return { success: false };
         }
     };
 
@@ -100,14 +117,32 @@ export const ChatInput: FC = () => {
                 const next = sendQueueRef.current[chatId]!.shift()!;
                 dispatch(updateLocalMessageSendState({ messageId: next.localMessageId, state: 'sending' }));
 
-                let success = false;
+                let result: SendResult = { success: false };
                 if (next.type === 'group') {
-                    success = await performSendGroupMessage(next.chatId, next.content);
+                    result = await performSendGroupMessage(next.chatId, next.content);
                 } else {
-                    success = await performSendMessage(next.peerId, next.content);
+                    result = await performSendMessage(next.peerId, next.content);
                 }
 
-                if (!success) {
+                if (!result.success) {
+                    dispatch(updateLocalMessageSendState({ messageId: next.localMessageId, state: 'failed' }));
+                } else if (result.messageId) {
+                    // Finalize local sending row immediately using backend response.
+                    dispatch(finalizeSendingMessage({
+                        localMessageId: next.localMessageId,
+                        finalMessage: {
+                            id: result.messageId,
+                            chatId: next.chatId,
+                            senderPeerId: myPeerId || '',
+                            senderUsername: myUsername || 'You',
+                            content: next.content,
+                            timestamp: result.timestamp ?? Date.now(),
+                            messageType: 'text',
+                            messageSentStatus: result.messageSentStatus ?? 'online',
+                            currentUserPeerId: myPeerId ?? undefined,
+                        },
+                    }));
+                } else {
                     dispatch(updateLocalMessageSendState({ messageId: next.localMessageId, state: 'failed' }));
                 }
             }
@@ -147,7 +182,7 @@ export const ChatInput: FC = () => {
         const chatId = activeChat.id;
         const localMessageId = `local-send-${chatId}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-        dispatch(addMessage({
+        dispatch(addSendingMessage({
             id: localMessageId,
             chatId,
             senderPeerId: myPeerId || '',

@@ -404,6 +404,7 @@ export const Main = () => {
                 const refreshResult = await window.kiyeovoAPI.getChats();
                 if (refreshResult.success) {
                   const currentChats = store.getState().chat.chats;
+                  const currentUnreadByChatId = new Map(currentChats.map((c) => [c.id, c.unreadCount]));
                   const refreshedChats = refreshResult.chats.map((dbChat: any) => ({
                     id: dbChat.id,
                     type: dbChat.type,
@@ -415,7 +416,7 @@ export const Main = () => {
                     lastMessageTimestamp: dbChat.last_message_timestamp
                       ? new Date(dbChat.last_message_timestamp).getTime()
                       : new Date(dbChat.updated_at).getTime(),
-                    unreadCount: result.unreadFromChats.get(dbChat.id) ?? 0,
+                    unreadCount: currentUnreadByChatId.get(dbChat.id) ?? 0,
                     status: dbChat.status,
                     fetchedOffline: currentChats.find(c => c.id === dbChat.id)?.fetchedOffline
                       ?? (dbChat.type === 'group'

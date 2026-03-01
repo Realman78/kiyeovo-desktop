@@ -258,6 +258,7 @@ function setupMessagingHandlers(
   });
 
   ipcMain.handle(IPC_CHANNELS.SEND_GROUP_MESSAGE_REQUEST, async (_event, chatId: number, message: string) => {
+    const startedAt = Date.now();
     try {
       const p2pCore = getP2PCore();
       if (!p2pCore) {
@@ -271,7 +272,12 @@ function setupMessagingHandlers(
         return { success: false, messageSentStatus: null, error: 'Message too long' };
       }
 
+      console.log(`[IPC][TIMING][GROUP-SEND] start chatId=${chatId} contentLen=${message.length}`);
       const response = await p2pCore.messageHandler.sendGroupMessage(chatId, message);
+      console.log(
+        `[IPC][TIMING][GROUP-SEND] done chatId=${chatId} success=${response.success} ` +
+        `status=${response.messageSentStatus ?? 'none'} took=${Date.now() - startedAt}ms`
+      );
       if (response.success) {
         return {
           success: true,
@@ -284,6 +290,7 @@ function setupMessagingHandlers(
       }
       return { success: false, messageSentStatus: null, error: response.error ?? 'Failed to send group message' };
     } catch (error) {
+      console.log(`[IPC][TIMING][GROUP-SEND] failed chatId=${chatId} took=${Date.now() - startedAt}ms`);
       console.error('[IPC] Failed to send group message:', error);
       return { success: false, messageSentStatus: null, error: error instanceof Error ? error.message : 'Failed to send group message' };
     }
