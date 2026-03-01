@@ -2,7 +2,7 @@ import { randomUUID, publicEncrypt } from 'crypto';
 import { gunzipSync } from 'zlib';
 import { ed25519 } from '@noble/curves/ed25519';
 import { sha256 } from '@noble/hashes/sha2';
-import type { ChatNode, GroupMembersUpdatedEvent } from '../../types.js';
+import type { ChatNode, GroupMembersUpdatedEvent, MessageReceivedEvent } from '../../types.js';
 import type { ChatDatabase } from '../db/database.js';
 import type { EncryptedUserIdentity } from '../encrypted-user-identity.js';
 import { OfflineMessageManager } from '../offline-message-manager.js';
@@ -41,6 +41,7 @@ export interface GroupCreatorDeps {
   myPeerId: string;
   myUsername: string;
   onGroupMembersUpdated?: (data: GroupMembersUpdatedEvent) => void;
+  onMessageReceived?: (data: MessageReceivedEvent) => void;
   nudgePeer?: (peerId: string) => void;
 }
 
@@ -514,6 +515,14 @@ export class GroupCreator {
 
       // Transition group_status to 'active' now that rotation pipeline has completed.
       database.updateChatGroupStatus(chat.id, 'active');
+      await this.appendMembershipSystemMessage(
+        chat.id,
+        groupId,
+        keyVersion,
+        'join',
+        acceptedPeerId,
+        acceptedUser.username,
+      );
       console.log(
         `[GROUP][TRACE][WELCOME][DONE] group=${groupId} activated=true welcomedPeer=${acceptedPeerId.slice(-8)} keyVersion=${keyVersion}`,
       );
@@ -973,6 +982,48 @@ export class GroupCreator {
     const ackedMessageId = typeof m.ackedMessageId === 'string' ? m.ackedMessageId : 'n/a';
     const ackId = typeof m.ackId === 'string' ? m.ackId : 'n/a';
     return `type=${type} group=${groupId} inviteId=${inviteId} msgId=${messageId} ackedMsgId=${ackedMessageId} ackId=${ackId}`;
+  }
+
+  private async appendMembershipSystemMessage(
+    chatId: number,
+    groupId: string,
+    keyVersion: number,
+    event: 'join' | 'leave' | 'kick',
+    targetPeerId: string,
+    targetUsername?: string,
+  ): Promise<void> {
+    const messageId = `group-system-${event}-${groupId}-${keyVersion}-${targetPeerId}`;
+    if (this.deps.database.messageExists(messageId)) return;
+
+    const resolvedUsername = targetUsername
+      ?? this.deps.database.getUserByPeerId(targetPeerId)?.username
+      ?? targetPeerId.slice(-8);
+    const content = event === 'join'
+      ? `${resolvedUsername} joined the group`
+      : event === 'leave'
+        ? `${resolvedUsername} left the group`
+        : `${resolvedUsername} was removed from the group`;
+    const timestamp = Date.now();
+
+    await this.deps.database.createMessage({
+      id: messageId,
+      chat_id: chatId,
+      sender_peer_id: this.deps.myPeerId,
+      content,
+      message_type: 'system',
+      timestamp: new Date(timestamp),
+    });
+
+    this.deps.onMessageReceived?.({
+      chatId,
+      messageId,
+      content,
+      senderPeerId: this.deps.myPeerId,
+      senderUsername: this.deps.myUsername,
+      timestamp,
+      messageSentStatus: 'online',
+      messageType: 'system',
+    });
   }
 
   private async mapWithConcurrency<T>(

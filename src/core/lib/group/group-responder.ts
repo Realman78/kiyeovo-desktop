@@ -1,6 +1,6 @@
 import { randomUUID, privateDecrypt } from 'crypto';
 import { ed25519 } from '@noble/curves/ed25519';
-import type { ChatNode, GroupChatActivatedEvent, GroupMembersUpdatedEvent } from '../../types.js';
+import type { ChatNode, GroupChatActivatedEvent, GroupMembersUpdatedEvent, MessageReceivedEvent } from '../../types.js';
 import type { ChatDatabase } from '../db/database.js';
 import type { EncryptedUserIdentity } from '../encrypted-user-identity.js';
 import { OfflineMessageManager } from '../offline-message-manager.js';
@@ -25,6 +25,7 @@ export interface GroupResponderDeps {
   myUsername: string;
   onGroupChatActivated?: (data: GroupChatActivatedEvent) => void;
   onGroupMembersUpdated?: (data: GroupMembersUpdatedEvent) => void;
+  onMessageReceived?: (data: MessageReceivedEvent) => void;
   nudgePeer?: (peerId: string) => void;
 }
 
@@ -450,6 +451,16 @@ export class GroupResponder {
       groupId: update.groupId,
       memberPeerId: update.targetPeerId,
     });
+    await this.appendMembershipSystemMessage(
+      chat.id,
+      update.groupId,
+      update.keyVersion,
+      update.event,
+      update.targetPeerId,
+      update.roster.find((entry) => entry.peerId === update.targetPeerId)?.username,
+      creatorPeerId,
+      creator.username,
+    );
 
     await this.sendControlAck(
       creatorPeerId,
@@ -604,5 +615,49 @@ export class GroupResponder {
     const ackedMessageId = typeof m.ackedMessageId === 'string' ? m.ackedMessageId : 'n/a';
     const ackId = typeof m.ackId === 'string' ? m.ackId : 'n/a';
     return `type=${type} group=${groupId} inviteId=${inviteId} msgId=${messageId} ackedMsgId=${ackedMessageId} ackId=${ackId}`;
+  }
+
+  private async appendMembershipSystemMessage(
+    chatId: number,
+    groupId: string,
+    keyVersion: number,
+    event: 'join' | 'leave' | 'kick',
+    targetPeerId: string,
+    targetUsername: string | undefined,
+    senderPeerId: string,
+    senderUsername: string,
+  ): Promise<void> {
+    const messageId = `group-system-${event}-${groupId}-${keyVersion}-${targetPeerId}`;
+    if (this.deps.database.messageExists(messageId)) return;
+
+    const resolvedUsername = targetUsername
+      ?? this.deps.database.getUserByPeerId(targetPeerId)?.username
+      ?? targetPeerId.slice(-8);
+    const content = event === 'join'
+      ? `${resolvedUsername} joined the group`
+      : event === 'leave'
+        ? `${resolvedUsername} left the group`
+        : `${resolvedUsername} was removed from the group`;
+    const timestamp = Date.now();
+
+    await this.deps.database.createMessage({
+      id: messageId,
+      chat_id: chatId,
+      sender_peer_id: senderPeerId,
+      content,
+      message_type: 'system',
+      timestamp: new Date(timestamp),
+    });
+
+    this.deps.onMessageReceived?.({
+      chatId,
+      messageId,
+      content,
+      senderPeerId,
+      senderUsername,
+      timestamp,
+      messageSentStatus: 'online',
+      messageType: 'system',
+    });
   }
 }

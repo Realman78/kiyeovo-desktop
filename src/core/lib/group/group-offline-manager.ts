@@ -102,15 +102,36 @@ export class GroupOfflineManager {
 
     await this.withBucketMutationLock(bucketKey, async () => {
       const local = this.deps.database.getGroupOfflineSentMessages(bucketKey);
-      const existingMessages = this.filterLiveMessages(local.messages, Date.now());
+      const existingMessages = this.filterLiveMessages(local.messages, Date.now())
+        .sort((a, b) => (a.seq - b.seq) || (a.timestamp - b.timestamp));
       const existingVersion = local.version;
+      const normalizedExistingMessages = [...existingMessages];
+
+      if (normalizedExistingMessages.length > GROUP_MAX_MESSAGES_PER_SENDER) {
+        const overflow = normalizedExistingMessages.length - GROUP_MAX_MESSAGES_PER_SENDER;
+        normalizedExistingMessages.splice(0, overflow);
+        console.warn(
+          `[GROUP-OFFLINE] Local mirror overflow trimmed ${overflow} oldest message(s) for ${bucketKey.slice(0, 48)}...`,
+        );
+      }
 
       const offlineMessageId = this.getOfflineMessageId(offlineMessage);
-      if (existingMessages.some(m => this.getOfflineMessageId(m) === offlineMessageId)) {
+      if (normalizedExistingMessages.some(m => this.getOfflineMessageId(m) === offlineMessageId)) {
+        if (normalizedExistingMessages.length !== existingMessages.length) {
+          const highestSeq = Math.max(
+            offlineMessage.seq,
+            ...normalizedExistingMessages.map((m) => m.seq),
+          );
+          const version = existingVersion + 1;
+          const signedStore = this.signStore(normalizedExistingMessages, highestSeq, version, bucketKey);
+          await this.putStore(bucketKey, signedStore);
+          this.deps.database.saveGroupOfflineSentMessages(bucketKey, normalizedExistingMessages, version);
+          this.setCachedStore(bucketKey, signedStore);
+        }
         return;
       }
 
-      const nextMessages = [...existingMessages, offlineMessage]
+      const nextMessages = [...normalizedExistingMessages, offlineMessage]
         .sort((a, b) => (a.seq - b.seq) || (a.timestamp - b.timestamp));
 
       if (nextMessages.length > GROUP_MAX_MESSAGES_PER_SENDER) {

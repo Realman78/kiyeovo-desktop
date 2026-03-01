@@ -213,6 +213,7 @@ export const GROUP_MESSAGE_MAX_FUTURE_SKEW_MS = 2 * 60 * 1000; // 2 minutes
 export const GROUP_MESSAGE_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
 export const GROUP_HEARTBEAT_MAX_AGE_MS = 5 * 60 * 1000; // 5 minutes
 export const GROUP_ROTATION_GRACE_WINDOW_MS = 60 * 1000; // 60 seconds - grace period after rotation for late messages
+export const GROUP_OLD_TOPIC_SUBSCRIPTION_GRACE_MS = 2 * 60 * 1000; // 2 minutes - keep previous topic subscribed after rekey
 export const GROUP_OFFLINE_BUCKET_PREFIX = '/kiyeovo-group-offline';
 export const GROUP_INFO_LATEST_PREFIX = '/kiyeovo-group-info-latest';
 export const GROUP_INFO_VERSION_PREFIX = '/kiyeovo-group-info-v';

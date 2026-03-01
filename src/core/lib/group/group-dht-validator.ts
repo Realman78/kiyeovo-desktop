@@ -6,6 +6,7 @@ import {
   GROUP_INFO_LATEST_PREFIX,
   GROUP_INFO_VERSION_PREFIX,
   GROUP_MAX_MESSAGES_PER_SENDER,
+  GROUP_OFFLINE_STORE_MAX_COMPRESSED_BYTES,
 } from '../../constants.js';
 import type {
   GroupContentMessage,
@@ -41,6 +42,11 @@ export async function groupOfflineMessageValidator(
   key: Uint8Array,
   value: Uint8Array
 ): Promise<void> {
+  if (value.length > GROUP_OFFLINE_STORE_MAX_COMPRESSED_BYTES) {
+    throw new Error(
+      `Group offline store too large (${value.length}B > ${GROUP_OFFLINE_STORE_MAX_COMPRESSED_BYTES}B)`,
+    );
+  }
   const keyStr = new TextDecoder().decode(key);
 
   if (!keyStr.startsWith(GROUP_OFFLINE_BUCKET_PREFIX + '/')) {

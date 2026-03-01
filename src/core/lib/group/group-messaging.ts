@@ -7,6 +7,7 @@ import {
   GROUP_GOSSIPSUB_HEARTBEAT_INTERVAL,
   GROUP_MESSAGE_MAX_AGE_MS,
   GROUP_MESSAGE_MAX_FUTURE_SKEW_MS,
+  GROUP_OLD_TOPIC_SUBSCRIPTION_GRACE_MS,
   GROUP_PUBLISH_RETRYABLE_ERROR_PLACEHOLDER,
   GROUP_PUBLISH_RETRY_DELAY_MS,
   GROUP_TOPIC_RECONCILE_INTERVAL,
@@ -40,9 +41,15 @@ interface GroupContext {
   topic: string;
 }
 
+interface GroupGraceContext extends GroupContext {
+  expiresAt: number;
+}
+
 export class GroupMessaging {
   private readonly deps: GroupMessagingDeps;
   private readonly groupTopics = new Map<string, string>();
+  private readonly groupGraceContexts = new Map<string, GroupGraceContext[]>();
+  private readonly graceTopicTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private reconcileTimer: ReturnType<typeof setInterval> | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private peerConnectDebounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -98,8 +105,22 @@ export class GroupMessaging {
       clearTimeout(this.peerConnectDebounceTimer);
       this.peerConnectDebounceTimer = null;
     }
+    for (const timer of this.graceTopicTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.graceTopicTimers.clear();
 
-    for (const topic of new Set(this.groupTopics.values())) {
+    const topicsToUnsubscribe = new Set<string>();
+    for (const topic of this.groupTopics.values()) {
+      topicsToUnsubscribe.add(topic);
+    }
+    for (const contexts of this.groupGraceContexts.values()) {
+      for (const context of contexts) {
+        topicsToUnsubscribe.add(context.topic);
+      }
+    }
+
+    for (const topic of topicsToUnsubscribe) {
       try {
         this.deps.node.services.pubsub.unsubscribe(topic);
       } catch {
@@ -107,11 +128,12 @@ export class GroupMessaging {
       }
     }
     this.groupTopics.clear();
+    this.groupGraceContexts.clear();
   }
 
   async subscribeToGroupTopic(groupId: string): Promise<void> {
     const ctx = this.resolveActiveGroupContext(groupId);
-    this.ensureTopicSubscription(groupId, ctx.topic);
+    this.ensureTopicSubscription(ctx);
   }
 
   async reconcileSubscriptions(): Promise<void> {
@@ -134,8 +156,15 @@ export class GroupMessaging {
         if (keyBytes.length !== 32) continue;
 
         const topic = this.deriveTopic(chat.group_id, keyBytes);
+        const ctx: GroupContext = {
+          groupId: chat.group_id,
+          chatId: chat.id,
+          keyVersion: chat.key_version,
+          groupKey: keyBytes,
+          topic,
+        };
         expectedByGroup.set(chat.group_id, topic);
-        this.ensureTopicSubscription(chat.group_id, topic);
+        this.ensureTopicSubscription(ctx);
       }
 
       for (const [groupId, existingTopic] of this.groupTopics.entries()) {
@@ -143,6 +172,7 @@ export class GroupMessaging {
         if (this.deps.node.services.pubsub.getTopics().includes(existingTopic)) {
           this.deps.node.services.pubsub.unsubscribe(existingTopic);
         }
+        this.clearGraceContextsForGroup(groupId);
         this.groupTopics.delete(groupId);
       }
     } catch (error: unknown) {
@@ -155,7 +185,7 @@ export class GroupMessaging {
   async sendGroupMessage(groupId: string, content: string): Promise<SendMessageResponse> {
     const sendStartedAt = Date.now();
     const ctx = this.resolveActiveGroupContext(groupId);
-    this.ensureTopicSubscription(groupId, ctx.topic);
+    this.ensureTopicSubscription(ctx);
 
     const seq = this.deps.database.getNextSeqAndIncrement(groupId, ctx.keyVersion);
     const nonce = randomBytes(24);
@@ -287,18 +317,123 @@ export class GroupMessaging {
     }, delayMs);
   }
 
-  private ensureTopicSubscription(groupId: string, topic: string): void {
-    const existingTopic = this.groupTopics.get(groupId);
-    if (existingTopic && existingTopic !== topic && this.deps.node.services.pubsub.getTopics().includes(existingTopic)) {
-      this.deps.node.services.pubsub.unsubscribe(existingTopic);
+  private ensureTopicSubscription(ctx: GroupContext): void {
+    const existingTopic = this.groupTopics.get(ctx.groupId);
+    if (existingTopic && existingTopic !== ctx.topic) {
+      const oldCtx = this.resolveStoredGroupContextByTopic(ctx.groupId, existingTopic);
+      if (oldCtx) {
+        this.addGraceContext(oldCtx);
+      } else if (this.deps.node.services.pubsub.getTopics().includes(existingTopic)) {
+        // If we can't resolve old context metadata, avoid holding a stale subscription forever.
+        this.deps.node.services.pubsub.unsubscribe(existingTopic);
+      }
     }
 
-    if (!this.deps.node.services.pubsub.getTopics().includes(topic)) {
-      this.deps.node.services.pubsub.subscribe(topic);
-      console.log(`[GROUP-MSG] Subscribed to topic group=${groupId} topic=${topic.slice(0, 16)}...`);
+    if (!this.deps.node.services.pubsub.getTopics().includes(ctx.topic)) {
+      this.deps.node.services.pubsub.subscribe(ctx.topic);
+      console.log(`[GROUP-MSG] Subscribed to topic group=${ctx.groupId} topic=${ctx.topic.slice(0, 16)}...`);
     }
 
-    this.groupTopics.set(groupId, topic);
+    this.groupTopics.set(ctx.groupId, ctx.topic);
+  }
+
+  private addGraceContext(ctx: GroupContext): void {
+    const now = Date.now();
+    const expiresAt = now + GROUP_OLD_TOPIC_SUBSCRIPTION_GRACE_MS;
+    const existing = this.groupGraceContexts.get(ctx.groupId) ?? [];
+
+    const filtered = existing.filter((entry) => entry.keyVersion !== ctx.keyVersion);
+    filtered.push({ ...ctx, expiresAt });
+    this.groupGraceContexts.set(ctx.groupId, filtered);
+
+    const timerKey = `${ctx.groupId}:${ctx.keyVersion}`;
+    const existingTimer = this.graceTopicTimers.get(timerKey);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+    const timer = setTimeout(() => {
+      this.graceTopicTimers.delete(timerKey);
+      this.expireGraceContext(ctx.groupId, ctx.keyVersion);
+    }, GROUP_OLD_TOPIC_SUBSCRIPTION_GRACE_MS);
+    this.graceTopicTimers.set(timerKey, timer);
+
+    console.log(
+      `[GROUP-MSG] Keeping previous topic for grace window group=${ctx.groupId} keyVersion=${ctx.keyVersion} ` +
+      `graceMs=${GROUP_OLD_TOPIC_SUBSCRIPTION_GRACE_MS}`,
+    );
+  }
+
+  private expireGraceContext(groupId: string, keyVersion: number): void {
+    const existing = this.groupGraceContexts.get(groupId);
+    if (!existing) return;
+
+    const target = existing.find((entry) => entry.keyVersion === keyVersion);
+    const remaining = existing.filter((entry) => entry.keyVersion !== keyVersion);
+    if (remaining.length > 0) {
+      this.groupGraceContexts.set(groupId, remaining);
+    } else {
+      this.groupGraceContexts.delete(groupId);
+    }
+
+    if (!target) return;
+    this.unsubscribeTopicIfUnused(target.topic);
+  }
+
+  private clearGraceContextsForGroup(groupId: string): void {
+    const existing = this.groupGraceContexts.get(groupId);
+    if (!existing) return;
+
+    for (const context of existing) {
+      const timerKey = `${groupId}:${context.keyVersion}`;
+      const timer = this.graceTopicTimers.get(timerKey);
+      if (timer) {
+        clearTimeout(timer);
+        this.graceTopicTimers.delete(timerKey);
+      }
+      this.unsubscribeTopicIfUnused(context.topic);
+    }
+    this.groupGraceContexts.delete(groupId);
+  }
+
+  private unsubscribeTopicIfUnused(topic: string): void {
+    const inCurrent = Array.from(this.groupTopics.values()).includes(topic);
+    if (inCurrent) return;
+
+    const inGrace = Array.from(this.groupGraceContexts.values())
+      .some((entries) => entries.some((entry) => entry.topic === topic && entry.expiresAt > Date.now()));
+    if (inGrace) return;
+
+    if (this.deps.node.services.pubsub.getTopics().includes(topic)) {
+      this.deps.node.services.pubsub.unsubscribe(topic);
+      console.log(`[GROUP-MSG] Unsubscribed expired topic ${topic.slice(0, 16)}...`);
+    }
+  }
+
+  private resolveStoredGroupContextByTopic(groupId: string, topic: string): GroupContext | null {
+    const chat = this.deps.database.getChatByGroupId(groupId);
+    if (!chat) return null;
+
+    const history = this.deps.database.getGroupKeyHistory(groupId)
+      .sort((a, b) => b.key_version - a.key_version);
+
+    for (const epoch of history) {
+      const keyBase64 = this.deps.database.getGroupKeyForEpoch(groupId, epoch.key_version);
+      if (!keyBase64) continue;
+      const keyBytes = Buffer.from(keyBase64, 'base64');
+      if (keyBytes.length !== 32) continue;
+      const derivedTopic = this.deriveTopic(groupId, keyBytes);
+      if (derivedTopic !== topic) continue;
+
+      return {
+        groupId,
+        chatId: chat.id,
+        keyVersion: epoch.key_version,
+        groupKey: keyBytes,
+        topic: derivedTopic,
+      };
+    }
+
+    return null;
   }
 
   private async publishWithRetry(ctx: GroupContext, payload: Uint8Array): Promise<boolean> {
@@ -326,7 +461,7 @@ export class GroupMessaging {
       );
     }
 
-    this.ensureTopicSubscription(ctx.groupId, ctx.topic);
+    this.ensureTopicSubscription(ctx);
     await new Promise<void>((resolve) => {
       setTimeout(resolve, GROUP_PUBLISH_RETRY_DELAY_MS);
     });
@@ -380,7 +515,7 @@ export class GroupMessaging {
 
   private async sendHeartbeat(groupId: string): Promise<void> {
     const ctx = this.resolveActiveGroupContext(groupId);
-    this.ensureTopicSubscription(groupId, ctx.topic);
+    this.ensureTopicSubscription(ctx);
 
     const heartbeat: Omit<GroupHeartbeatMessage, 'signature'> = {
       type: GroupMessageType.GROUP_MESSAGE,
@@ -446,23 +581,47 @@ export class GroupMessaging {
     const chat = this.deps.database.getChatByGroupId(groupId);
     if (!chat) return null;
     if (chat.status !== 'active' || chat.group_status !== 'active') return null;
-    if (chat.key_version !== keyVersion) return null;
 
-    const keyBase64 = this.deps.database.getGroupKeyForEpoch(groupId, keyVersion);
-    if (!keyBase64) return null;
+    if (chat.key_version === keyVersion) {
+      const keyBase64 = this.deps.database.getGroupKeyForEpoch(groupId, keyVersion);
+      if (!keyBase64) return null;
 
-    const keyBytes = Buffer.from(keyBase64, 'base64');
-    if (keyBytes.length !== 32) return null;
+      const keyBytes = Buffer.from(keyBase64, 'base64');
+      if (keyBytes.length !== 32) return null;
 
-    const expectedTopic = this.deriveTopic(groupId, keyBytes);
-    if (expectedTopic !== incomingTopic) return null;
+      const expectedTopic = this.deriveTopic(groupId, keyBytes);
+      if (expectedTopic !== incomingTopic) return null;
 
+      return {
+        groupId,
+        chatId: chat.id,
+        keyVersion,
+        groupKey: keyBytes,
+        topic: expectedTopic,
+      };
+    }
+
+    const graceContexts = this.groupGraceContexts.get(groupId) ?? [];
+    const now = Date.now();
+    const liveGrace = graceContexts.filter((entry) => entry.expiresAt > now);
+    if (liveGrace.length !== graceContexts.length) {
+      if (liveGrace.length > 0) {
+        this.groupGraceContexts.set(groupId, liveGrace);
+      } else {
+        this.groupGraceContexts.delete(groupId);
+      }
+    }
+
+    const graceMatch = liveGrace.find(
+      (entry) => entry.keyVersion === keyVersion && entry.topic === incomingTopic,
+    );
+    if (!graceMatch) return null;
     return {
       groupId,
       chatId: chat.id,
-      keyVersion,
-      groupKey: keyBytes,
-      topic: expectedTopic,
+      keyVersion: graceMatch.keyVersion,
+      groupKey: graceMatch.groupKey,
+      topic: graceMatch.topic,
     };
   }
 

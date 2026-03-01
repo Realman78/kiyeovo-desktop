@@ -1229,6 +1229,7 @@ export class MessageHandler {
       myUsername,
       onGroupChatActivated: this.onGroupChatActivated,
       onGroupMembersUpdated: this.onGroupMembersUpdated,
+      onMessageReceived: this.onMessageReceived,
       nudgePeer: this.nudgePeer.bind(this),
     };
 
