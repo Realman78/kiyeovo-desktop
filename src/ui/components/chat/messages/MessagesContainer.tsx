@@ -245,6 +245,23 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
         message.senderPeerId !== myPeerId &&
         !!activeChat?.groupId &&
         (senderChanged || senderStreak % 10 === 0);
+      const isSystemMessage = message.messageType === 'system';
+
+      if (isSystemMessage) {
+        return (
+          <div key={message.id} className="w-full flex flex-col items-center animate-fade-in">
+            <div
+              className="max-w-[80%] rounded-md px-3 py-1.5 bg-muted/50 text-muted-foreground text-xs text-center"
+              style={{ wordBreak: "break-word" }}
+            >
+              {message.content}
+            </div>
+            <span className="text-xs text-muted-foreground mt-1 font-mono inline-flex items-center gap-1">
+              {formatTimestampToHourMinute(message.timestamp)}
+            </span>
+          </div>
+        );
+      }
 
       return (
         <div

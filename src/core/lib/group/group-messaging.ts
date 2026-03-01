@@ -580,7 +580,8 @@ export class GroupMessaging {
   private resolveIncomingGroupContext(groupId: string, keyVersion: number, incomingTopic: string): GroupContext | null {
     const chat = this.deps.database.getChatByGroupId(groupId);
     if (!chat) return null;
-    if (chat.status !== 'active' || chat.group_status !== 'active') return null;
+    if (chat.status !== 'active') return null;
+    if (chat.group_status !== 'active' && chat.group_status !== 'rekeying') return null;
 
     if (chat.key_version === keyVersion) {
       const keyBase64 = this.deps.database.getGroupKeyForEpoch(groupId, keyVersion);

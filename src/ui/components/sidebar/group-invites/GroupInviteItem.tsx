@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Users, Check, X } from "lucide-react";
+import { Users, Check, X, Loader2 } from "lucide-react";
 import { Button } from "../../ui/Button";
 import { useExpirationTimer } from "../../../hooks/useExpirationTimer";
 import type { FC } from "react";
@@ -19,7 +19,7 @@ interface GroupInviteItemProps {
 }
 
 export const GroupInviteItem: FC<GroupInviteItemProps> = ({ invite, onRespond }) => {
-  const [isResponding, setIsResponding] = useState(false);
+  const [pendingAction, setPendingAction] = useState<'accept' | 'reject' | null>(null);
   const { timeLeft } = useExpirationTimer(invite.expiresAt);
 
   const totalSeconds = Math.max(0, Math.floor(timeLeft / 1000));
@@ -29,11 +29,11 @@ export const GroupInviteItem: FC<GroupInviteItemProps> = ({ invite, onRespond })
   const seconds = totalSeconds % 60;
 
   const handleRespond = async (accept: boolean) => {
-    setIsResponding(true);
+    setPendingAction(accept ? 'accept' : 'reject');
     try {
       await onRespond(invite.groupId, accept);
     } finally {
-      setIsResponding(false);
+      setPendingAction(null);
     }
   };
 
@@ -54,26 +54,33 @@ export const GroupInviteItem: FC<GroupInviteItemProps> = ({ invite, onRespond })
         <span className="text-xs text-muted-foreground font-mono tabular-nums mr-1">
           {days}:{hours.toString().padStart(2, '0')}:{minutes.toString().padStart(2, '0')}:{seconds.toString().padStart(2, '0')}
         </span>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="w-7 h-7 text-green-500 hover:text-green-600 hover:bg-green-500/10"
-          disabled={isResponding}
-          onClick={() => handleRespond(true)}
-          title="Accept"
-        >
-          <Check className="w-4 h-4" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="w-7 h-7 text-destructive hover:text-destructive hover:bg-destructive/10"
-          disabled={isResponding}
-          onClick={() => handleRespond(false)}
-          title="Reject"
-        >
-          <X className="w-4 h-4" />
-        </Button>
+        {pendingAction ? (
+          <span className="text-xs text-muted-foreground inline-flex items-center gap-1">
+            <Loader2 className="w-3 h-3 animate-spin" />
+            {pendingAction === 'accept' ? 'Accepting...' : 'Rejecting...'}
+          </span>
+        ) : (
+          <>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="w-7 h-7 text-green-500 hover:text-green-600 hover:bg-green-500/10"
+              onClick={() => handleRespond(true)}
+              title="Accept"
+            >
+              <Check className="w-4 h-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="w-7 h-7 text-destructive hover:text-destructive hover:bg-destructive/10"
+              onClick={() => handleRespond(false)}
+              title="Reject"
+            >
+              <X className="w-4 h-4" />
+            </Button>
+          </>
+        )}
       </div>
     </div>
   );
