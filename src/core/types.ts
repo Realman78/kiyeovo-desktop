@@ -693,6 +693,7 @@ export interface MessageReceivedEvent {
   senderPeerId: string;
   senderUsername: string;
   timestamp: number;
+  eventTimestamp?: number;
   messageSentStatus: MessageSentStatus;
   messageType?: 'text' | 'file' | 'image' | 'system';
   fileName?: string;

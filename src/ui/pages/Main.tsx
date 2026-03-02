@@ -55,6 +55,7 @@ export const Main = () => {
         senderUsername: data.senderUsername,
         content: data.content,
         timestamp: data.timestamp,
+        eventTimestamp: data.eventTimestamp,
         messageType: data.messageType || 'text',
         messageSentStatus: data.messageSentStatus,
         currentUserPeerId: currentPeerId,

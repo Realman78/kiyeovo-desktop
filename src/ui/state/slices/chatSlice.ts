@@ -17,6 +17,7 @@ export interface ChatMessage {
   senderUsername: string;
   content: string;
   timestamp: number;
+  eventTimestamp?: number;
   messageType: 'text' | 'file' | 'image' | 'system';
   messageSentStatus: MessageSentStatus;
   currentUserPeerId?: string; // For determining if message is from current user

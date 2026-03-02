@@ -716,7 +716,7 @@ export class GroupResponder {
       : event === 'leave'
         ? `${resolvedUsername} left the group`
         : `${resolvedUsername} was removed from the group`;
-    const timestamp = eventTimestamp;
+    const appliedTimestamp = Date.now();
 
     await this.deps.database.createMessage({
       id: messageId,
@@ -724,7 +724,8 @@ export class GroupResponder {
       sender_peer_id: senderPeerId,
       content,
       message_type: 'system',
-      timestamp: new Date(timestamp),
+      timestamp: new Date(appliedTimestamp),
+      event_timestamp: new Date(eventTimestamp),
     });
 
     this.deps.onMessageReceived?.({
@@ -733,7 +734,8 @@ export class GroupResponder {
       content,
       senderPeerId,
       senderUsername,
-      timestamp,
+      timestamp: appliedTimestamp,
+      eventTimestamp,
       messageSentStatus: 'online',
       messageType: 'system',
     });

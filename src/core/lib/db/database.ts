@@ -65,6 +65,7 @@ export interface Message {
     content: string // Encrypted
     message_type: 'text' | 'file' | 'image' | 'system'
     timestamp: Date
+    event_timestamp?: Date | null
     created_at: Date
     file_name?: string
     file_size?: number
@@ -295,10 +296,12 @@ export class ChatDatabase {
                 transfer_error TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                event_timestamp DATETIME,
                 FOREIGN KEY (chat_id) REFERENCES chats (id) ON DELETE CASCADE,
                 FOREIGN KEY (sender_peer_id) REFERENCES users (peer_id)
             )
         `);
+        this.ensureEventTimestampColumn();
         this.db.exec(`
             CREATE TABLE IF NOT EXISTS encrypted_user_identities (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -553,6 +556,17 @@ export class ChatDatabase {
       CREATE INDEX IF NOT EXISTS idx_group_invite_delivery_acks_group ON group_invite_delivery_acks(group_id);
       CREATE INDEX IF NOT EXISTS idx_chats_group_id ON chats(group_id);
         `);
+    }
+
+    private ensureEventTimestampColumn(): void {
+        try {
+            this.db.exec('ALTER TABLE messages ADD COLUMN event_timestamp DATETIME');
+        } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            if (!msg.toLowerCase().includes('duplicate column name')) {
+                throw error;
+            }
+        }
     }
 
     // Helper method to retry database operations
@@ -1468,9 +1482,10 @@ export class ChatDatabase {
                     file_path,
                     transfer_status,
                     transfer_progress,
-                    transfer_error
+                    transfer_error,
+                    event_timestamp
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `);
 
             stmt.run(
@@ -1485,7 +1500,12 @@ export class ChatDatabase {
                 message.file_path ?? null,
                 message.transfer_status ?? null,
                 message.transfer_progress ?? null,
-                message.transfer_error ?? null
+                message.transfer_error ?? null,
+                message.event_timestamp
+                    ? (message.event_timestamp instanceof Date
+                        ? message.event_timestamp.toISOString()
+                        : message.event_timestamp)
+                    : null
             );
 
             // Update the chat's updated_at to match the message timestamp
@@ -1575,6 +1595,7 @@ export class ChatDatabase {
         return rows.map(row => ({
             ...row,
             timestamp: new Date(row.timestamp),
+            event_timestamp: row.event_timestamp ? new Date(row.event_timestamp) : null,
             created_at: new Date(row.created_at),
             sender_username: row.sender_username || undefined
         }));
@@ -1595,6 +1616,7 @@ export class ChatDatabase {
         return {
             ...row,
             timestamp: new Date(row.timestamp),
+            event_timestamp: row.event_timestamp ? new Date(row.event_timestamp) : null,
             created_at: new Date(row.created_at)
         };
     }
@@ -1625,6 +1647,7 @@ export class ChatDatabase {
         return rows.map(row => ({
             ...row,
             timestamp: new Date(row.timestamp),
+            event_timestamp: row.event_timestamp ? new Date(row.event_timestamp) : null,
             created_at: new Date(row.created_at)
         }));
     }

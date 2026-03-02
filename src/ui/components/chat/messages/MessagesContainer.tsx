@@ -7,7 +7,7 @@ import { PendingNotifications } from "./PendingNotifications";
 import { FileMessage } from "./FileMessage";
 import type { MessageSentStatus } from "../../../types";
 import { FILE_ACCEPTANCE_TIMEOUT, SHOW_TIMESTAMP_INTERVAL } from "../../../constants";
-import { Loader2 } from "lucide-react";
+import { Info, Loader2 } from "lucide-react";
 import { useToast } from "../../ui/use-toast";
 
 type MessagesContainerProps = {
@@ -32,6 +32,21 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
       fileName: match[1],
       fileSize: Number(match[2])
     };
+  };
+
+  const getMembershipInfoTooltip = (message: ChatMessage): string | null => {
+    if (message.messageType !== 'system' || !message.eventTimestamp) {
+      return null;
+    }
+    const normalized = message.content.toLowerCase();
+    const isMembershipEvent =
+      normalized.includes('joined the group') ||
+      normalized.includes('left the group') ||
+      normalized.includes('was removed from the group');
+    if (!isMembershipEvent) {
+      return null;
+    }
+    return `${message.content} at ${formatTimestampToHourMinute(message.eventTimestamp)}. This member can only see your messages after this system message, not strictly after the join/leave time.`;
   };
 
 
@@ -68,6 +83,7 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
               senderUsername: msg.sender_username || 'UNKNOWN',
               content: msg.content,
               timestamp: msg.timestamp.getTime(),
+              eventTimestamp: msg.event_timestamp ? msg.event_timestamp.getTime() : undefined,
               messageType: msg.message_type as 'text' | 'file' | 'image' | 'system',
               messageSentStatus: 'online' as MessageSentStatus,
               // File transfer fields
@@ -248,6 +264,7 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
       const isSystemMessage = message.messageType === 'system';
 
       if (isSystemMessage) {
+        const membershipInfoTooltip = getMembershipInfoTooltip(message);
         return (
           <div key={message.id} className="w-full flex flex-col items-center animate-fade-in">
             <div
@@ -258,6 +275,20 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
             </div>
             <span className="text-xs text-muted-foreground mt-1 font-mono inline-flex items-center gap-1">
               {formatTimestampToHourMinute(message.timestamp)}
+              {membershipInfoTooltip && (
+                <span className="relative inline-flex items-center group">
+                  <button
+                    type="button"
+                    className="inline-flex items-center justify-center rounded-full p-0.5 hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    aria-label={membershipInfoTooltip}
+                  >
+                    <Info className="w-3 h-3" />
+                  </button>
+                  <span className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 hidden w-72 -translate-x-1/2 rounded-md border bg-popover px-2 py-1.5 text-left text-[11px] text-popover-foreground shadow-md group-hover:block group-focus-within:block">
+                    {membershipInfoTooltip}
+                  </span>
+                </span>
+              )}
             </span>
           </div>
         );
