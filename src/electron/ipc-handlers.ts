@@ -272,6 +272,8 @@ function setupMessagingHandlers(
         return { success: false, messageSentStatus: null, error: 'Message too long' };
       }
 
+      console.log("sending group message", chatId, message);
+
       console.log(`[IPC][TIMING][GROUP-SEND] start chatId=${chatId} contentLen=${message.length}`);
       const response = await p2pCore.messageHandler.sendGroupMessage(chatId, message);
       console.log(
@@ -1423,6 +1425,7 @@ function setupGroupHandlers(
       if (!p2pCore) {
         return { success: false, error: 'P2P core not initialized' };
       }
+      console.log("retrying group offline backup", chatId, messageId);
       return await p2pCore.messageHandler.retryGroupOfflineBackup(chatId, messageId);
     } catch (error) {
       console.error('[IPC] Failed to retry group offline backup:', error);

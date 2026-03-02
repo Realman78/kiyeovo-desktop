@@ -46,7 +46,7 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
     if (!isMembershipEvent) {
       return null;
     }
-    return `${message.content} at ${formatTimestampToHourMinute(message.eventTimestamp)}. This member can only see your messages after this system message, not strictly after the join/leave time.`;
+    return `${message.content} at ${formatTimestampToHourMinute(message.eventTimestamp)}.${normalized.includes('joined the group') ? ' This member can only see your messages after this system message, not strictly after the join/leave time.' : ''}`;
   };
 
 
