@@ -408,6 +408,7 @@ export class GroupOfflineManager {
         let skippedSeen = 0;
         let skippedInvalidSignature = 0;
         let skippedByBoundary = 0;
+        let repairedLate = 0;
 
         for (const msg of orderedMessages) {
           const messageId = this.getOfflineMessageId(msg);
@@ -429,15 +430,49 @@ export class GroupOfflineManager {
             continue;
           }
 
+          const alreadyPersisted = this.deps.database.messageExists(messageId);
+
           if (msg.seq <= highestSeenSeq) {
-            if (!this.deps.database.messageExists(messageId)) {
+            if (alreadyPersisted) {
+              ({ lastReadTs, lastReadMessageId } = this.advanceCursor(lastReadTs, lastReadMessageId, msg));
+              skippedSeen++;
+              continue;
+            }
+
+            // Late-gap repair: message seq is older/equal than watermark, but payload was never persisted locally.
+            // Persist it without touching member watermark to avoid replay-window widening.
+            try {
+              const content = this.decryptContent(msg.encryptedContent, keyBytes, msg.nonce);
+              await this.deps.database.createMessage({
+                id: messageId,
+                chat_id: chat.id,
+                sender_peer_id: senderPeerId,
+                content,
+                message_type: 'text',
+                timestamp: new Date(msg.timestamp),
+              });
+              ({ lastReadTs, lastReadMessageId } = this.advanceCursor(lastReadTs, lastReadMessageId, msg));
+              unreadAdded++;
+              deliveredForSender++;
+              epochMessagesDelivered++;
+              repairedLate++;
+              this.deps.onMessageReceived({
+                chatId: chat.id,
+                messageId,
+                content,
+                senderPeerId,
+                senderUsername: sender.username,
+                timestamp: msg.timestamp,
+                messageSentStatus: 'offline',
+                messageType: 'text',
+              });
+            } catch (error: unknown) {
               console.warn(
                 `[GROUP-OFFLINE][ANOMALY][CHAT:${chat.id}] epoch=${epoch.key_version} sender=${senderPeerId.slice(-8)} ` +
                 `msgId=${messageId} seq=${msg.seq} highestSeenSeq=${highestSeenSeq} reason=seen_seq_but_message_missing`
               );
+              generalErrorHandler(error, `[GROUP-OFFLINE] Failed late-gap repair for message ${messageId}`);
             }
-            ({ lastReadTs, lastReadMessageId } = this.advanceCursor(lastReadTs, lastReadMessageId, msg));
-            skippedSeen++;
             continue;
           }
 
@@ -453,39 +488,37 @@ export class GroupOfflineManager {
             });
           }
 
-          highestSeenSeq = msg.seq;
-          this.deps.database.updateMemberSeq(chat.group_id, epoch.key_version, senderPeerId, msg.seq);
-          ({ lastReadTs, lastReadMessageId } = this.advanceCursor(lastReadTs, lastReadMessageId, msg));
-
-          if (this.deps.database.messageExists(messageId)) {
-            continue;
-          }
-
           try {
-            const content = this.decryptContent(msg.encryptedContent, keyBytes, msg.nonce);
-            await this.deps.database.createMessage({
-              id: messageId,
-              chat_id: chat.id,
-              sender_peer_id: senderPeerId,
-              content,
-              message_type: 'text',
-              timestamp: new Date(msg.timestamp),
-            });
+            if (!alreadyPersisted) {
+              const content = this.decryptContent(msg.encryptedContent, keyBytes, msg.nonce);
+              await this.deps.database.createMessage({
+                id: messageId,
+                chat_id: chat.id,
+                sender_peer_id: senderPeerId,
+                content,
+                message_type: 'text',
+                timestamp: new Date(msg.timestamp),
+              });
 
-            unreadAdded++;
-            deliveredForSender++;
-            epochMessagesDelivered++;
+              unreadAdded++;
+              deliveredForSender++;
+              epochMessagesDelivered++;
 
-            this.deps.onMessageReceived({
-              chatId: chat.id,
-              messageId,
-              content,
-              senderPeerId,
-              senderUsername: sender.username,
-              timestamp: msg.timestamp,
-              messageSentStatus: 'offline',
-              messageType: 'text',
-            });
+              this.deps.onMessageReceived({
+                chatId: chat.id,
+                messageId,
+                content,
+                senderPeerId,
+                senderUsername: sender.username,
+                timestamp: msg.timestamp,
+                messageSentStatus: 'offline',
+                messageType: 'text',
+              });
+            }
+
+            highestSeenSeq = msg.seq;
+            this.deps.database.updateMemberSeq(chat.group_id, epoch.key_version, senderPeerId, msg.seq);
+            ({ lastReadTs, lastReadMessageId } = this.advanceCursor(lastReadTs, lastReadMessageId, msg));
           } catch (error: unknown) {
             console.error(
               `[GROUP-OFFLINE][ANOMALY][CHAT:${chat.id}] epoch=${epoch.key_version} sender=${senderPeerId.slice(-8)} ` +
@@ -505,7 +538,7 @@ export class GroupOfflineManager {
         console.log(
           `[GROUP-OFFLINE][TIMING][CHAT:${chat.id}] epoch=${epoch.key_version} sender=${sender.username} ` +
           `bucketMessages=${orderedMessages.length} delivered=${deliveredForSender} skippedSeen=${skippedSeen} ` +
-          `skippedBoundary=${skippedByBoundary} skippedSig=${skippedInvalidSignature} ` +
+          `repairedLate=${repairedLate} skippedBoundary=${skippedByBoundary} skippedSig=${skippedInvalidSignature} ` +
           `took=${Date.now() - senderStart}ms`
         );
       }
