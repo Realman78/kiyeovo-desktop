@@ -23,6 +23,7 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
   const { toast } = useToast();
 
   const [error, setError] = useState<string | null>(null);
+  const [nowTs, setNowTs] = useState(Date.now());
 
   const parseFileContent = (content: string | null | undefined): { fileName?: string; fileSize?: number } => {
     if (!content) return {};
@@ -46,9 +47,16 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
     if (!isMembershipEvent) {
       return null;
     }
-    return `${message.content} at ${formatTimestampToHourMinute(message.eventTimestamp)}.${normalized.includes('joined the group') ? ' This member can only see your messages after this system message, not strictly after the join/leave time.' : ''}`;
+    return `${message.content} at ${formatTimestampToHourMinute(message.eventTimestamp)}.${normalized.includes('joined the group') ? ' This member can only see your messages after this system message, not strictly after the join time.' : ''}`;
   };
 
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNowTs(Date.now());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     const fetchMessages = async () => {
@@ -136,20 +144,41 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
 
   const handleRetryFailedMessage = async (message: ChatMessage) => {
     if (!activeChat) return;
+    const retryBlockedByRekeyCooldown =
+      message.failedReason === 'group_rekeying' &&
+      !!message.retryAfterTs &&
+      Date.now() < message.retryAfterTs;
+    if (retryBlockedByRekeyCooldown) {
+      const seconds = Math.ceil((message.retryAfterTs! - Date.now()) / 1000);
+      toast.info(`Group is rekeying. Retry available in ${seconds}s.`);
+      return;
+    }
     dispatch(updateLocalMessageSendState({ messageId: message.id, state: 'sending' }));
 
     try {
       if (activeChat.type === 'group') {
-        const { success, error, warning, offlineBackupRetry, message: sentMessage, messageSentStatus } = await window.kiyeovoAPI.sendGroupMessage(activeChat.id, message.content);
+        const { success, error, warning, offlineBackupRetry, message: sentMessage, messageSentStatus } = await window.kiyeovoAPI.sendGroupMessage(
+          activeChat.id,
+          message.content,
+          { rekeyRetryHint: message.failedReason === 'group_rekeying' },
+        );
         if (!success) {
-          dispatch(updateLocalMessageSendState({ messageId: message.id, state: 'failed' }));
+          const isRekeyFailure =
+            (error || '').includes('is not active') &&
+            activeChat.groupStatus === 'rekeying';
+          dispatch(updateLocalMessageSendState({
+            messageId: message.id,
+            state: 'failed',
+            failedReason: isRekeyFailure ? 'group_rekeying' : 'other',
+            retryAfterTs: isRekeyFailure ? Date.now() + 30_000 : undefined,
+          }));
           toast.error(error || 'Failed to resend group message');
           return;
         }
         if (warning && offlineBackupRetry) {
           toast.warningAction(
             warning,
-            'Try again',
+            'Retry offline backup',
             async () => {
               const retry = await window.kiyeovoAPI.retryGroupOfflineBackup(
                 offlineBackupRetry.chatId,
@@ -262,6 +291,13 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
         !!activeChat?.groupId &&
         (senderChanged || senderStreak % 10 === 0);
       const isSystemMessage = message.messageType === 'system';
+      const rekeyRetryRemainingMs =
+        message.localSendState === 'failed' &&
+        message.failedReason === 'group_rekeying' &&
+        message.retryAfterTs
+          ? Math.max(0, message.retryAfterTs - nowTs)
+          : 0;
+      const isRetryBlocked = rekeyRetryRemainingMs > 0;
 
       if (isSystemMessage) {
         const membershipInfoTooltip = getMembershipInfoTooltip(message);
@@ -334,7 +370,9 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
                 </>
               )}
               {message.localSendState === 'queued' && " • Queued for sending"}
-              {message.localSendState === 'failed' && " • Failed to send"}
+              {message.localSendState === 'failed' && (isRetryBlocked
+                ? ` • Group membership updating (${Math.ceil(rekeyRetryRemainingMs / 1000)}s)`
+                : " • Failed to send")}
               {!message.localSendState && message.messageSentStatus === 'offline' && " • offline"}
               {message.localSendState === 'failed' && (
                 <>
@@ -342,9 +380,13 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
                   <button
                     type="button"
                     className="underline underline-offset-2 hover:text-foreground"
+                    disabled={isRetryBlocked}
+                    title={isRetryBlocked
+                      ? 'Group is rekeying. Retry is temporarily disabled to avoid fallback-only delivery.'
+                      : undefined}
                     onClick={() => { void handleRetryFailedMessage(message); }}
                   >
-                    Retry
+                    {isRetryBlocked ? `Retry in ${Math.ceil(rekeyRetryRemainingMs / 1000)}s` : 'Retry'}
                   </button>
                 </>
               )}

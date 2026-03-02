@@ -31,6 +31,7 @@ interface GroupMessagingDeps {
   myUsername: string;
   onMessageReceived: (data: MessageReceivedEvent) => void;
   groupOfflineManager: GroupOfflineManager;
+  nudgeGroupRefetch?: (peerId: string, groupId: string) => void;
 }
 
 interface GroupContext {
@@ -191,7 +192,11 @@ export class GroupMessaging {
     }
   }
 
-  async sendGroupMessage(groupId: string, content: string): Promise<SendMessageResponse> {
+  async sendGroupMessage(
+    groupId: string,
+    content: string,
+    options?: { rekeyRetryHint?: boolean }
+  ): Promise<SendMessageResponse> {
     const sendStartedAt = Date.now();
     const ctx = this.resolveActiveGroupContext(groupId);
     console.log("sending group message to group", ctx);
@@ -241,6 +246,12 @@ export class GroupMessaging {
     try {
       await this.deps.groupOfflineManager.storeGroupMessage(signedMessage);
       this.pendingOfflineBackups.delete(signedMessage.messageId);
+      if (!publishedOnline && options?.rekeyRetryHint) {
+        for (const participant of participants) {
+          if (participant.peer_id === this.deps.myPeerId) continue;
+          this.deps.nudgeGroupRefetch?.(participant.peer_id, groupId);
+        }
+      }
     } catch (error: unknown) {
       const errorText = error instanceof Error ? error.message : String(error);
       if (!publishedOnline) {

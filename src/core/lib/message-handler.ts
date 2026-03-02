@@ -54,6 +54,7 @@ export class MessageHandler {
   private nudgeCooldowns = new Map<string, number>();
   private nudgeTrailingTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private nudgeFetchTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private groupNudgeFetchTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private peerActivityCheckCooldowns = new Map<string, number>();
   private groupAckRepublishTimer: ReturnType<typeof setTimeout> | null = null;
   private groupAckStartupTimer: ReturnType<typeof setTimeout> | null = null;
@@ -111,6 +112,7 @@ export class MessageHandler {
       myUsername: this.database.getUserByPeerId(this.node.peerId.toString())?.username || `user_${this.node.peerId.toString().slice(-8)}`,
       onMessageReceived: this.onMessageReceived,
       groupOfflineManager: this.groupOfflineManager,
+      nudgeGroupRefetch: this.nudgePeerGroupRefetch.bind(this),
     });
     this.groupAckRepublisher = new GroupAckRepublisher({
       node: this.node,
@@ -145,6 +147,18 @@ export class MessageHandler {
   }
 
   public nudgePeer(peerId: string): void {
+    this.sendBucketNudge(peerId, null, `direct:${peerId}`);
+  }
+
+  public nudgePeerGroupRefetch(peerId: string, groupId: string): void {
+    this.sendBucketNudge(peerId, { kind: 'GROUP_REKEY_REFETCH', groupId }, `group:${peerId}:${groupId}`);
+  }
+
+  private sendBucketNudge(
+    peerId: string,
+    payload: { kind: 'GROUP_REKEY_REFETCH'; groupId: string } | null,
+    cooldownKey: string
+  ): void {
     // Do not force-dial just to send a nudge.
     const hasActiveConnection = this.node.getConnections().some(
       conn => conn.remotePeer.toString() === peerId
@@ -154,21 +168,21 @@ export class MessageHandler {
     }
 
     const now = Date.now();
-    const last = this.nudgeCooldowns.get(peerId) ?? 0;
+    const last = this.nudgeCooldowns.get(cooldownKey) ?? 0;
     const elapsed = now - last;
     if (elapsed < BUCKET_NUDGE_COOLDOWN_MS) {
       const remaining = BUCKET_NUDGE_COOLDOWN_MS - elapsed;
-      if (!this.nudgeTrailingTimers.has(peerId)) {
+      if (!this.nudgeTrailingTimers.has(cooldownKey)) {
         const timer = setTimeout(() => {
-          this.nudgeTrailingTimers.delete(peerId);
-          this.nudgePeer(peerId);
+          this.nudgeTrailingTimers.delete(cooldownKey);
+          this.sendBucketNudge(peerId, payload, cooldownKey);
         }, remaining);
-        this.nudgeTrailingTimers.set(peerId, timer);
+        this.nudgeTrailingTimers.set(cooldownKey, timer);
       }
       console.log(`[NUDGE] Cooldown active for ${peerId.slice(-8)}, scheduling trailing nudge in ${remaining}ms`);
       return;
     }
-    this.nudgeCooldowns.set(peerId, now);
+    this.nudgeCooldowns.set(cooldownKey, now);
 
     void (async () => {
       try {
@@ -176,8 +190,16 @@ export class MessageHandler {
         const stream = await this.node.dialProtocol(targetPeerId, BUCKET_NUDGE_PROTOCOL, {
           signal: AbortSignal.timeout(BUCKET_NUDGE_DIAL_TIMEOUT_MS),
         });
+        if (payload) {
+          const payloadBytes = new TextEncoder().encode(JSON.stringify(payload));
+          await stream.sink([payloadBytes]);
+        }
         await stream.close();
-        console.log(`[NUDGE] Sent bucket nudge to ${peerId.slice(-8)}`);
+        if (payload) {
+          console.log(`[NUDGE] Sent group-refetch nudge to ${peerId.slice(-8)} group=${payload.groupId.slice(0, 8)}`);
+        } else {
+          console.log(`[NUDGE] Sent bucket nudge to ${peerId.slice(-8)}`);
+        }
       } catch {
         // Best-effort — peer offline or unreachable, offline bucket still delivers
       }
@@ -190,10 +212,33 @@ export class MessageHandler {
   private setupProtocolHandler(): void {
     void this.node.handle(BUCKET_NUDGE_PROTOCOL, async (context: StreamHandlerContext) => {
       const { remoteId, stream } = StreamHandler.getRemotePeerInfo(context);
+      const nudgePayload = await this.readBucketNudgePayload(stream);
       await stream.close();
 
       // Ignore nudges from blocked peers
       if (this.database.isBlocked(remoteId)) return;
+
+      if (nudgePayload?.kind === 'GROUP_REKEY_REFETCH') {
+        const groupChat = this.database.getChatByGroupId(nudgePayload.groupId);
+        if (!groupChat) {
+          console.log(
+            `[NUDGE] Received group-refetch nudge from ${remoteId.slice(-8)} for unknown group=${nudgePayload.groupId.slice(0, 8)}, ignoring`,
+          );
+          return;
+        }
+        const isParticipant = this.database.getChatParticipants(groupChat.id).some((p) => p.peer_id === remoteId);
+        if (!isParticipant) {
+          console.log(
+            `[NUDGE] Received group-refetch nudge from ${remoteId.slice(-8)} for group=${nudgePayload.groupId.slice(0, 8)} but sender is not participant, ignoring`,
+          );
+          return;
+        }
+        console.log(
+          `[NUDGE] Received group-refetch nudge from ${remoteId.slice(-8)}, scheduling group check for chat ${groupChat.id}`,
+        );
+        this.scheduleGroupNudgeOfflineCheck(remoteId, groupChat.id, nudgePayload.groupId);
+        return;
+      }
 
       const chat = this.database.getChatByPeerId(remoteId);
       if (!chat) {
@@ -301,6 +346,21 @@ export class MessageHandler {
     this.nudgeFetchTimers.set(remoteId, timer);
   }
 
+  private scheduleGroupNudgeOfflineCheck(remoteId: string, chatId: number, groupId: string): void {
+    const key = `${remoteId}:${groupId}`;
+    const existingTimer = this.groupNudgeFetchTimers.get(key);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+
+    const timer = setTimeout(() => {
+      this.groupNudgeFetchTimers.delete(key);
+      void this.runGroupNudgeOfflineCheck(remoteId, chatId, groupId, false, true);
+    }, BUCKET_NUDGE_FETCH_DELAY_MS);
+
+    this.groupNudgeFetchTimers.set(key, timer);
+  }
+
   private async runNudgeOfflineCheck(remoteId: string, chatId: number, isRetry: boolean, allowRetry: boolean): Promise<void> {
     try {
       const beforeTimestamp = this.database.getOfflineLastReadTimestampByPeerId(remoteId);
@@ -329,6 +389,73 @@ export class MessageHandler {
     } catch (error: unknown) {
       generalErrorHandler(error, `[NUDGE] Failed offline bucket check for ${remoteId.slice(-8)}`);
     }
+  }
+
+  private async runGroupNudgeOfflineCheck(
+    remoteId: string,
+    chatId: number,
+    groupId: string,
+    isRetry: boolean,
+    allowRetry: boolean
+  ): Promise<void> {
+    try {
+      console.log(
+        `[NUDGE][GROUP-CHECK][START] peer=${remoteId.slice(-8)} chatId=${chatId} group=${groupId.slice(0, 8)} ` +
+        `isRetry=${isRetry} allowRetry=${allowRetry}`,
+      );
+      const { checkedChatIds, unreadFromChats } = await this.checkGroupOfflineMessages([chatId]);
+      const unread = unreadFromChats.get(chatId) ?? 0;
+      const hasNewData = unread > 0;
+      console.log(
+        `[NUDGE][GROUP-CHECK][DONE] peer=${remoteId.slice(-8)} chatId=${chatId} group=${groupId.slice(0, 8)} ` +
+        `isRetry=${isRetry} checkedChats=${checkedChatIds.length} unread=${unread} hasNewData=${hasNewData}`,
+      );
+
+      if (checkedChatIds.length > 0 && hasNewData) {
+        this.onOfflineMessagesFetchComplete?.(checkedChatIds);
+      }
+
+      if (!isRetry && allowRetry && !hasNewData) {
+        setTimeout(() => {
+          console.log(
+            `[NUDGE][GROUP-CHECK][RETRY_SCHEDULED] peer=${remoteId.slice(-8)} chatId=${chatId} group=${groupId.slice(0, 8)} ` +
+            `retryInMs=${BUCKET_NUDGE_RETRY_DELAY_MS}`,
+          );
+          void this.runGroupNudgeOfflineCheck(remoteId, chatId, groupId, true, allowRetry);
+        }, BUCKET_NUDGE_RETRY_DELAY_MS);
+      }
+    } catch (error: unknown) {
+      generalErrorHandler(error, `[NUDGE] Failed group offline bucket check for ${remoteId.slice(-8)} group=${groupId.slice(0, 8)}`);
+    }
+  }
+
+  private async readBucketNudgePayload(stream: StreamHandlerContext['stream']): Promise<{
+    kind: 'GROUP_REKEY_REFETCH';
+    groupId: string;
+  } | null> {
+    const chunks: Uint8Array[] = [];
+    for await (const chunk of stream.source) {
+      chunks.push((chunk as any).subarray());
+    }
+    if (chunks.length === 0) return null;
+
+    const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
+    const combined = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+      combined.set(chunk, offset);
+      offset += chunk.length;
+    }
+
+    try {
+      const parsed = JSON.parse(new TextDecoder().decode(combined)) as { kind?: string; groupId?: string };
+      if (parsed.kind === 'GROUP_REKEY_REFETCH' && typeof parsed.groupId === 'string' && parsed.groupId.length > 0) {
+        return { kind: 'GROUP_REKEY_REFETCH', groupId: parsed.groupId };
+      }
+    } catch {
+      // Ignore invalid payloads and treat as plain nudge.
+    }
+    return null;
   }
 
   private schedulePeerActivityOfflineCheck(peerId: string): void {
@@ -654,7 +781,11 @@ export class MessageHandler {
     }
   }
 
-  async sendGroupMessage(chatId: number, message: string): Promise<SendMessageResponse> {
+  async sendGroupMessage(
+    chatId: number,
+    message: string,
+    options?: { rekeyRetryHint?: boolean }
+  ): Promise<SendMessageResponse> {
     const chat = this.database.getChatByIdWithUsernameAndLastMsg(chatId, this.node.peerId.toString());
     if (!chat) {
       return { success: false, messageSentStatus: null, error: 'Group chat not found' };
@@ -667,7 +798,7 @@ export class MessageHandler {
     }
 
     try {
-      return await this.groupMessaging.sendGroupMessage(chat.group_id, message);
+      return await this.groupMessaging.sendGroupMessage(chat.group_id, message, options);
     } catch (error: unknown) {
       const errorText = error instanceof Error ? error.message : String(error);
       return { success: false, messageSentStatus: null, error: errorText };
@@ -1151,11 +1282,15 @@ export class MessageHandler {
     for (const timer of this.nudgeFetchTimers.values()) {
       clearTimeout(timer);
     }
+    for (const timer of this.groupNudgeFetchTimers.values()) {
+      clearTimeout(timer);
+    }
     for (const timer of this.nudgeTrailingTimers.values()) {
       clearTimeout(timer);
     }
     this.nudgeTrailingTimers.clear();
     this.nudgeFetchTimers.clear();
+    this.groupNudgeFetchTimers.clear();
     this.peerActivityCheckCooldowns.clear();
 
     if (this.cleanupPeerEvents) {

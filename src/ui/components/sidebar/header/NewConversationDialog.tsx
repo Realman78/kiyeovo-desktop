@@ -119,7 +119,7 @@ const NewConversationDialog = ({ open, onOpenChange, onNewConversation, backendE
           <DialogBody className="space-y-4">
             <div>
               <label className="block text-sm font-bold text-foreground mb-2">
-                Peer ID or Username
+                Peer ID or Username (case-sensitive)
               </label>
               <Input
                 placeholder="Enter peer ID or username..."

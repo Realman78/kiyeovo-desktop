@@ -79,8 +79,12 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     sendMessage: async (identifier: string, message: string): Promise<{ success: boolean; messageSentStatus: MessageSentStatus; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.SEND_MESSAGE_REQUEST, identifier, message);
     },
-    sendGroupMessage: async (chatId: number, message: string): Promise<SendMessageResponse> => {
-        return ipcRenderer.invoke(IPC_CHANNELS.SEND_GROUP_MESSAGE_REQUEST, chatId, message);
+    sendGroupMessage: async (
+        chatId: number,
+        message: string,
+        options?: { rekeyRetryHint?: boolean }
+    ): Promise<SendMessageResponse> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.SEND_GROUP_MESSAGE_REQUEST, chatId, message, options);
     },
     retryGroupOfflineBackup: async (chatId: number, messageId: string): Promise<{ success: boolean; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.RETRY_GROUP_OFFLINE_BACKUP, chatId, messageId);

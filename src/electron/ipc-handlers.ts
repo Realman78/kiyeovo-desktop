@@ -257,7 +257,14 @@ function setupMessagingHandlers(
     }
   });
 
-  ipcMain.handle(IPC_CHANNELS.SEND_GROUP_MESSAGE_REQUEST, async (_event, chatId: number, message: string) => {
+  ipcMain.handle(
+    IPC_CHANNELS.SEND_GROUP_MESSAGE_REQUEST,
+    async (
+      _event,
+      chatId: number,
+      message: string,
+      options?: { rekeyRetryHint?: boolean }
+    ) => {
     const startedAt = Date.now();
     try {
       const p2pCore = getP2PCore();
@@ -275,7 +282,7 @@ function setupMessagingHandlers(
       console.log("sending group message", chatId, message);
 
       console.log(`[IPC][TIMING][GROUP-SEND] start chatId=${chatId} contentLen=${message.length}`);
-      const response = await p2pCore.messageHandler.sendGroupMessage(chatId, message);
+      const response = await p2pCore.messageHandler.sendGroupMessage(chatId, message, options);
       console.log(
         `[IPC][TIMING][GROUP-SEND] done chatId=${chatId} success=${response.success} ` +
         `status=${response.messageSentStatus ?? 'none'} took=${Date.now() - startedAt}ms`
@@ -296,7 +303,8 @@ function setupMessagingHandlers(
       console.error('[IPC] Failed to send group message:', error);
       return { success: false, messageSentStatus: null, error: error instanceof Error ? error.message : 'Failed to send group message' };
     }
-  });
+    }
+  );
 }
 
 /**

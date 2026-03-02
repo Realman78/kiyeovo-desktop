@@ -18,6 +18,8 @@ type SendResult = {
     messageId?: string;
     timestamp?: number;
     messageSentStatus?: 'online' | 'offline' | null;
+    error?: string;
+    failedReason?: 'group_rekeying' | 'other';
 };
 
 export const ChatInput: FC = () => {
@@ -76,7 +78,7 @@ export const ChatInput: FC = () => {
                     : 'Waiting for members to join...'
         : activeChat?.type === 'group' && !groupHasOtherMembers
             ? 'Cannot send messages to an empty group'
-        : null;
+            : null;
     const isDisabled = isBlocked || !!groupBlockedReason;
     const sendQueueRef = useRef<Record<number, PendingSendJob[]>>({});
     const processingQueueRef = useRef<Record<number, boolean>>({});
@@ -119,16 +121,28 @@ export const ChatInput: FC = () => {
         }
     };
 
-    const performSendGroupMessage = async (chatId: number, messageContent: string): Promise<SendResult> => {
+    const performSendGroupMessage = async (
+        chatId: number,
+        messageContent: string,
+        options?: { rekeyRetryHint?: boolean }
+    ): Promise<SendResult> => {
         try {
-            const { success, error, warning, offlineBackupRetry, message, messageSentStatus } = await window.kiyeovoAPI.sendGroupMessage(chatId, messageContent);
+            const { success, error, warning, offlineBackupRetry, message, messageSentStatus } = await window.kiyeovoAPI.sendGroupMessage(chatId, messageContent, options);
             if (!success) {
-                toast.error(error || 'Failed to send group message');
-                return { success: false };
+                const errorText = error || 'Failed to send group message';
+                let failedReason: 'group_rekeying' | 'other' = 'other';
+                if (errorText.includes('is not active')) {
+                    const chatState = await window.kiyeovoAPI.getChatById(chatId);
+                    if (chatState.success && chatState.chat?.group_status === 'rekeying') {
+                        failedReason = 'group_rekeying';
+                    }
+                }
+                toast.error(errorText);
+                return { success: false, error: errorText, failedReason };
             } else if (warning && offlineBackupRetry) {
                 toast.warningAction(
                     warning,
-                    'Try again',
+                    'Retry offline backup',
                     async () => {
                         const retry = await window.kiyeovoAPI.retryGroupOfflineBackup(
                             offlineBackupRetry.chatId,
@@ -151,7 +165,7 @@ export const ChatInput: FC = () => {
         } catch (err) {
             console.error('Failed to send group message:', err);
             toast.error(err instanceof Error ? err.message : 'Unexpected error occurred');
-            return { success: false };
+            return { success: false, error: err instanceof Error ? err.message : 'Unexpected error occurred', failedReason: 'other' };
         }
     };
 
@@ -172,7 +186,13 @@ export const ChatInput: FC = () => {
                 }
 
                 if (!result.success) {
-                    dispatch(updateLocalMessageSendState({ messageId: next.localMessageId, state: 'failed' }));
+                    const isRekeyFailure = next.type === 'group' && result.failedReason === 'group_rekeying';
+                    dispatch(updateLocalMessageSendState({
+                        messageId: next.localMessageId,
+                        state: 'failed',
+                        failedReason: isRekeyFailure ? 'group_rekeying' : 'other',
+                        retryAfterTs: isRekeyFailure ? Date.now() + 30_000 : undefined,
+                    }));
                 } else if (result.messageId) {
                     // Finalize local sending row immediately using backend response.
                     dispatch(finalizeSendingMessage({
@@ -307,8 +327,8 @@ export const ChatInput: FC = () => {
                 }
                 const status =
                     errorText.includes('timeout waiting for file acceptance') ? 'expired' :
-                    errorText.includes('rejected') ? 'rejected' :
-                    'failed';
+                        errorText.includes('rejected') ? 'rejected' :
+                            'failed';
                 dispatch(updateFileTransferStatus({
                     messageId: pendingMessageId,
                     status,
@@ -335,8 +355,8 @@ export const ChatInput: FC = () => {
             }
             const status =
                 errorText.includes('timeout waiting for file acceptance') ? 'expired' :
-                errorText.includes('rejected') ? 'rejected' :
-                'failed';
+                    errorText.includes('rejected') ? 'rejected' :
+                        'failed';
             dispatch(updateFileTransferStatus({
                 messageId: pendingMessageId,
                 status,
@@ -350,7 +370,7 @@ export const ChatInput: FC = () => {
             onSubmit={handleSubmit}
             className={`h-20 px-4 flex items-center justify-between border-t border-border gap-4`}
         >
-            <Button
+            {activeChat?.type !== 'group' && <Button
                 type="button"
                 variant="ghost"
                 size="icon"
@@ -359,7 +379,7 @@ export const ChatInput: FC = () => {
                 className="text-sidebar-foreground hover:text-foreground"
             >
                 <Paperclip className="w-4 h-4" />
-            </Button>
+            </Button>}
             <Input
                 ref={inputRef}
                 placeholder={isBlocked ? "Cannot send messages to blocked users" : groupBlockedReason ?? "Type a message..."}

@@ -30,6 +30,8 @@ export interface ChatMessage {
   transferError?: string;
   transferExpiresAt?: number;
   localSendState?: 'queued' | 'sending' | 'failed';
+  failedReason?: 'group_rekeying' | 'other';
+  retryAfterTs?: number;
 }
 
 export interface Chat {
@@ -293,7 +295,11 @@ const chatSlice = createSlice({
       state.sendingMessages = state.sendingMessages.filter((m) => m.id !== action.payload.localMessageId);
       const isDuplicate = state.messages.some((m) => m.id === action.payload.finalMessage.id);
       if (!isDuplicate) {
-        state.messages.push(action.payload.finalMessage);
+        state.messages.push({
+          ...action.payload.finalMessage,
+          failedReason: undefined,
+          retryAfterTs: undefined,
+        });
       }
       state.messages.sort(compareMessageOrder);
     },
@@ -375,11 +381,26 @@ const chatSlice = createSlice({
         message.transferError = action.payload.error;
       }
     },
-    updateLocalMessageSendState: (state, action: PayloadAction<{ messageId: string; state: 'queued' | 'sending' | 'failed' }>) => {
+    updateLocalMessageSendState: (
+      state,
+      action: PayloadAction<{
+        messageId: string;
+        state: 'queued' | 'sending' | 'failed';
+        failedReason?: 'group_rekeying' | 'other';
+        retryAfterTs?: number;
+      }>
+    ) => {
       const message = state.sendingMessages.find((m) => m.id === action.payload.messageId)
         ?? state.messages.find((m) => m.id === action.payload.messageId);
       if (message) {
         message.localSendState = action.payload.state;
+        if (action.payload.state === 'failed') {
+          message.failedReason = action.payload.failedReason ?? 'other';
+          message.retryAfterTs = action.payload.retryAfterTs;
+        } else {
+          message.failedReason = undefined;
+          message.retryAfterTs = undefined;
+        }
       }
     },
     setPendingFileStatus: (state, action: PayloadAction<{ chatId: number; hasPendingFile: boolean }>) => {

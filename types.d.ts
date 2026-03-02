@@ -42,7 +42,11 @@ declare global {
 
             // Send message
             sendMessage: (identifier: string, message: string) => Promise<SendMessageResponse>;
-            sendGroupMessage: (chatId: number, message: string) => Promise<SendMessageResponse>;
+            sendGroupMessage: (
+                chatId: number,
+                message: string,
+                options?: { rekeyRetryHint?: boolean }
+            ) => Promise<SendMessageResponse>;
             retryGroupOfflineBackup: (chatId: number, messageId: string) => Promise<{ success: boolean; error: string | null }>;
 
             // Key exchange events
