@@ -4,7 +4,7 @@ import type { RootState } from "../../../state/store";
 import { Button } from "../../ui/Button";
 import { Bell, BellOff, MoreVertical, Shield, UserPlus, Ban, UserCheck, Info, Trash2, AlertCircle, Users, Clock, RefreshCw, LogOut, Bug } from "lucide-react";
 import { DropdownMenu, DropdownMenuItem } from "../../ui/DropdownMenu";
-import { updateChat, clearMessages, removeChat } from "../../../state/slices/chatSlice";
+import { updateChat, clearMessages, removeChat, setOfflineFetchStatus, markOfflineFetched } from "../../../state/slices/chatSlice";
 import { AboutUserModal } from "./AboutUserModal";
 import {
   Dialog,
@@ -276,13 +276,17 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
   const handleCheckMissedGroupMessages = async () => {
     if (!chatId) return;
     setDropdownOpen(false);
+    dispatch(setOfflineFetchStatus({ chatId, isFetching: true }));
 
     try {
       const result = await window.kiyeovoAPI.checkGroupOfflineMessagesForChat(chatId);
       if (!result.success) {
         toast.error(result.error || 'Failed to check missed group messages');
+        dispatch(setOfflineFetchStatus({ chatId, isFetching: false }));
         return;
       }
+
+      dispatch(markOfflineFetched(chatId));
 
       const unreadMap = result.unreadFromChats instanceof Map
         ? result.unreadFromChats
@@ -304,6 +308,7 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
     } catch (error) {
       console.error('Failed to check missed group messages:', error);
       toast.error('Failed to check missed group messages');
+      dispatch(setOfflineFetchStatus({ chatId, isFetching: false }));
     }
   };
 

@@ -61,6 +61,16 @@ interface GroupChatCheckResult {
   gapWarnings: GroupOfflineGapWarning[];
 }
 
+interface EpochSkipDecision {
+  skip: boolean;
+  reason: string;
+}
+
+interface EpochPruneDecision {
+  prune: boolean;
+  reason: string;
+}
+
 export interface GroupOfflineCheckResult {
   checkedChatIds: number[];
   unreadFromChats: Map<number, number>;
@@ -329,18 +339,30 @@ export class GroupOfflineManager {
       epochsProcessed++;
       const epochStart = Date.now();
       const metaStart = Date.now();
+      const currentKeyVersion = chat.key_version ?? 0;
+      if (epoch.key_version < currentKeyVersion && epoch.used_until === null) {
+        console.warn(
+          `[GROUP-OFFLINE][ANOMALY][CHAT:${chat.id}] epoch=${epoch.key_version} current=${currentKeyVersion} ` +
+          `reason=old_epoch_missing_used_until`
+        );
+      }
       const isActiveEpoch = epoch.key_version === (chat.key_version ?? 0);
       const versionMeta = isActiveEpoch
         ? null
         : await this.getVersionMeta(chat, epoch.key_version);
       const metaMs = Date.now() - metaStart;
-      if (this.shouldSkipEpoch(chat, epoch, versionMeta)) {
+      const skipDecision = this.evaluateEpochSkipDecision(chat, epoch, versionMeta);
+      if (skipDecision.skip) {
         console.log(
           `[GROUP-OFFLINE][TIMING][CHAT:${chat.id}] epoch=${epoch.key_version} skipped ` +
-          `metaMs=${metaMs} totalMs=${Date.now() - epochStart}`
+          `reason=${skipDecision.reason} metaMs=${metaMs} totalMs=${Date.now() - epochStart}`
         );
         continue;
       }
+      console.log(
+        `[GROUP-OFFLINE][TIMING][CHAT:${chat.id}] epoch=${epoch.key_version} scanning ` +
+        `reason=${skipDecision.reason} metaMs=${metaMs}`
+      );
 
       const keyBase64 = this.deps.database.getGroupKeyForEpoch(chat.group_id, epoch.key_version);
       if (!keyBase64) continue;
@@ -388,6 +410,7 @@ export class GroupOfflineManager {
         let skippedByBoundary = 0;
 
         for (const msg of orderedMessages) {
+          const messageId = this.getOfflineMessageId(msg);
           if (msg.groupId !== chat.group_id || msg.keyVersion !== epoch.key_version) continue;
           if (
             epoch.used_until !== null
@@ -407,6 +430,12 @@ export class GroupOfflineManager {
           }
 
           if (msg.seq <= highestSeenSeq) {
+            if (!this.deps.database.messageExists(messageId)) {
+              console.warn(
+                `[GROUP-OFFLINE][ANOMALY][CHAT:${chat.id}] epoch=${epoch.key_version} sender=${senderPeerId.slice(-8)} ` +
+                `msgId=${messageId} seq=${msg.seq} highestSeenSeq=${highestSeenSeq} reason=seen_seq_but_message_missing`
+              );
+            }
             ({ lastReadTs, lastReadMessageId } = this.advanceCursor(lastReadTs, lastReadMessageId, msg));
             skippedSeen++;
             continue;
@@ -428,7 +457,6 @@ export class GroupOfflineManager {
           this.deps.database.updateMemberSeq(chat.group_id, epoch.key_version, senderPeerId, msg.seq);
           ({ lastReadTs, lastReadMessageId } = this.advanceCursor(lastReadTs, lastReadMessageId, msg));
 
-          const messageId = this.getOfflineMessageId(msg);
           if (this.deps.database.messageExists(messageId)) {
             continue;
           }
@@ -459,6 +487,10 @@ export class GroupOfflineManager {
               messageType: 'text',
             });
           } catch (error: unknown) {
+            console.error(
+              `[GROUP-OFFLINE][ANOMALY][CHAT:${chat.id}] epoch=${epoch.key_version} sender=${senderPeerId.slice(-8)} ` +
+              `msgId=${messageId} seq=${msg.seq} reason=persist_failed_after_seq_advance`
+            );
             generalErrorHandler(error, `[GROUP-OFFLINE] Failed to process message ${messageId}`);
           }
         }
@@ -520,10 +552,12 @@ export class GroupOfflineManager {
     const dhtKey = `${GROUP_INFO_VERSION_PREFIX}/${chat.group_id}/${creatorPubKeyBase64url}/${keyVersion}`;
     const keyBytes = new TextEncoder().encode(dhtKey);
     let best: GroupInfoVersioned | null = null;
+    let valueEvents = 0;
 
     try {
       for await (const event of this.deps.node.services.dht.get(keyBytes) as AsyncIterable<QueryEvent>) {
         if (event.name !== 'VALUE' || event.value.length === 0) continue;
+        valueEvents++;
         try {
           const candidate = JSON.parse(new TextDecoder().decode(event.value)) as GroupInfoVersioned;
           if (candidate.groupId !== chat.group_id || candidate.version !== keyVersion) continue;
@@ -534,15 +568,29 @@ export class GroupOfflineManager {
         }
       }
     } catch {
+      console.log(
+        `[GROUP-OFFLINE][TIMING][META] group=${chat.group_id.slice(0, 8)} keyVersion=${keyVersion} ` +
+        `hasMeta=false valueEvents=${valueEvents} reason=dht_get_failed`
+      );
       return null;
     }
 
-    if (!best) return null;
+    if (!best) {
+      console.log(
+        `[GROUP-OFFLINE][TIMING][META] group=${chat.group_id.slice(0, 8)} keyVersion=${keyVersion} ` +
+        `hasMeta=false valueEvents=${valueEvents} reason=no_valid_record`
+      );
+      return null;
+    }
     const value = {
       members: best.members,
       senderSeqBoundaries: best.senderSeqBoundaries ?? {},
     };
     this.versionMetaCache.set(cacheKey, { value, cachedAt: Date.now() });
+    console.log(
+      `[GROUP-OFFLINE][TIMING][META] group=${chat.group_id.slice(0, 8)} keyVersion=${keyVersion} ` +
+      `hasMeta=true members=${value.members.length} boundaries=${Object.keys(value.senderSeqBoundaries).length} valueEvents=${valueEvents}`
+    );
     this.pruneLocalCaches();
     return value;
   }
@@ -712,34 +760,44 @@ export class GroupOfflineManager {
     }
   }
 
-  private shouldSkipEpoch(
+  private evaluateEpochSkipDecision(
     chat: Chat,
     epoch: { key_version: number; used_until: number | null },
     versionMeta: GroupOfflineVersionMeta | null,
-  ): boolean {
-    if (!chat.group_id) return false;
-    if (epoch.key_version >= (chat.key_version ?? 0)) return false;
-    if (epoch.used_until === null) return false;
+  ): EpochSkipDecision {
+    if (!chat.group_id) return { skip: false, reason: 'no_group' };
+    if (epoch.key_version >= (chat.key_version ?? 0)) {
+      return { skip: false, reason: 'active_or_future_epoch' };
+    }
+    if (epoch.used_until === null) {
+      return { skip: false, reason: 'missing_used_until' };
+    }
     const threshold = epoch.used_until + GROUP_ROTATION_GRACE_WINDOW_MS;
-    if (Date.now() < threshold) return false;
+    if (Date.now() < threshold) return { skip: false, reason: 'within_grace_window' };
 
     const senderPeerIds = this.getEpochSenderPeerIds(chat, versionMeta);
-    if (senderPeerIds.length === 0) return false;
+    if (senderPeerIds.length === 0) return { skip: false, reason: 'no_senders' };
 
     const boundaries = versionMeta?.senderSeqBoundaries ?? {};
     const hasAllBoundaries = senderPeerIds.every((peerId) => boundaries[peerId] !== undefined);
     if (hasAllBoundaries) {
-      return senderPeerIds.every((peerId) => {
+      const consumedByBoundaries = senderPeerIds.every((peerId) => {
         const boundary = boundaries[peerId] as number;
         const seen = this.deps.database.getMemberSeq(chat.group_id!, epoch.key_version, peerId);
         return seen >= boundary;
       });
+      return consumedByBoundaries
+        ? { skip: true, reason: 'boundaries_consumed' }
+        : { skip: false, reason: 'boundaries_not_consumed' };
     }
 
     const cursors = this.deps.database.getGroupOfflineCursors(chat.group_id, epoch.key_version);
-    if (cursors.length === 0) return false;
-    if (cursors.length < senderPeerIds.length) return false;
-    return cursors.every((cursor) => cursor.last_read_timestamp >= threshold);
+    if (cursors.length === 0) return { skip: false, reason: 'no_cursors' };
+    if (cursors.length < senderPeerIds.length) return { skip: false, reason: 'partial_cursors' };
+    const consumedByCursorFallback = cursors.every((cursor) => cursor.last_read_timestamp >= threshold);
+    return consumedByCursorFallback
+      ? { skip: true, reason: 'cursor_threshold_met' }
+      : { skip: false, reason: 'cursor_threshold_not_met' };
   }
 
   private getEpochSenderPeerIds(chat: Chat, versionMeta: GroupOfflineVersionMeta | null): string[] {
@@ -883,7 +941,13 @@ export class GroupOfflineManager {
         continue;
       }
       const versionMeta = await this.getVersionMeta(chat, epoch.key_version);
-      if (!this.shouldPruneEpochCursors(chat, epoch, versionMeta)) continue;
+      const pruneDecision = this.evaluateEpochPruneDecision(chat, epoch, versionMeta);
+      if (!pruneDecision.prune) {
+        console.log(
+          `[GROUP-OFFLINE][TIMING][PRUNE][CHAT:${chat.id}] epoch=${epoch.key_version} skip reason=${pruneDecision.reason}`
+        );
+        continue;
+      }
 
       this.deps.database.deleteGroupOfflineCursorsForEpoch(chat.group_id, epoch.key_version);
       this.deps.database.deleteGroupKeyHistoryForEpoch(chat.group_id, epoch.key_version);
@@ -900,6 +964,9 @@ export class GroupOfflineManager {
           this.localStoreCache.delete(bucketKey);
         }
       }
+      console.log(
+        `[GROUP-OFFLINE][TIMING][PRUNE][CHAT:${chat.id}] epoch=${epoch.key_version} action=pruned`
+      );
     }
   }
 
@@ -914,29 +981,32 @@ export class GroupOfflineManager {
     return Date.now() >= threshold;
   }
 
-  private shouldPruneEpochCursors(
+  private evaluateEpochPruneDecision(
     chat: Chat,
     epoch: { key_version: number; used_until: number | null },
     versionMeta: GroupOfflineVersionMeta | null,
-  ): boolean {
-    if (!chat.group_id) return false;
-    if (epoch.key_version >= (chat.key_version ?? 0)) return false;
-    if (epoch.used_until === null) return false;
+  ): EpochPruneDecision {
+    if (!chat.group_id) return { prune: false, reason: 'no_group' };
+    if (epoch.key_version >= (chat.key_version ?? 0)) return { prune: false, reason: 'active_or_future_epoch' };
+    if (epoch.used_until === null) return { prune: false, reason: 'missing_used_until' };
 
     const threshold = epoch.used_until + GROUP_ROTATION_GRACE_WINDOW_MS;
-    if (Date.now() < threshold) return false;
+    if (Date.now() < threshold) return { prune: false, reason: 'within_grace_window' };
 
     const senderPeerIds = this.getEpochSenderPeerIds(chat, versionMeta);
-    if (senderPeerIds.length === 0) return false;
+    if (senderPeerIds.length === 0) return { prune: false, reason: 'no_senders' };
 
     const boundaries = versionMeta?.senderSeqBoundaries ?? {};
     const hasAllBoundaries = senderPeerIds.every((peerId) => boundaries[peerId] !== undefined);
-    if (!hasAllBoundaries) return false;
+    if (!hasAllBoundaries) return { prune: false, reason: 'missing_boundaries' };
 
-    return senderPeerIds.every((peerId) => {
+    const consumedByBoundaries = senderPeerIds.every((peerId) => {
       const boundary = boundaries[peerId] as number;
       const seen = this.deps.database.getMemberSeq(chat.group_id!, epoch.key_version, peerId);
       return seen >= boundary;
     });
+    return consumedByBoundaries
+      ? { prune: true, reason: 'boundaries_consumed' }
+      : { prune: false, reason: 'boundaries_not_consumed' };
   }
 }
