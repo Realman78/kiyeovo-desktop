@@ -196,6 +196,13 @@ export class GroupMessaging {
     console.log("sending group message to group", ctx);
     const participants = this.deps.database.getChatParticipants(ctx.chatId);
     const hasRecipient = participants.some((participant) => participant.peer_id !== this.deps.myPeerId);
+    const participantPeers = participants.map((participant) => participant.peer_id);
+    const connectedPeers = this.deps.node.getPeers().map((peerId) => peerId.toString());
+    console.log(
+      `[GROUP-MSG][SEND][CTX] group=${groupId.slice(0, 8)} keyVersion=${ctx.keyVersion} ` +
+      `topic=${ctx.topic.slice(0, 16)}... participants=${participantPeers.map((p) => p.slice(-8)).join(',') || 'none'} ` +
+      `connectedPeers=${connectedPeers.map((p) => p.slice(-8)).join(',') || 'none'}`
+    );
     if (!hasRecipient) {
       throw new Error('Cannot send message: group has no other members');
     }
@@ -229,7 +236,7 @@ export class GroupMessaging {
 
     const payloadBytes = new TextEncoder().encode(JSON.stringify(signedMessage));
     const publishStartedAt = Date.now();
-    const publishedOnline = await this.publishWithRetry(ctx, payloadBytes);
+    const publishedOnline = await this.publishWithRetry(ctx, payloadBytes, `msgId=${signedMessage.messageId}`);
     const publishMs = Date.now() - publishStartedAt;
 
     let warning: string | null = publishedOnline
@@ -500,11 +507,11 @@ export class GroupMessaging {
     return null;
   }
 
-  private async publishWithRetry(ctx: GroupContext, payload: Uint8Array): Promise<boolean> {
+  private async publishWithRetry(ctx: GroupContext, payload: Uint8Array, publishTag: string): Promise<boolean> {
     const startedAt = Date.now();
     try {
       const attemptStartedAt = Date.now();
-      await this.publish(ctx.topic, payload);
+      await this.publish(ctx.topic, payload, `group=${ctx.groupId.slice(0, 8)} ${publishTag} attempt=1`);
       console.log(
         `[GROUP-MSG][TIMING][PUBLISH] group=${ctx.groupId.slice(0, 8)} attempt=1 ok took=${Date.now() - attemptStartedAt}ms`
       );
@@ -531,7 +538,7 @@ export class GroupMessaging {
     });
     try {
       const retryStartedAt = Date.now();
-      await this.publish(ctx.topic, payload);
+      await this.publish(ctx.topic, payload, `group=${ctx.groupId.slice(0, 8)} ${publishTag} attempt=2`);
       console.log(
         `[GROUP-MSG][TIMING][PUBLISH] group=${ctx.groupId.slice(0, 8)} attempt=2 ok ` +
         `attemptMs=${Date.now() - retryStartedAt} totalMs=${Date.now() - startedAt}`
@@ -597,16 +604,24 @@ export class GroupMessaging {
 
     const payload = new TextEncoder().encode(JSON.stringify(signedHeartbeat));
     try {
-      await this.publish(ctx.topic, payload);
+      await this.publish(ctx.topic, payload, `group=${ctx.groupId.slice(0, 8)} heartbeat attempt=1`);
     } catch {
       // Keep-alive is best effort.
     }
   }
 
-  private async publish(topic: string, payload: Uint8Array): Promise<void> {
+  private async publish(topic: string, payload: Uint8Array, tag: string): Promise<void> {
     const result = await this.deps.node.services.pubsub.publish(topic, payload);
     const recipients = result.recipients ?? [];
+    const recipientIds = recipients.map((peerId) => peerId.toString());
     const remoteRecipients = recipients.filter((peerId) => peerId.toString() !== this.deps.myPeerId);
+    const connectedPeers = this.deps.node.getPeers().map((peerId) => peerId.toString());
+    console.log(
+      `[GROUP-MSG][PUBLISH][RESULT] ${tag} topic=${topic.slice(0, 16)}... ` +
+      `recipients=${recipientIds.map((p) => p.slice(-8)).join(',') || 'none'} ` +
+      `remoteRecipients=${remoteRecipients.map((p) => p.toString().slice(-8)).join(',') || 'none'} ` +
+      `connectedPeers=${connectedPeers.map((p) => p.slice(-8)).join(',') || 'none'}`
+    );
     if (remoteRecipients.length === 0) {
       throw new Error('PublishError.NoPeersSubscribedToTopic');
     }
@@ -748,6 +763,7 @@ export class GroupMessaging {
       const msgTag =
         `group=${parsed.groupId} keyVersion=${parsed.keyVersion} msgId=${parsed.messageId} ` +
         `sender=${parsed.senderPeerId.slice(-8)} seq=${parsed.messageType === 'heartbeat' ? 'n/a' : parsed.seq} topic=${topicShort}`;
+      console.log(`[GROUP-MSG][IN][RAW] ${msgTag}`);
 
       if (!this.hasValidTimestamp(parsed)) {
         console.log(`[GROUP-MSG][IN][DROP] reason=invalid_timestamp ${msgTag} now=${Date.now()} msgTs=${parsed.timestamp}`);
