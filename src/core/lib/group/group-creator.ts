@@ -117,6 +117,116 @@ export class GroupCreator {
     return { groupId, inviteDeliveries };
   }
 
+  async inviteUsersToExistingGroup(chatId: number, invitedPeerIds: string[]): Promise<GroupInviteDelivery[]> {
+    const { database, myPeerId } = this.deps;
+
+    if (invitedPeerIds.length === 0) {
+      throw new Error('Select at least one user to invite');
+    }
+
+    const chat = database.getChatByIdWithUsernameAndLastMsg(chatId, myPeerId);
+    if (!chat || chat.type !== 'group' || !chat.group_id) {
+      throw new Error('Group chat not found');
+    }
+    if (chat.created_by !== myPeerId) {
+      throw new Error('Only the group creator can invite new users');
+    }
+    if (chat.status !== 'active' || chat.group_status !== 'active') {
+      throw new Error(`Cannot invite users while group status is ${chat.group_status ?? chat.status}`);
+    }
+
+    const participants = database.getChatParticipants(chat.id).map((p) => p.peer_id);
+    const participantSet = new Set(participants);
+    const pendingInviteTargets = new Set(
+      database.getPendingAcksForGroup(chat.group_id)
+        .filter((ack) => ack.message_type === 'GROUP_INVITE')
+        .map((ack) => ack.target_peer_id),
+    );
+
+    const uniqueTargets = Array.from(new Set(invitedPeerIds));
+    const normalizedTargets: string[] = [];
+    const skipped: GroupInviteDelivery[] = [];
+
+    for (const peerId of uniqueTargets) {
+      if (peerId === myPeerId) {
+        skipped.push({
+          peerId,
+          username: peerId,
+          status: 'queued_for_retry',
+          reason: 'Cannot invite yourself',
+        });
+        continue;
+      }
+
+      const user = database.getUserByPeerId(peerId);
+      if (!user) {
+        skipped.push({
+          peerId,
+          username: peerId,
+          status: 'queued_for_retry',
+          reason: 'User not found in contacts',
+        });
+        continue;
+      }
+
+      if (participantSet.has(peerId)) {
+        skipped.push({
+          peerId,
+          username: user.username,
+          status: 'queued_for_retry',
+          reason: 'User is already in the group',
+        });
+        continue;
+      }
+
+      if (pendingInviteTargets.has(peerId)) {
+        skipped.push({
+          peerId,
+          username: user.username,
+          status: 'queued_for_retry',
+          reason: 'User already has a pending invite',
+        });
+        continue;
+      }
+
+      normalizedTargets.push(peerId);
+    }
+
+    const reservedByPendingInvites = Array.from(pendingInviteTargets)
+      .filter((peerId) => !participantSet.has(peerId)).length;
+    const usedSlots = participants.length + reservedByPendingInvites;
+    const availableSlots = Math.max(0, GROUP_MAX_MEMBERS - usedSlots);
+    if (availableSlots <= 0) {
+      return [
+        ...skipped,
+        ...normalizedTargets.map((peerId) => {
+          const user = database.getUserByPeerId(peerId);
+          return {
+            peerId,
+            username: user?.username || peerId,
+            status: 'queued_for_retry' as const,
+            reason: `Group is full (${GROUP_MAX_MEMBERS} members max)`,
+          };
+        }),
+      ];
+    }
+
+    const allowedTargets = normalizedTargets.slice(0, availableSlots);
+    const overflowTargets = normalizedTargets.slice(availableSlots);
+    const overflowDeliveries: GroupInviteDelivery[] = overflowTargets.map((peerId) => {
+      const user = database.getUserByPeerId(peerId);
+      return {
+        peerId,
+        username: user?.username || peerId,
+        status: 'queued_for_retry',
+        reason: `Group member limit reached (${GROUP_MAX_MEMBERS} max)`,
+      };
+    });
+
+    const inviteDeliveries = await this.sendGroupInvites(chat.group_id, chat.name, allowedTargets);
+    return [...inviteDeliveries, ...skipped, ...overflowDeliveries];
+  }
+
   private async sendGroupInvites(groupId: string, groupName: string, invitedPeerIds: string[]): Promise<GroupInviteDelivery[]> {
     const { database, myPeerId } = this.deps;
     const now = Date.now();

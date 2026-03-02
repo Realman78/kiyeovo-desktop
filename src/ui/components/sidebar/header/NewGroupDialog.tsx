@@ -13,6 +13,7 @@ import { Input } from "../../ui/Input";
 import { Button } from "../../ui/Button";
 import { useSelector } from "react-redux";
 import type { RootState } from "../../../state/store";
+import { MAX_GROUP_MEMBERS } from "../../../constants";
 
 interface Contact {
   peerId: string;
@@ -33,7 +34,7 @@ interface NewGroupDialogProps {
 }
 
 const MAX_GROUP_NAME_LENGTH = 50;
-const MAX_SELECTABLE = 9; // creator counts as 1, so 9 others for max 10
+const MAX_SELECTABLE = MAX_GROUP_MEMBERS - 1;
 
 const NewGroupDialog = ({ open, onOpenChange, onSuccess }: NewGroupDialogProps) => {
   const chats = useSelector((state: RootState) => state.chat.chats);

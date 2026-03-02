@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useSelector, useDispatch } from "react-redux";
 import type { RootState } from "../../../state/store";
 import { Button } from "../../ui/Button";
@@ -18,6 +18,8 @@ import {
 import { useToast } from "../../ui/use-toast";
 import { Input } from "../../ui/Input";
 import { validateUsername } from "../../../utils/general";
+import { InviteUsersDialog, type GroupInviteDeliveryView } from "./InviteUsersDialog";
+import { MAX_GROUP_MEMBERS } from "../../../constants";
 
 type ChatHeaderProps = {
   username: string;
@@ -29,6 +31,7 @@ type ChatHeaderProps = {
 export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: ChatHeaderProps) => {
   const activeChat = useSelector((state: RootState) => state.chat.activeChat);
   const chats = useSelector((state: RootState) => state.chat.chats);
+  const myPeerId = useSelector((state: RootState) => state.user.peerId);
   const dispatch = useDispatch();
   const { toast } = useToast();
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -39,10 +42,13 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
   const [deleteChatAndUserConfirmOpen, setDeleteChatAndUserConfirmOpen] = useState(false);
   const [leaveGroupConfirmOpen, setLeaveGroupConfirmOpen] = useState(false);
   const [isLeavingGroup, setIsLeavingGroup] = useState(false);
+  const [inviteUsersDialogOpen, setInviteUsersDialogOpen] = useState(false);
+  const [isCurrentUserGroupCreator, setIsCurrentUserGroupCreator] = useState(false);
   const [editUsernameModalOpen, setEditUsernameModalOpen] = useState(false);
   const [newUsername, setNewUsername] = useState(username);
   const [validationError, setValidationError] = useState("");
   const [groupMembers, setGroupMembers] = useState<Array<{ peerId: string; username: string; status: 'pending' | 'accepted' | 'confirmed' }>>([]);
+  const creatorPermissionRequestRef = useRef(0);
 
   const fetchGroupMembers = async () => {
     if (chatType !== 'group' || !chatId) return;
@@ -60,6 +66,33 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
     fetchGroupMembers();
   }, [chatType, chatId]);
 
+  const refreshGroupCreatorPermission = async () => {
+    if (chatType !== 'group' || !chatId) {
+      setIsCurrentUserGroupCreator(false);
+      return;
+    }
+
+    const requestId = ++creatorPermissionRequestRef.current;
+    try {
+      const chatResult = await window.kiyeovoAPI.getChatById(chatId);
+      if (requestId !== creatorPermissionRequestRef.current) return;
+      if (!chatResult.success || !chatResult.chat || !myPeerId) {
+        setIsCurrentUserGroupCreator(false);
+        return;
+      }
+
+      setIsCurrentUserGroupCreator(chatResult.chat.created_by === myPeerId);
+    } catch (error) {
+      if (requestId !== creatorPermissionRequestRef.current) return;
+      console.error('Failed to resolve group creator permission:', error);
+      setIsCurrentUserGroupCreator(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshGroupCreatorPermission();
+  }, [chatType, chatId, myPeerId]);
+
   // Refresh member list whenever an offline-message fetch completes (invite responses arrive)
   useEffect(() => {
     if (chatType !== 'group') return;
@@ -76,6 +109,7 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
       if (data.chatId === chatId) {
         void (async () => {
           await fetchGroupMembers();
+          await refreshGroupCreatorPermission();
 
           // Keep group status in sync without requiring app restart.
           const chatResult = await window.kiyeovoAPI.getChatById(chatId);
@@ -185,6 +219,58 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
   const handleLeaveGroup = () => {
     setLeaveGroupConfirmOpen(true);
     setDropdownOpen(false);
+  };
+
+  const handleInviteUsers = () => {
+    const run = async () => {
+      if (!chatId || !myPeerId) {
+        toast.error('Only the group creator can invite users');
+        setDropdownOpen(false);
+        return;
+      }
+
+      try {
+        const chatResult = await window.kiyeovoAPI.getChatById(chatId);
+        const canInvite = Boolean(chatResult.success && chatResult.chat && chatResult.chat.created_by === myPeerId);
+        if (!canInvite) {
+          setIsCurrentUserGroupCreator(false);
+          toast.error('Only the group creator can invite users');
+          setDropdownOpen(false);
+          return;
+        }
+      } catch (error) {
+        console.error('Failed to verify creator permission for invite:', error);
+        toast.error('Failed to verify invite permissions');
+        setDropdownOpen(false);
+        return;
+      }
+
+      if (availableInviteSlots <= 0) {
+        toast.info('Group member limit reached');
+        setDropdownOpen(false);
+        return;
+      }
+
+      setInviteUsersDialogOpen(true);
+      setDropdownOpen(false);
+    };
+    void run();
+  };
+
+  const handleInviteUsersSuccess = async (inviteDeliveries: GroupInviteDeliveryView[]) => {
+    const sentCount = inviteDeliveries.filter((delivery) => delivery.status === 'sent').length;
+    const queuedCount = inviteDeliveries.filter((delivery) => delivery.status === 'queued_for_retry').length;
+
+    if (sentCount > 0 && queuedCount === 0) {
+      toast.success(`Sent ${sentCount} invite(s)`);
+    } else {
+      const parts: string[] = [];
+      if (sentCount > 0) parts.push(`Sent ${sentCount}`);
+      if (queuedCount > 0) parts.push(`queued ${queuedCount} for retry`);
+      toast.warning(parts.length > 0 ? `${parts.join(', ')} invite(s)` : 'No users were invited');
+    }
+
+    await fetchGroupMembers();
   };
 
   const handleCheckMissedGroupMessages = async () => {
@@ -330,6 +416,11 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
   const memberSummary = groupMembers.length > 0
     ? groupMembers.map(m => m.status === 'pending' ? `${m.username} (invited)` : m.username).join(', ')
     : 'No members yet';
+  const availableInviteSlots = Math.max(0, MAX_GROUP_MEMBERS - (groupMembers.length + 1));
+  const disabledInvitePeers = groupMembers.map((member) => ({
+    peerId: member.peerId,
+    reason: member.status === 'pending' ? 'Invite pending' : 'Already in group',
+  }));
 
   return <div className={`${showGroupStateMessage ? 'h-20' : 'h-16'} px-6 flex items-center justify-between border-b border-border ${activeChat?.status === 'pending' ? "" : "bg-card/50"}`}>
     <div className="flex items-center gap-3">
@@ -401,6 +492,14 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
             >
               Check missed messages
             </DropdownMenuItem>
+            {groupStatus === 'active' && isCurrentUserGroupCreator && (
+              <DropdownMenuItem
+                icon={<UserPlus className="w-4 h-4" />}
+                onClick={handleInviteUsers}
+              >
+                Invite users
+              </DropdownMenuItem>
+            )}
             {groupStatus === 'active' && (
               <DropdownMenuItem
                 icon={<LogOut className="w-4 h-4" />}
@@ -461,6 +560,17 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
           peerId={peerId}
           chatId={activeChat.id}
         />
+        {isGroup && chatId && (
+          <InviteUsersDialog
+            open={inviteUsersDialogOpen}
+            onOpenChange={setInviteUsersDialogOpen}
+            chatId={chatId}
+            groupName={username}
+            disabledPeers={disabledInvitePeers}
+            maxSelectable={availableInviteSlots}
+            onSuccess={handleInviteUsersSuccess}
+          />
+        )}
         <Dialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
           <DialogContent>
             <DialogHeader>

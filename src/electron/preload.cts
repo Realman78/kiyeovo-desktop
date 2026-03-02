@@ -432,6 +432,13 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.CREATE_GROUP, groupName, peerIds);
     },
+    inviteUsersToGroup: async (chatId: number, peerIds: string[]): Promise<{
+        success: boolean;
+        inviteDeliveries: Array<{ peerId: string; username: string; status: 'sent' | 'queued_for_retry'; reason?: string }>;
+        error: string | null;
+    }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.INVITE_USERS_TO_GROUP, chatId, peerIds);
+    },
     getGroupMembers: async (chatId: number): Promise<{ success: boolean; members: Array<{ peerId: string; username: string; status: 'pending' | 'accepted' | 'confirmed' }>; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.GET_GROUP_MEMBERS, chatId);
     },

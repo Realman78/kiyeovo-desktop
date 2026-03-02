@@ -1385,6 +1385,15 @@ function setupGroupHandlers(
   ipcMain: IpcMain,
   getP2PCore: () => P2PCore | null
 ): void {
+  const buildGroupCreator = (p2pCore: P2PCore, username: string) => new GroupCreator({
+    node: p2pCore.node,
+    database: p2pCore.database,
+    userIdentity: p2pCore.userIdentity,
+    myPeerId: p2pCore.userIdentity.id,
+    myUsername: username,
+    nudgePeer: (peerId) => p2pCore.messageHandler.nudgePeer(peerId),
+  });
+
   ipcMain.handle(IPC_CHANNELS.CHECK_GROUP_OFFLINE_MESSAGES, async (_event, chatIds?: number[]) => {
     try {
       const p2pCore = getP2PCore();
@@ -1486,14 +1495,7 @@ function setupGroupHandlers(
         return { success: false, groupId: null, chatId: null, inviteDeliveries: [], error: `A group named "${groupName.trim()}" already exists` };
       }
 
-      const creator = new GroupCreator({
-        node: p2pCore.node,
-        database: p2pCore.database,
-        userIdentity: p2pCore.userIdentity,
-        myPeerId: p2pCore.userIdentity.id,
-        myUsername: username,
-        nudgePeer: (peerId) => p2pCore.messageHandler.nudgePeer(peerId),
-      });
+      const creator = buildGroupCreator(p2pCore, username);
 
       const createResult = await creator.createGroup(groupName, peerIds);
       const { groupId, inviteDeliveries } = createResult;
@@ -1510,6 +1512,29 @@ function setupGroupHandlers(
     }
   });
 
+  ipcMain.handle(IPC_CHANNELS.INVITE_USERS_TO_GROUP, async (_event, chatId: number, peerIds: string[]) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, inviteDeliveries: [], error: 'P2P core not initialized' };
+      }
+
+      const username = p2pCore.usernameRegistry.getCurrentUsername();
+      if (!username) {
+        return { success: false, inviteDeliveries: [], error: 'No username registered' };
+      }
+
+      const creator = buildGroupCreator(p2pCore, username);
+
+      const inviteDeliveries = await creator.inviteUsersToExistingGroup(chatId, peerIds);
+      console.log(`[IPC] Invited users to existing group chat=${chatId}`);
+      return { success: true, inviteDeliveries, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to invite users to group:', error);
+      return { success: false, inviteDeliveries: [], error: error instanceof Error ? error.message : 'Failed to invite users to group' };
+    }
+  });
+
   ipcMain.handle(IPC_CHANNELS.GET_GROUP_MEMBERS, async (_event, chatId: number) => {
     try {
       const p2pCore = getP2PCore();
@@ -1519,17 +1544,17 @@ function setupGroupHandlers(
 
       const myPeerId = p2pCore.userIdentity.id;
       const participants = p2pCore.database.getChatParticipants(chatId);
-
-      // Get the chat to find groupId for pending ack lookup
       const chat = p2pCore.database.getChatByIdWithUsernameAndLastMsg(chatId, myPeerId);
       const groupId = chat?.group_id;
 
       const pendingAcks = groupId ? p2pCore.database.getPendingAcksForGroup(groupId) : [];
 
       const members: Array<{ peerId: string; username: string; status: 'pending' | 'accepted' | 'confirmed' }> = [];
+      const existingMemberPeerIds = new Set<string>();
 
       for (const participant of participants) {
         if (participant.peer_id === myPeerId) continue;
+        existingMemberPeerIds.add(participant.peer_id);
 
         const user = p2pCore.database.getUserByPeerId(participant.peer_id);
         const username = user?.username || participant.peer_id;
@@ -1552,6 +1577,22 @@ function setupGroupHandlers(
         }
 
         members.push({ peerId: participant.peer_id, username, status });
+      }
+
+      // Also expose invite targets not yet present in chat_participants,
+      // so invite dialogs can filter them out up-front.
+      for (const pendingAck of pendingAcks) {
+        if (pendingAck.message_type !== 'GROUP_INVITE') continue;
+        if (pendingAck.target_peer_id === myPeerId) continue;
+        if (existingMemberPeerIds.has(pendingAck.target_peer_id)) continue;
+
+        const user = p2pCore.database.getUserByPeerId(pendingAck.target_peer_id);
+        members.push({
+          peerId: pendingAck.target_peer_id,
+          username: user?.username || pendingAck.target_peer_id,
+          status: 'pending',
+        });
+        existingMemberPeerIds.add(pendingAck.target_peer_id);
       }
 
       return { success: true, members, error: null };
