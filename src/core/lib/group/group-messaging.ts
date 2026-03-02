@@ -696,27 +696,66 @@ export class GroupMessaging {
 
       if (!this.isGroupChatMessage(parsed)) return;
       if (parsed.type !== GroupMessageType.GROUP_MESSAGE) return;
-      if (!this.hasValidTimestamp(parsed)) return;
+      const topicShort = `${maybe.topic.slice(0, 16)}...`;
+      const msgTag =
+        `group=${parsed.groupId} keyVersion=${parsed.keyVersion} msgId=${parsed.messageId} ` +
+        `sender=${parsed.senderPeerId.slice(-8)} seq=${parsed.messageType === 'heartbeat' ? 'n/a' : parsed.seq} topic=${topicShort}`;
+
+      if (!this.hasValidTimestamp(parsed)) {
+        console.log(`[GROUP-MSG][IN][DROP] reason=invalid_timestamp ${msgTag} now=${Date.now()} msgTs=${parsed.timestamp}`);
+        return;
+      }
       // emitSelf can deliver our own publish back; local message is already inserted on send.
-      if (parsed.senderPeerId === this.deps.myPeerId) return;
+      if (parsed.senderPeerId === this.deps.myPeerId) {
+        console.log(`[GROUP-MSG][IN][DROP] reason=self_echo ${msgTag}`);
+        return;
+      }
 
       const ctx = this.resolveIncomingGroupContext(parsed.groupId, parsed.keyVersion, maybe.topic);
-      if (!ctx) return;
+      if (!ctx) {
+        const chat = this.deps.database.getChatByGroupId(parsed.groupId);
+        console.log(
+          `[GROUP-MSG][IN][DROP] reason=context_miss ${msgTag} ` +
+          `chatExists=${!!chat} chatStatus=${chat?.status ?? 'n/a'} groupStatus=${chat?.group_status ?? 'n/a'} ` +
+          `chatKeyVersion=${chat?.key_version ?? 'n/a'}`,
+        );
+        return;
+      }
 
       const participants = this.deps.database.getChatParticipants(ctx.chatId);
-      if (!participants.some(p => p.peer_id === parsed.senderPeerId)) return;
+      if (!participants.some(p => p.peer_id === parsed.senderPeerId)) {
+        console.log(
+          `[GROUP-MSG][IN][DROP] reason=sender_not_participant ${msgTag} chatId=${ctx.chatId} participants=${participants.length}`,
+        );
+        return;
+      }
 
       const sender = this.deps.database.getUserByPeerId(parsed.senderPeerId);
-      if (!sender) return;
-      if (!this.verifySignature(parsed, sender.signing_public_key)) return;
+      if (!sender) {
+        console.log(`[GROUP-MSG][IN][DROP] reason=unknown_sender ${msgTag}`);
+        return;
+      }
+      if (!this.verifySignature(parsed, sender.signing_public_key)) {
+        console.log(`[GROUP-MSG][IN][DROP] reason=bad_signature ${msgTag}`);
+        return;
+      }
 
       if (parsed.messageType === 'heartbeat') {
+        console.log(`[GROUP-MSG][IN][SKIP] reason=heartbeat ${msgTag}`);
         return;
       }
 
       const highestSeenSeq = this.deps.database.getMemberSeq(parsed.groupId, parsed.keyVersion, parsed.senderPeerId);
-      if (parsed.seq <= highestSeenSeq) return;
-      if (this.deps.database.messageExists(parsed.messageId)) return;
+      if (parsed.seq <= highestSeenSeq) {
+        console.log(
+          `[GROUP-MSG][IN][DROP] reason=seq_not_new ${msgTag} highestSeenSeq=${highestSeenSeq}`,
+        );
+        return;
+      }
+      if (this.deps.database.messageExists(parsed.messageId)) {
+        console.log(`[GROUP-MSG][IN][DROP] reason=duplicate_message_id ${msgTag}`);
+        return;
+      }
 
       const content = this.decryptContent(parsed.encryptedContent, ctx.groupKey, parsed.nonce);
 
@@ -740,6 +779,7 @@ export class GroupMessaging {
         messageSentStatus: 'online',
         messageType: parsed.messageType === 'system' ? 'system' : 'text',
       });
+      console.log(`[GROUP-MSG][IN][APPLY] ${msgTag} chatId=${ctx.chatId}`);
     } catch (error: unknown) {
       generalErrorHandler(error, '[GROUP-MSG] Failed to handle incoming pubsub message');
     }
