@@ -1406,6 +1406,9 @@ export class MessageHandler {
       onGroupMembersUpdated: this.onGroupMembersUpdated,
       onMessageReceived: this.onMessageReceived,
       nudgePeer: this.nudgePeer.bind(this),
+      onRegisterPrevEpochGrace: (groupId: string, keyVersion: number) => {
+        this.groupMessaging.registerGraceContextForEpoch(groupId, keyVersion);
+      },
     };
 
     try {

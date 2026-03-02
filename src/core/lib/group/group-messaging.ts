@@ -60,6 +60,7 @@ export class GroupMessaging {
   // In-memory only for V1: if app restarts before retry, user must resend/ignore warning.
   // TODO: persist failed offline backup retries in DB if we need restart-safe retries.
   private readonly pendingOfflineBackups = new Map<string, GroupContentMessage>();
+  private readonly rekeyContextMissTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   private readonly onPubsubMessage = (evt: CustomEvent<unknown>): void => {
     void this.handleIncomingPubsubEvent(evt.detail);
@@ -110,6 +111,10 @@ export class GroupMessaging {
       clearTimeout(timer);
     }
     this.graceTopicTimers.clear();
+    for (const timer of this.rekeyContextMissTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.rekeyContextMissTimers.clear();
 
     const topicsToUnsubscribe = new Set<string>();
     for (const topic of this.groupTopics.values()) {
@@ -139,6 +144,46 @@ export class GroupMessaging {
     if (!currentTopic) return;
     this.groupTopics.delete(groupId);
     this.unsubscribeTopicIfUnused(currentTopic);
+  }
+
+  registerGraceContextForEpoch(groupId: string, keyVersion: number): void {
+    const chat = this.deps.database.getChatByGroupId(groupId);
+    if (!chat) return;
+
+    const keyBase64 = this.deps.database.getGroupKeyForEpoch(groupId, keyVersion);
+    if (!keyBase64) {
+      console.log(
+        `[GROUP-MSG][GRACE][REGISTER][SKIP] group=${groupId} keyVersion=${keyVersion} reason=missing_key`,
+      );
+      return;
+    }
+
+    const keyBytes = Buffer.from(keyBase64, 'base64');
+    if (keyBytes.length !== 32) {
+      console.log(
+        `[GROUP-MSG][GRACE][REGISTER][SKIP] group=${groupId} keyVersion=${keyVersion} reason=invalid_key_length`,
+      );
+      return;
+    }
+
+    const topic = this.deriveTopic(groupId, keyBytes);
+    const ctx: GroupContext = {
+      groupId,
+      chatId: chat.id,
+      keyVersion,
+      groupKey: keyBytes,
+      topic,
+    };
+
+    this.addGraceContext(ctx);
+    this.subscribeTopic(
+      topic,
+      `pre-rotation-grace group=${groupId} keyVersion=${keyVersion}`,
+      true,
+    );
+    console.log(
+      `[GROUP-MSG][GRACE][REGISTER] group=${groupId} keyVersion=${keyVersion} topic=${topic.slice(0, 16)}...`,
+    );
   }
 
   async reconcileSubscriptions(): Promise<void> {
@@ -418,6 +463,38 @@ export class GroupMessaging {
       this.unsubscribeTopicIfUnused(context.topic);
     }
     this.groupGraceContexts.delete(groupId);
+  }
+
+  private scheduleRekeyContextMissOfflineCheck(groupId: string, chatId: number, messageId: string): void {
+    if (this.rekeyContextMissTimers.has(groupId)) {
+      console.log(
+        `[GROUP-MSG][REKEY-FETCH][SKIP] group=${groupId} chatId=${chatId} reason=already_scheduled msgId=${messageId}`,
+      );
+      return;
+    }
+
+    const delayMs = 10_000;
+    console.log(
+      `[GROUP-MSG][REKEY-FETCH][SCHEDULE] group=${groupId} chatId=${chatId} delayMs=${delayMs} msgId=${messageId}`,
+    );
+    const timer = setTimeout(() => {
+      this.rekeyContextMissTimers.delete(groupId);
+      void (async () => {
+        const startedAt = Date.now();
+        try {
+          const result = await this.deps.groupOfflineManager.checkGroupOfflineMessages([chatId]);
+          const unread = Array.from(result.unreadFromChats.values()).reduce((sum, count) => sum + count, 0);
+          console.log(
+            `[GROUP-MSG][REKEY-FETCH][DONE] group=${groupId} chatId=${chatId} checked=${result.checkedChatIds.length} unread=${unread} took=${Date.now() - startedAt}ms`,
+          );
+        } catch (error: unknown) {
+          console.warn(
+            `[GROUP-MSG][REKEY-FETCH][FAIL] group=${groupId} chatId=${chatId} reason=${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      })();
+    }, delayMs);
+    this.rekeyContextMissTimers.set(groupId, timer);
   }
 
   private unsubscribeTopicIfUnused(topic: string): void {
@@ -783,6 +860,9 @@ export class GroupMessaging {
           `chatExists=${!!chat} chatStatus=${chat?.status ?? 'n/a'} groupStatus=${chat?.group_status ?? 'n/a'} ` +
           `chatKeyVersion=${chat?.key_version ?? 'n/a'}`,
         );
+        if (chat?.group_status === 'rekeying') {
+          this.scheduleRekeyContextMissOfflineCheck(parsed.groupId, chat.id, parsed.messageId);
+        }
         return;
       }
 

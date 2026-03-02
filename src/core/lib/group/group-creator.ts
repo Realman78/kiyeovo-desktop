@@ -44,6 +44,7 @@ export interface GroupCreatorDeps {
   onGroupMembersUpdated?: (data: GroupMembersUpdatedEvent) => void;
   onMessageReceived?: (data: MessageReceivedEvent) => void;
   nudgePeer?: (peerId: string) => void;
+  onRegisterPrevEpochGrace?: (groupId: string, keyVersion: number) => void;
 }
 
 export type GroupInviteDeliveryStatus = 'sent' | 'queued_for_retry';
@@ -474,6 +475,9 @@ export class GroupCreator {
 
       const { groupKey, keyVersion } = await this.rotateGroupKey(request.groupId, request.peerId, 'leave');
       rotationCommitted = true;
+      if (prevVersion >= 1) {
+        this.deps.onRegisterPrevEpochGrace?.(request.groupId, prevVersion);
+      }
 
       const participants = database.getChatParticipants(chat.id);
       const roster = this.buildRoster(participants.map((p) => p.peer_id));
@@ -679,6 +683,9 @@ export class GroupCreator {
       // Rotate key (join always triggers rotation)
       const { groupKey, keyVersion } = await this.rotateGroupKey(groupId, acceptedPeerId, 'join');
       rotationCommitted = true;
+      if (prevVersion >= 1) {
+        this.deps.onRegisterPrevEpochGrace?.(groupId, prevVersion);
+      }
 
       // Build roster (creator + all existing active members + new joiner)
       const participants = database.getChatParticipants(chat.id);
