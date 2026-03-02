@@ -1688,6 +1688,24 @@ function setupGroupHandlers(
       return { success: false, error: error instanceof Error ? error.message : 'Failed to leave group' };
     }
   });
+
+  ipcMain.handle(IPC_CHANNELS.GET_SUBSCRIBED_TOPICS, async () => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, topics: [], error: 'P2P core not initialized' };
+      }
+
+      const topics = p2pCore.node.services.pubsub.getTopics();
+      console.log(
+        `[GROUP-TOPIC][DEBUG][IPC] SUBSCRIBED_TOPICS count=${topics.length} topics=${topics.join(',') || 'none'}`,
+      );
+      return { success: true, topics, error: null };
+    } catch (error) {
+      console.error('[GROUP-TOPIC][DEBUG][IPC] Failed to get subscribed topics:', error);
+      return { success: false, topics: [], error: error instanceof Error ? error.message : 'Failed to get subscribed topics' };
+    }
+  });
 }
 
 function setupAppHandlers(ipcMain: IpcMain, getP2PCore: () => P2PCore | null): void {

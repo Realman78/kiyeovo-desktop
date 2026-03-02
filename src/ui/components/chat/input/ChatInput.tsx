@@ -45,7 +45,7 @@ export const ChatInput: FC = () => {
             try {
                 const result = await window.kiyeovoAPI.getGroupMembers(activeChat.id);
                 if (!isMounted || !result.success) return;
-                const hasOtherMembers = result.members.some((member) => member.peerId !== myPeerId);
+                const hasOtherMembers = result.members.some((member) => member.peerId !== myPeerId && member.status !== 'pending');
                 setGroupHasOtherMembers(hasOtherMembers);
             } catch {
                 // Keep previous value on transient errors.

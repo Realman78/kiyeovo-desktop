@@ -122,11 +122,7 @@ export class GroupMessaging {
     }
 
     for (const topic of topicsToUnsubscribe) {
-      try {
-        this.deps.node.services.pubsub.unsubscribe(topic);
-      } catch {
-        // Best effort on shutdown
-      }
+      this.unsubscribeTopic(topic, 'cleanup');
     }
     this.groupTopics.clear();
     this.groupGraceContexts.clear();
@@ -179,9 +175,7 @@ export class GroupMessaging {
 
       for (const [groupId, existingTopic] of this.groupTopics.entries()) {
         if (expectedByGroup.has(groupId)) continue;
-        if (this.deps.node.services.pubsub.getTopics().includes(existingTopic)) {
-          this.deps.node.services.pubsub.unsubscribe(existingTopic);
-        }
+        this.unsubscribeTopic(existingTopic, `reconcile-remove-group:${groupId}`);
         this.clearGraceContextsForGroup(groupId);
         this.groupTopics.delete(groupId);
       }
@@ -350,16 +344,13 @@ export class GroupMessaging {
       const oldCtx = this.resolveStoredGroupContextByTopic(ctx.groupId, existingTopic);
       if (oldCtx) {
         this.addGraceContext(oldCtx);
-      } else if (this.deps.node.services.pubsub.getTopics().includes(existingTopic)) {
+      } else {
         // If we can't resolve old context metadata, avoid holding a stale subscription forever.
-        this.deps.node.services.pubsub.unsubscribe(existingTopic);
+        this.unsubscribeTopic(existingTopic, `topic-switch-no-old-context group=${ctx.groupId}`);
       }
     }
 
-    if (!this.deps.node.services.pubsub.getTopics().includes(ctx.topic)) {
-      this.deps.node.services.pubsub.subscribe(ctx.topic);
-      console.log(`[GROUP-MSG] Subscribed to topic group=${ctx.groupId} topic=${ctx.topic.slice(0, 16)}...`);
-    }
+    this.subscribeTopic(ctx.topic, `ensure group=${ctx.groupId} keyVersion=${ctx.keyVersion}`, true);
 
     this.groupTopics.set(ctx.groupId, ctx.topic);
   }
@@ -430,9 +421,55 @@ export class GroupMessaging {
       .some((entries) => entries.some((entry) => entry.topic === topic && entry.expiresAt > Date.now()));
     if (inGrace) return;
 
-    if (this.deps.node.services.pubsub.getTopics().includes(topic)) {
+    this.unsubscribeTopic(topic, 'unused-topic-expired');
+  }
+
+  private subscribeTopic(topic: string, reason: string, throwOnError = false): void {
+    const shortTopic = `${topic.slice(0, 16)}...`;
+    const currentlySubscribed = this.deps.node.services.pubsub.getTopics().includes(topic);
+    if (currentlySubscribed) {
+      console.log(`[GROUP-TOPIC][SUBSCRIBE][SKIP_ALREADY] reason=${reason} topic=${shortTopic}`);
+      return;
+    }
+
+    console.log(`[GROUP-TOPIC][SUBSCRIBE][ATTEMPT] reason=${reason} topic=${shortTopic}`);
+    try {
+      this.deps.node.services.pubsub.subscribe(topic);
+      const isNowSubscribed = this.deps.node.services.pubsub.getTopics().includes(topic);
+      if (isNowSubscribed) {
+        console.log(`[GROUP-TOPIC][SUBSCRIBE][SUCCESS] reason=${reason} topic=${shortTopic}`);
+      } else {
+        console.warn(`[GROUP-TOPIC][SUBSCRIBE][UNKNOWN] reason=${reason} topic=${shortTopic} state=not_listed_after_subscribe`);
+      }
+    } catch (error: unknown) {
+      const reasonText = error instanceof Error ? error.message : String(error);
+      console.error(`[GROUP-TOPIC][SUBSCRIBE][FAIL] reason=${reason} topic=${shortTopic} error=${reasonText}`);
+      if (throwOnError) {
+        throw error;
+      }
+    }
+  }
+
+  private unsubscribeTopic(topic: string, reason: string): void {
+    const shortTopic = `${topic.slice(0, 16)}...`;
+    const currentlySubscribed = this.deps.node.services.pubsub.getTopics().includes(topic);
+    if (!currentlySubscribed) {
+      console.log(`[GROUP-TOPIC][UNSUBSCRIBE][SKIP_NOT_SUBSCRIBED] reason=${reason} topic=${shortTopic}`);
+      return;
+    }
+
+    console.log(`[GROUP-TOPIC][UNSUBSCRIBE][ATTEMPT] reason=${reason} topic=${shortTopic}`);
+    try {
       this.deps.node.services.pubsub.unsubscribe(topic);
-      console.log(`[GROUP-MSG] Unsubscribed expired topic ${topic.slice(0, 16)}...`);
+      const stillSubscribed = this.deps.node.services.pubsub.getTopics().includes(topic);
+      if (!stillSubscribed) {
+        console.log(`[GROUP-TOPIC][UNSUBSCRIBE][SUCCESS] reason=${reason} topic=${shortTopic}`);
+      } else {
+        console.warn(`[GROUP-TOPIC][UNSUBSCRIBE][UNKNOWN] reason=${reason} topic=${shortTopic} state=still_listed_after_unsubscribe`);
+      }
+    } catch (error: unknown) {
+      const reasonText = error instanceof Error ? error.message : String(error);
+      console.error(`[GROUP-TOPIC][UNSUBSCRIBE][FAIL] reason=${reason} topic=${shortTopic} error=${reasonText}`);
     }
   }
 

@@ -247,6 +247,7 @@ declare global {
             getGroupInvites: () => Promise<{ success: boolean; invites: Array<{ groupId: string; groupName: string; inviterPeerId: string; inviterUsername: string; inviteId: string; expiresAt: number }>; error: string | null }>;
             respondToGroupInvite: (groupId: string, accept: boolean) => Promise<{ success: boolean; error: string | null }>;
             leaveGroup: (chatId: number) => Promise<{ success: boolean; error: string | null }>;
+            getSubscribedTopics: () => Promise<{ success: boolean; topics: string[]; error: string | null }>;
 
             // File transfer events
             onFileTransferProgress: (callback: (data: {

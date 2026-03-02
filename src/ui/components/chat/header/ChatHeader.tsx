@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useSelector, useDispatch } from "react-redux";
 import type { RootState } from "../../../state/store";
 import { Button } from "../../ui/Button";
-import { Bell, BellOff, MoreVertical, Shield, UserPlus, Ban, UserCheck, Info, Trash2, AlertCircle, Users, Clock, RefreshCw, LogOut } from "lucide-react";
+import { Bell, BellOff, MoreVertical, Shield, UserPlus, Ban, UserCheck, Info, Trash2, AlertCircle, Users, Clock, RefreshCw, LogOut, Bug } from "lucide-react";
 import { DropdownMenu, DropdownMenuItem } from "../../ui/DropdownMenu";
 import { updateChat, clearMessages, removeChat } from "../../../state/slices/chatSlice";
 import { AboutUserModal } from "./AboutUserModal";
@@ -307,6 +307,24 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
     }
   };
 
+  const handleDebugTopics = async () => {
+    try {
+      const result = await window.kiyeovoAPI.getSubscribedTopics();
+      if (!result.success) {
+        toast.error(result.error || 'Failed to fetch subscribed topics');
+        return;
+      }
+      console.log(`[GROUP-TOPIC][DEBUG][UI] SUBSCRIBED_TOPICS count=${result.topics.length}`);
+      result.topics.forEach((topic, index) => {
+        console.log(`[GROUP-TOPIC][DEBUG][UI] TOPIC[${index}] ${topic}`);
+      });
+      toast.info(`Logged ${result.topics.length} subscribed topic(s) to console`);
+    } catch (error) {
+      console.error('[GROUP-TOPIC][DEBUG][UI] Failed to fetch subscribed topics:', error);
+      toast.error('Failed to fetch subscribed topics');
+    }
+  };
+
   const confirmDeleteAllMessages = async () => {
     if (!activeChat) return;
 
@@ -463,6 +481,17 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
     </div>
 
     <div className="flex items-center gap-1">
+      {isGroup && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="text-muted-foreground hover:text-foreground"
+          onClick={handleDebugTopics}
+          title="Debug: log subscribed topics"
+        >
+          <Bug className="w-4 h-4" />
+        </Button>
+      )}
       <DropdownMenu
         open={dropdownOpen}
         onOpenChange={setDropdownOpen}
