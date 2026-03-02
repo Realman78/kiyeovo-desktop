@@ -29,8 +29,16 @@ export const ChatInput: FC = () => {
     const myPeerId = useSelector((state: RootState) => state.user.peerId);
     const myUsername = useSelector((state: RootState) => state.user.username);
     const isBlocked = activeChat?.blocked || false;
-    const isGroupPending = activeChat?.type === 'group' && activeChat?.groupStatus !== 'active';
-    const isDisabled = isBlocked || isGroupPending;
+    const groupBlockedReason = activeChat?.type === 'group' && activeChat?.groupStatus !== 'active'
+        ? activeChat?.groupStatus === 'left'
+            ? 'You left this group'
+            : activeChat?.groupStatus === 'removed'
+                ? 'You were removed from this group'
+                : activeChat?.groupStatus === 'rekeying'
+                    ? 'Group membership is updating...'
+                    : 'Waiting for members to join...'
+        : null;
+    const isDisabled = isBlocked || !!groupBlockedReason;
     const sendQueueRef = useRef<Record<number, PendingSendJob[]>>({});
     const processingQueueRef = useRef<Record<number, boolean>>({});
     const inputRef = useRef<HTMLInputElement>(null);
@@ -315,7 +323,7 @@ export const ChatInput: FC = () => {
             </Button>
             <Input
                 ref={inputRef}
-                placeholder={isBlocked ? "Cannot send messages to blocked users" : isGroupPending ? "Waiting for members to join..." : "Type a message..."}
+                placeholder={isBlocked ? "Cannot send messages to blocked users" : groupBlockedReason ?? "Type a message..."}
                 parentClassName="flex flex-1 w-full"
                 value={inputQuery}
                 disabled={isDisabled}

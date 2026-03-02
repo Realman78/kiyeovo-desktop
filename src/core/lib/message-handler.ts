@@ -668,6 +668,40 @@ export class MessageHandler {
     }
   }
 
+  async leaveGroup(chatId: number): Promise<void> {
+    const chat = this.database.getChatByIdWithUsernameAndLastMsg(chatId, this.node.peerId.toString());
+    if (!chat) {
+      throw new Error('Group chat not found');
+    }
+    if (chat.type !== 'group' || !chat.group_id) {
+      throw new Error('Chat is not a group chat');
+    }
+
+    const userIdentity = this.usernameRegistry.getUserIdentity();
+    if (!userIdentity) {
+      throw new Error('User identity not available');
+    }
+
+    const myPeerId = this.node.peerId.toString();
+    const myUser = this.database.getUserByPeerId(myPeerId);
+    const myUsername = myUser?.username || `user_${myPeerId.slice(-8)}`;
+
+    const responder = new GroupResponder({
+      node: this.node,
+      database: this.database,
+      userIdentity,
+      myPeerId,
+      myUsername,
+      onGroupChatActivated: this.onGroupChatActivated,
+      onGroupMembersUpdated: this.onGroupMembersUpdated,
+      onMessageReceived: this.onMessageReceived,
+      nudgePeer: this.nudgePeer.bind(this),
+    });
+
+    await responder.leaveGroup(chat.group_id);
+    this.groupMessaging.deactivateGroup(chat.group_id);
+  }
+
   async retryGroupOfflineBackup(chatId: number, messageId: string): Promise<{ success: boolean; error: string | null }> {
     try {
       await this.groupMessaging.retryOfflineBackup(chatId, messageId);
@@ -1295,6 +1329,23 @@ export class MessageHandler {
           console.log(`[GROUP] Processed GROUP_INVITE_RESPONSE from ${senderInfo.username}`);
           break;
         }
+        case GroupMessageType.GROUP_LEAVE_REQUEST: {
+          const creator = new GroupCreator(deps);
+          await creator.processLeaveRequest(parsed as any, senderInfo.peer_id);
+          const groupId = (parsed as { groupId: string }).groupId;
+          const chat = this.database.getChatByGroupId(groupId);
+          if (chat?.group_status === 'active' && (chat.key_version ?? 0) > 0) {
+            await this.groupMessaging.subscribeToGroupTopic(groupId).catch((error: unknown) => {
+              console.warn(
+                `[GROUP-MSG] Failed to subscribe after leave processing for ${groupId}: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+              );
+            });
+          }
+          console.log(`[GROUP] Processed GROUP_LEAVE_REQUEST from ${senderInfo.username}`);
+          break;
+        }
         case GroupMessageType.GROUP_INVITE_DELIVERED_ACK: {
           const creator = new GroupCreator(deps);
           await creator.handleInviteDeliveredAck(parsed as any, senderInfo.peer_id);
@@ -1309,7 +1360,6 @@ export class MessageHandler {
         }
 
         // --- Messages not yet implemented — consume without saving as text ---
-        case GroupMessageType.GROUP_LEAVE_REQUEST:
         case GroupMessageType.GROUP_KICK:
         case GroupMessageType.GROUP_MESSAGE:
           console.log(`[GROUP] Received ${type} from ${senderInfo.username} — handler not yet implemented, consuming`);

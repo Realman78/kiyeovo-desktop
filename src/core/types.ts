@@ -588,6 +588,7 @@ export const IPC_CHANNELS = {
   GET_GROUP_MEMBERS: 'group:getMembers',
   GET_GROUP_INVITES: 'group:getInvites',
   RESPOND_TO_GROUP_INVITE: 'group:respondToInvite',
+  LEAVE_GROUP: 'group:leave',
   GROUP_CHAT_ACTIVATED: 'group:chatActivated',
   GROUP_MEMBERS_UPDATED: 'group:membersUpdated',
 } as const;

@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useSelector, useDispatch } from "react-redux";
 import type { RootState } from "../../../state/store";
 import { Button } from "../../ui/Button";
-import { Bell, BellOff, MoreVertical, Shield, UserPlus, Ban, UserCheck, Info, Trash2, AlertCircle, Users, Clock, RefreshCw } from "lucide-react";
+import { Bell, BellOff, MoreVertical, Shield, UserPlus, Ban, UserCheck, Info, Trash2, AlertCircle, Users, Clock, RefreshCw, LogOut } from "lucide-react";
 import { DropdownMenu, DropdownMenuItem } from "../../ui/DropdownMenu";
 import { updateChat, clearMessages, removeChat } from "../../../state/slices/chatSlice";
 import { AboutUserModal } from "./AboutUserModal";
@@ -37,6 +37,8 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteChatAndUserConfirmOpen, setDeleteChatAndUserConfirmOpen] = useState(false);
+  const [leaveGroupConfirmOpen, setLeaveGroupConfirmOpen] = useState(false);
+  const [isLeavingGroup, setIsLeavingGroup] = useState(false);
   const [editUsernameModalOpen, setEditUsernameModalOpen] = useState(false);
   const [newUsername, setNewUsername] = useState(username);
   const [validationError, setValidationError] = useState("");
@@ -180,6 +182,11 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
     setDropdownOpen(false);
   };
 
+  const handleLeaveGroup = () => {
+    setLeaveGroupConfirmOpen(true);
+    setDropdownOpen(false);
+  };
+
   const handleCheckMissedGroupMessages = async () => {
     if (!chatId) return;
     setDropdownOpen(false);
@@ -285,14 +292,46 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
     }
   };
 
+  const confirmLeaveGroup = async () => {
+    if (!activeChat || activeChat.type !== 'group') return;
+
+    setIsLeavingGroup(true);
+    try {
+      const result = await window.kiyeovoAPI.leaveGroup(activeChat.id);
+      if (!result.success) {
+        toast.error(result.error || 'Failed to leave group');
+        return;
+      }
+
+      dispatch(removeChat(activeChat.id));
+      toast.info('You left the group');
+      setLeaveGroupConfirmOpen(false);
+    } catch (error) {
+      console.error('Failed to leave group:', error);
+      toast.error('Failed to leave group');
+    } finally {
+      setIsLeavingGroup(false);
+    }
+  };
+
   const isGroup = chatType === 'group';
-  const isGroupPending = isGroup && groupStatus !== 'active';
+  const groupStatusMessage = !isGroup ? null
+    : groupStatus === 'awaiting_activation'
+      ? 'Waiting for members to accept invites...'
+      : groupStatus === 'rekeying'
+        ? 'Group membership is updating...'
+        : groupStatus === 'left'
+          ? 'You left this group.'
+          : groupStatus === 'removed'
+            ? 'You were removed from this group.'
+            : null;
+  const showGroupStateMessage = Boolean(groupStatusMessage);
 
   const memberSummary = groupMembers.length > 0
     ? groupMembers.map(m => m.status === 'pending' ? `${m.username} (invited)` : m.username).join(', ')
     : 'No members yet';
 
-  return <div className={`${isGroupPending ? 'h-20' : 'h-16'} px-6 flex items-center justify-between border-b border-border ${activeChat?.status === 'pending' ? "" : "bg-card/50"}`}>
+  return <div className={`${showGroupStateMessage ? 'h-20' : 'h-16'} px-6 flex items-center justify-between border-b border-border ${activeChat?.status === 'pending' ? "" : "bg-card/50"}`}>
     <div className="flex items-center gap-3">
       {isGroup ? (
         <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center">
@@ -310,10 +349,14 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
             <span className="text-xs text-muted-foreground truncate max-w-xs text-left" title={memberSummary}>
               {memberSummary}
             </span>
-            {isGroupPending && (
+            {showGroupStateMessage && (
               <div className="flex items-center gap-1">
-                <Clock className="w-3 h-3 text-warning" />
-                <span className="text-xs text-warning">Waiting for members to accept invites...</span>
+                {groupStatus === 'awaiting_activation' || groupStatus === 'rekeying' ? (
+                  <Clock className="w-3 h-3 text-warning" />
+                ) : (
+                  <AlertCircle className="w-3 h-3 text-warning" />
+                )}
+                <span className="text-xs text-warning">{groupStatusMessage}</span>
               </div>
             )}
           </div>
@@ -358,6 +401,14 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
             >
               Check missed messages
             </DropdownMenuItem>
+            {groupStatus === 'active' && (
+              <DropdownMenuItem
+                icon={<LogOut className="w-4 h-4" />}
+                onClick={handleLeaveGroup}
+              >
+                Leave group
+              </DropdownMenuItem>
+            )}
           </>
         ) : (
           <>
@@ -469,6 +520,43 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
                 disabled={isDeleting}
               >
                 {isDeleting ? 'Deleting...' : 'Delete Chat & User'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <Dialog open={leaveGroupConfirmOpen} onOpenChange={setLeaveGroupConfirmOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Leave Group</DialogTitle>
+              <DialogDescription>
+                Are you sure you want to leave this group?
+              </DialogDescription>
+            </DialogHeader>
+            <DialogBody>
+              <div className="flex items-start gap-2 p-3 bg-warning/10 border border-warning/30 rounded">
+                <AlertCircle className="w-5 h-5 text-warning mt-0.5 shrink-0" />
+                <div className="text-sm text-warning">
+                  <p className="font-semibold mb-1">Consequences</p>
+                  <p className="text-xs">
+                    You will stop receiving new group messages and cannot send to this group. Rejoining requires a new invite from the group creator.
+                  </p>
+                </div>
+              </div>
+            </DialogBody>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setLeaveGroupConfirmOpen(false)}
+                disabled={isLeavingGroup}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={confirmLeaveGroup}
+                disabled={isLeavingGroup}
+              >
+                {isLeavingGroup ? 'Leaving...' : 'Leave Group'}
               </Button>
             </DialogFooter>
           </DialogContent>

@@ -2187,6 +2187,18 @@ export class ChatDatabase {
             .run(dhtKey, chatId);
     }
 
+    clearGroupChatRuntimeState(chatId: number): void {
+        this.db.prepare(`
+            UPDATE chats
+            SET permanent_key = NULL,
+                group_key = NULL,
+                group_info_dht_key = NULL,
+                key_version = 0,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+            WHERE id = ?
+        `).run(chatId);
+    }
+
     updateGroupParticipants(chatId: number, peerIds: string[]): void {
         this.db.prepare('DELETE FROM chat_participants WHERE chat_id = ?').run(chatId);
         const insert = this.db.prepare(

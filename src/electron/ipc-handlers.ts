@@ -1621,6 +1621,21 @@ function setupGroupHandlers(
       return { success: false, error: error instanceof Error ? error.message : 'Failed to respond to group invite' };
     }
   });
+
+  ipcMain.handle(IPC_CHANNELS.LEAVE_GROUP, async (_event, chatId: number) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+      await p2pCore.messageHandler.leaveGroup(chatId);
+      console.log(`[IPC] Left group chat: ${chatId}`);
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to leave group:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to leave group' };
+    }
+  });
 }
 
 function setupAppHandlers(ipcMain: IpcMain, getP2PCore: () => P2PCore | null): void {

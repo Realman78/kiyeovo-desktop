@@ -5,6 +5,7 @@ import type { ChatDatabase } from '../db/database.js';
 import type { EncryptedUserIdentity } from '../encrypted-user-identity.js';
 import { OfflineMessageManager } from '../offline-message-manager.js';
 import { toBase64Url } from '../base64url.js';
+import { GROUP_OFFLINE_BUCKET_PREFIX } from '../../constants.js';
 import {
   GroupMessageType,
   type GroupInvite,
@@ -13,6 +14,7 @@ import {
   type GroupInviteResponseAck,
   type GroupWelcome,
   type GroupStateUpdate,
+  type GroupLeaveRequest,
   type GroupControlAck,
   type GroupStatus,
 } from './types.js';
@@ -223,6 +225,48 @@ export class GroupResponder {
     );
   }
 
+  async leaveGroup(groupId: string): Promise<void> {
+    const { database, myPeerId } = this.deps;
+    const chat = database.getChatByGroupId(groupId);
+    if (!chat) throw new Error(`Group ${groupId} not found`);
+    if (chat.type !== 'group') throw new Error(`Chat ${groupId} is not a group`);
+
+    if (chat.group_status === 'left' || chat.group_status === 'removed') {
+      this.applyLocalGroupLeaveState(chat.id, groupId);
+      return;
+    }
+
+    const creatorPeerId = chat.group_creator_peer_id;
+    if (!creatorPeerId) throw new Error(`Group ${groupId} has no creator`);
+    if (creatorPeerId === myPeerId) {
+      throw new Error('Creator leave flow is not supported yet');
+    }
+
+    const isParticipant = database.getChatParticipants(chat.id).some((p) => p.peer_id === myPeerId);
+    if (!isParticipant) {
+      this.applyLocalGroupLeaveState(chat.id, groupId);
+      return;
+    }
+
+    const leaveRequest: Omit<GroupLeaveRequest, 'signature'> = {
+      type: GroupMessageType.GROUP_LEAVE_REQUEST,
+      groupId,
+      peerId: myPeerId,
+      messageId: randomUUID(),
+      timestamp: Date.now(),
+    };
+    const signedLeaveRequest: GroupLeaveRequest = {
+      ...leaveRequest,
+      signature: this.sign(leaveRequest),
+    };
+
+    await this.sendControlMessageToPeer(creatorPeerId, signedLeaveRequest);
+    this.applyLocalGroupLeaveState(chat.id, groupId);
+    console.log(
+      `[GROUP][TRACE][LEAVE][DONE] group=${groupId} creator=${creatorPeerId.slice(-8)} msgId=${signedLeaveRequest.messageId}`,
+    );
+  }
+
   async handleInviteResponseAck(ack: GroupInviteResponseAck): Promise<void> {
     const { database } = this.deps;
     console.log(
@@ -400,6 +444,19 @@ export class GroupResponder {
       return;
     }
     this.verifySignature(update, creator.signing_public_key);
+
+    if (chat.group_status === 'left' || chat.group_status === 'removed') {
+      await this.sendControlAck(
+        creatorPeerId,
+        update.groupId,
+        GroupMessageType.GROUP_STATE_UPDATE,
+        update.messageId,
+      );
+      console.log(
+        `[GROUP][TRACE][STATE_UPDATE][DROP] group=${update.groupId} msgId=${update.messageId} reason=local_terminal_status status=${chat.group_status}`,
+      );
+      return;
+    }
 
     const currentKeyVersion = chat.key_version ?? 0;
     if (currentKeyVersion >= update.keyVersion) {
@@ -615,6 +672,19 @@ export class GroupResponder {
     const ackedMessageId = typeof m.ackedMessageId === 'string' ? m.ackedMessageId : 'n/a';
     const ackId = typeof m.ackId === 'string' ? m.ackId : 'n/a';
     return `type=${type} group=${groupId} inviteId=${inviteId} msgId=${messageId} ackedMsgId=${ackedMessageId} ackId=${ackId}`;
+  }
+
+  private applyLocalGroupLeaveState(chatId: number, groupId: string): void {
+    const { database, myPeerId } = this.deps;
+    database.updateChatGroupStatus(chatId, 'left' satisfies GroupStatus);
+    database.removePendingAcksForGroup(groupId);
+    database.removeInviteDeliveryAcksForMember(groupId, myPeerId);
+    database.deleteGroupOfflineCursors(groupId);
+    database.deleteGroupSenderSeqs(groupId);
+    database.deleteGroupMemberSeqs(groupId);
+    database.deleteGroupKeyHistory(groupId);
+    database.deleteGroupOfflineSentMessagesByPrefix(`${GROUP_OFFLINE_BUCKET_PREFIX}/${groupId}/`);
+    database.deleteChatById(chatId);
   }
 
   private async appendMembershipSystemMessage(

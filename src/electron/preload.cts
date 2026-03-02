@@ -437,6 +437,9 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     respondToGroupInvite: async (groupId: string, accept: boolean): Promise<{ success: boolean; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.RESPOND_TO_GROUP_INVITE, groupId, accept);
     },
+    leaveGroup: async (chatId: number): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.LEAVE_GROUP, chatId);
+    },
 
     // File transfer events
     onFileTransferProgress: (callback: (data: any) => void) => {

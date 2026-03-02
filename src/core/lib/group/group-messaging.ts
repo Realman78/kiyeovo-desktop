@@ -136,6 +136,14 @@ export class GroupMessaging {
     this.ensureTopicSubscription(ctx);
   }
 
+  deactivateGroup(groupId: string): void {
+    this.clearGraceContextsForGroup(groupId);
+    const currentTopic = this.groupTopics.get(groupId);
+    if (!currentTopic) return;
+    this.groupTopics.delete(groupId);
+    this.unsubscribeTopicIfUnused(currentTopic);
+  }
+
   async reconcileSubscriptions(): Promise<void> {
     if (this.reconcileInFlight) return;
     this.reconcileInFlight = true;

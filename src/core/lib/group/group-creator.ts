@@ -22,6 +22,7 @@ import {
   type GroupInviteDeliveredAck,
   type GroupInviteResponse,
   type GroupInviteResponseAck,
+  type GroupLeaveRequest,
   type GroupWelcome,
   type GroupStateUpdate,
   type GroupControlAck,
@@ -300,6 +301,124 @@ export class GroupCreator {
     console.log(
       `[GROUP][TRACE][RESP][DONE] group=${response.groupId} from=${response.responderPeerId.slice(-8)} result=accepted_pending_removed`,
     );
+  }
+
+  async processLeaveRequest(request: GroupLeaveRequest, senderPeerId: string): Promise<void> {
+    const { database, myPeerId } = this.deps;
+    console.log(
+      `[GROUP][TRACE][LEAVE][IN] group=${request.groupId} from=${senderPeerId.slice(-8)} peerId=${request.peerId.slice(-8)} msgId=${request.messageId}`,
+    );
+
+    const chat = database.getChatByGroupId(request.groupId);
+    if (!chat || chat.created_by !== myPeerId) {
+      console.log(
+        `[GROUP][TRACE][LEAVE][DROP] group=${request.groupId} reason=not_creator chatExists=${!!chat}`,
+      );
+      return;
+    }
+    if (request.peerId !== senderPeerId) {
+      console.log(
+        `[GROUP][TRACE][LEAVE][DROP] group=${request.groupId} reason=peer_mismatch payloadPeer=${request.peerId.slice(-8)} sender=${senderPeerId.slice(-8)}`,
+      );
+      return;
+    }
+
+    const leavingUser = database.getUserByPeerId(request.peerId);
+    if (!leavingUser) {
+      console.log(
+        `[GROUP][TRACE][LEAVE][DROP] group=${request.groupId} reason=unknown_sender sender=${senderPeerId.slice(-8)}`,
+      );
+      return;
+    }
+    this.verifySignature(request, leavingUser.signing_public_key);
+
+    if (request.peerId === myPeerId) {
+      console.log(`[GROUP][TRACE][LEAVE][DROP] group=${request.groupId} reason=creator_leave_not_supported`);
+      return;
+    }
+
+    const isParticipant = database.getChatParticipants(chat.id).some((p) => p.peer_id === request.peerId);
+    if (!isParticipant) {
+      console.log(
+        `[GROUP][TRACE][LEAVE][DUPLICATE] group=${request.groupId} peer=${request.peerId.slice(-8)} reason=already_removed`,
+      );
+      return;
+    }
+
+    // Avoid concurrent rotations (e.g. join and leave in flight at the same time).
+    // Throwing here causes offline handler to keep the message for retry later.
+    if (chat.group_status === 'rekeying') {
+      throw new Error(`Group ${request.groupId} is already rekeying`);
+    }
+
+    const previousGroupStatus = (chat.group_status ?? 'active') as GroupStatus;
+    let rotationCommitted = false;
+    database.updateChatGroupStatus(chat.id, 'rekeying');
+
+    try {
+      const preRotationParticipants = database.getChatParticipants(chat.id).map((p) => p.peer_id);
+      const prevVersion = chat.key_version ?? 0;
+      const prevEpochBoundaries = prevVersion > 0
+        ? await this.snapshotPrevEpochBoundaries(request.groupId, prevVersion, preRotationParticipants)
+        : {};
+
+      const { groupKey, keyVersion } = await this.rotateGroupKey(request.groupId, request.peerId, 'leave');
+      rotationCommitted = true;
+
+      const participants = database.getChatParticipants(chat.id);
+      const roster = this.buildRoster(participants.map((p) => p.peer_id));
+
+      await this.sendGroupStateUpdate(
+        request.groupId,
+        keyVersion,
+        groupKey,
+        roster,
+        'leave',
+        request.peerId,
+      );
+
+      try {
+        await this.publishGroupInfoRecords(request.groupId, keyVersion, roster, prevEpochBoundaries);
+      } catch (error: unknown) {
+        const reason = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[GROUP][TRACE][LEAVE][GROUP_INFO_RETRY_NEEDED] group=${request.groupId} keyVersion=${keyVersion} reason=${reason}`,
+        );
+      }
+
+      database.removePendingAcksForMember(request.groupId, request.peerId);
+      database.removeInviteDeliveryAcksForMember(request.groupId, request.peerId);
+      database.updateChatGroupStatus(chat.id, 'active');
+
+      await this.appendMembershipSystemMessage(
+        chat.id,
+        request.groupId,
+        keyVersion,
+        'leave',
+        request.peerId,
+        leavingUser.username,
+      );
+
+      this.deps.onGroupMembersUpdated?.({
+        chatId: chat.id,
+        groupId: request.groupId,
+        memberPeerId: request.peerId,
+      });
+      console.log(
+        `[GROUP][TRACE][LEAVE][DONE] group=${request.groupId} peer=${request.peerId.slice(-8)} keyVersion=${keyVersion}`,
+      );
+    } catch (error: unknown) {
+      if (rotationCommitted) {
+        database.updateChatGroupStatus(chat.id, 'active');
+        const reason = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[GROUP][TRACE][LEAVE][PARTIAL_FAILURE] group=${request.groupId} peer=${request.peerId.slice(-8)} status=active reason=${reason}`,
+        );
+        return;
+      }
+      database.updateChatGroupStatus(chat.id, previousGroupStatus);
+      throw error;
+    }
   }
 
   async handleInviteDeliveredAck(ack: GroupInviteDeliveredAck, senderPeerId: string): Promise<void> {
