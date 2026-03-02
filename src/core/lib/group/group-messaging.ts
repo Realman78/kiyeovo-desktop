@@ -194,7 +194,14 @@ export class GroupMessaging {
   async sendGroupMessage(groupId: string, content: string): Promise<SendMessageResponse> {
     const sendStartedAt = Date.now();
     const ctx = this.resolveActiveGroupContext(groupId);
+    console.log("sending group message to group", ctx);
+    const participants = this.deps.database.getChatParticipants(ctx.chatId);
+    const hasRecipient = participants.some((participant) => participant.peer_id !== this.deps.myPeerId);
+    if (!hasRecipient) {
+      throw new Error('Cannot send message: group has no other members');
+    }
     this.ensureTopicSubscription(ctx);
+    console.log("topic subscription ensured", ctx);
 
     const seq = this.deps.database.getNextSeqAndIncrement(groupId, ctx.keyVersion);
     const nonce = randomBytes(24);

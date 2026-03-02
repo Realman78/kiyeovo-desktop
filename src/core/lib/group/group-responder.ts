@@ -443,6 +443,12 @@ export class GroupResponder {
       console.log(`[GROUP][TRACE][STATE_UPDATE][DROP] group=${update.groupId} reason=unknown_creator creator=${creatorPeerId.slice(-8)}`);
       return;
     }
+    if (!Number.isFinite(update.timestamp) || update.timestamp <= 0) {
+      console.log(
+        `[GROUP][TRACE][STATE_UPDATE][DROP] group=${update.groupId} msgId=${update.messageId} reason=missing_or_invalid_timestamp`,
+      );
+      return;
+    }
     this.verifySignature(update, creator.signing_public_key);
 
     if (chat.group_status === 'left' || chat.group_status === 'removed') {
@@ -697,7 +703,7 @@ export class GroupResponder {
     targetUsername: string | undefined,
     senderPeerId: string,
     senderUsername: string,
-    eventTimestamp?: number,
+    eventTimestamp: number,
   ): Promise<void> {
     const messageId = `group-system-${event}-${groupId}-${keyVersion}-${targetPeerId}`;
     if (this.deps.database.messageExists(messageId)) return;
@@ -710,7 +716,7 @@ export class GroupResponder {
       : event === 'leave'
         ? `${resolvedUsername} left the group`
         : `${resolvedUsername} was removed from the group`;
-    const timestamp = eventTimestamp ?? Date.now();
+    const timestamp = eventTimestamp;
 
     await this.deps.database.createMessage({
       id: messageId,

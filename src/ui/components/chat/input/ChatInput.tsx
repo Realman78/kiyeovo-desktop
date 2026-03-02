@@ -29,6 +29,43 @@ export const ChatInput: FC = () => {
     const myPeerId = useSelector((state: RootState) => state.user.peerId);
     const myUsername = useSelector((state: RootState) => state.user.username);
     const isBlocked = activeChat?.blocked || false;
+    const [groupHasOtherMembers, setGroupHasOtherMembers] = useState(true);
+
+    useEffect(() => {
+        let isMounted = true;
+        let unsubscribe: (() => void) | undefined;
+
+        const refreshGroupMemberState = async () => {
+            if (!activeChat || activeChat.type !== 'group') {
+                if (isMounted) setGroupHasOtherMembers(true);
+                return;
+            }
+            try {
+                const result = await window.kiyeovoAPI.getGroupMembers(activeChat.id);
+                if (!isMounted || !result.success) return;
+                const hasOtherMembers = result.members.some((member) => member.peerId !== myPeerId);
+                setGroupHasOtherMembers(hasOtherMembers);
+            } catch {
+                // Keep previous value on transient errors.
+            }
+        };
+
+        void refreshGroupMemberState();
+
+        if (activeChat?.type === 'group') {
+            unsubscribe = window.kiyeovoAPI.onGroupMembersUpdated((event) => {
+                if (event.chatId === activeChat.id) {
+                    void refreshGroupMemberState();
+                }
+            });
+        }
+
+        return () => {
+            isMounted = false;
+            unsubscribe?.();
+        };
+    }, [activeChat?.id, activeChat?.type, myPeerId]);
+
     const groupBlockedReason = activeChat?.type === 'group' && activeChat?.groupStatus !== 'active'
         ? activeChat?.groupStatus === 'left'
             ? 'You left this group'
@@ -37,6 +74,8 @@ export const ChatInput: FC = () => {
                 : activeChat?.groupStatus === 'rekeying'
                     ? 'Group membership is updating...'
                     : 'Waiting for members to join...'
+        : activeChat?.type === 'group' && !groupHasOtherMembers
+            ? 'Cannot send messages to an empty group'
         : null;
     const isDisabled = isBlocked || !!groupBlockedReason;
     const sendQueueRef = useRef<Record<number, PendingSendJob[]>>({});

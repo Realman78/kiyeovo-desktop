@@ -1117,8 +1117,8 @@ export class GroupCreator {
     keyVersion: number,
     event: 'join' | 'leave' | 'kick',
     targetPeerId: string,
-    targetUsername?: string,
-    eventTimestamp?: number,
+    targetUsername: string | undefined,
+    eventTimestamp: number,
   ): Promise<void> {
     const messageId = `group-system-${event}-${groupId}-${keyVersion}-${targetPeerId}`;
     if (this.deps.database.messageExists(messageId)) return;
@@ -1131,7 +1131,7 @@ export class GroupCreator {
       : event === 'leave'
         ? `${resolvedUsername} left the group`
         : `${resolvedUsername} was removed from the group`;
-    const timestamp = eventTimestamp ?? Date.now();
+    const timestamp = eventTimestamp;
 
     await this.deps.database.createMessage({
       id: messageId,

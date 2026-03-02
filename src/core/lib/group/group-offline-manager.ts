@@ -82,9 +82,11 @@ export class GroupOfflineManager {
   }
 
   async storeGroupMessage(message: GroupContentMessage): Promise<void> {
+    console.log("storing group message", message);
     this.pruneLocalCaches();
     const ownPubKeyBase64url = toBase64Url(this.deps.userIdentity.signingPublicKey);
     const bucketKey = `${GROUP_OFFLINE_BUCKET_PREFIX}/${message.groupId}/${message.keyVersion}/${ownPubKeyBase64url}`;
+    console.log("to bucket", bucketKey);
     const offlineMessage: GroupOfflineMessage = {
       id: message.messageId,
       messageId: message.messageId,
@@ -598,6 +600,8 @@ export class GroupOfflineManager {
     let best: GroupOfflineStore | null = null;
     let valueEvents = 0;
 
+    console.log("fetching store from dht", bucketKey);
+
     try {
       for await (const event of this.deps.node.services.dht.get(key) as AsyncIterable<QueryEvent>) {
         if (event.name !== 'VALUE' || event.value.length === 0) continue;
@@ -611,6 +615,7 @@ export class GroupOfflineManager {
             || (store.version === best.version && store.lastUpdated > best.lastUpdated)
           ) {
             best = store;
+            console.log("best store for bucket", bucketKey, best);
           }
         } catch {
           continue;

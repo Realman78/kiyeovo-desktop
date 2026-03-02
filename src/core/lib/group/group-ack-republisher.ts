@@ -221,6 +221,12 @@ export class GroupAckRepublisher {
     if (!messageId) {
       return { action: 'remove', reason: 'invalid_payload' };
     }
+    if (pending.message_type === 'GROUP_STATE_UPDATE') {
+      const timestamp = typeof payload.timestamp === 'number' ? payload.timestamp : null;
+      if (timestamp === null || !Number.isFinite(timestamp) || timestamp <= 0) {
+        return { action: 'remove', reason: 'invalid_payload' };
+      }
+    }
 
     const chat = this.deps.database.getChatByGroupId(pending.group_id);
     const myPeerId = this.deps.node.peerId.toString();
