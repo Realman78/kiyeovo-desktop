@@ -83,6 +83,7 @@ export interface GroupStateUpdate {
   type: typeof GroupMessageType.GROUP_STATE_UPDATE;
   groupId: string;
   keyVersion: number;
+  timestamp: number;
   encryptedGroupKey: string; // RSA-encrypted per recipient
   roster: GroupRosterEntry[];
   event: GroupMembershipEvent;

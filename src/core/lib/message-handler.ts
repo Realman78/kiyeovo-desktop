@@ -124,6 +124,12 @@ export class MessageHandler {
       node: this.node,
       database: this.database,
     });
+    const recoveredRekeying = this.database.recoverRekeyingGroupsOnStartup();
+    if (recoveredRekeying > 0) {
+      console.warn(
+        `[GROUP] Recovered ${recoveredRekeying} group chat(s) stuck in rekeying state on startup`,
+      );
+    }
     this.setupProtocolHandler();
     this.groupMessaging.start();
     this.cleanupPeerEvents = PeerConnectionHandler.setupPeerEvents(node, this.sessionManager);

@@ -517,6 +517,7 @@ export class GroupResponder {
       update.roster.find((entry) => entry.peerId === update.targetPeerId)?.username,
       creatorPeerId,
       creator.username,
+      update.timestamp,
     );
 
     await this.sendControlAck(
@@ -696,6 +697,7 @@ export class GroupResponder {
     targetUsername: string | undefined,
     senderPeerId: string,
     senderUsername: string,
+    eventTimestamp?: number,
   ): Promise<void> {
     const messageId = `group-system-${event}-${groupId}-${keyVersion}-${targetPeerId}`;
     if (this.deps.database.messageExists(messageId)) return;
@@ -708,7 +710,7 @@ export class GroupResponder {
       : event === 'leave'
         ? `${resolvedUsername} left the group`
         : `${resolvedUsername} was removed from the group`;
-    const timestamp = Date.now();
+    const timestamp = eventTimestamp ?? Date.now();
 
     await this.deps.database.createMessage({
       id: messageId,

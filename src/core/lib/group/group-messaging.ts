@@ -154,7 +154,8 @@ export class GroupMessaging {
 
       for (const chat of chats) {
         if (!chat.group_id) continue;
-        if (chat.status !== 'active' || chat.group_status !== 'active') continue;
+        if (chat.status !== 'active') continue;
+        if (chat.group_status !== 'active' && chat.group_status !== 'rekeying') continue;
         if ((chat.key_version ?? 0) <= 0) continue;
 
         const keyBase64 = this.deps.database.getGroupKeyForEpoch(chat.group_id, chat.key_version);

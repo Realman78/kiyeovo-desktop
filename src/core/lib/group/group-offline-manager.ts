@@ -270,7 +270,7 @@ export class GroupOfflineManager {
       .filter(c =>
         c.type === 'group'
         && !!c.group_id
-        && c.group_status === 'active'
+        && (c.group_status === 'active' || c.group_status === 'rekeying')
         && (c.key_version ?? 0) > 0,
       );
 

@@ -293,7 +293,7 @@ export class GroupCreator {
     console.log(
       `[GROUP][TRACE][RESP][WELCOME] group=${response.groupId} to=${response.responderPeerId.slice(-8)} action=send_group_welcome`,
     );
-    await this.sendGroupWelcome(response.groupId, response.responderPeerId);
+    await this.sendGroupWelcome(response.groupId, response.responderPeerId, response.timestamp);
 
     // Remove invite only after welcome path succeeds.
     database.removePendingAck(response.groupId, response.responderPeerId, 'GROUP_INVITE');
@@ -375,16 +375,8 @@ export class GroupCreator {
         roster,
         'leave',
         request.peerId,
+        request.timestamp,
       );
-
-      try {
-        await this.publishGroupInfoRecords(request.groupId, keyVersion, roster, prevEpochBoundaries);
-      } catch (error: unknown) {
-        const reason = error instanceof Error ? error.message : String(error);
-        console.warn(
-          `[GROUP][TRACE][LEAVE][GROUP_INFO_RETRY_NEEDED] group=${request.groupId} keyVersion=${keyVersion} reason=${reason}`,
-        );
-      }
 
       database.removePendingAcksForMember(request.groupId, request.peerId);
       database.removeInviteDeliveryAcksForMember(request.groupId, request.peerId);
@@ -397,6 +389,7 @@ export class GroupCreator {
         'leave',
         request.peerId,
         leavingUser.username,
+        request.timestamp,
       );
 
       this.deps.onGroupMembersUpdated?.({
@@ -404,6 +397,13 @@ export class GroupCreator {
         groupId: request.groupId,
         memberPeerId: request.peerId,
       });
+      void this.publishGroupInfoRecords(request.groupId, keyVersion, roster, prevEpochBoundaries)
+        .catch((error: unknown) => {
+          const reason = error instanceof Error ? error.message : String(error);
+          console.warn(
+            `[GROUP][TRACE][LEAVE][GROUP_INFO_RETRY_NEEDED] group=${request.groupId} keyVersion=${keyVersion} reason=${reason}`,
+          );
+        });
       console.log(
         `[GROUP][TRACE][LEAVE][DONE] group=${request.groupId} peer=${request.peerId.slice(-8)} keyVersion=${keyVersion}`,
       );
@@ -545,7 +545,7 @@ export class GroupCreator {
     await this.sendControlMessageToPeer(response.responderPeerId, signedAck);
   }
 
-  async sendGroupWelcome(groupId: string, acceptedPeerId: string): Promise<void> {
+  async sendGroupWelcome(groupId: string, acceptedPeerId: string, eventTimestamp: number): Promise<void> {
     const { database, userIdentity } = this.deps;
 
     const chat = database.getChatByGroupId(groupId);
@@ -619,18 +619,15 @@ export class GroupCreator {
       }
 
       // Send GroupStateUpdate to all existing members (excluding new joiner — they get welcome).
-      await this.sendGroupStateUpdate(groupId, keyVersion, groupKey, roster, 'join', acceptedPeerId);
-
-      // Publish group-info DHT records (best effort). Missing records should not roll back
-      // already-committed rotation; retries can heal later.
-      try {
-        await this.publishGroupInfoRecords(groupId, keyVersion, roster, prevEpochBoundaries);
-      } catch (error: unknown) {
-        const reason = error instanceof Error ? error.message : String(error);
-        console.warn(
-          `[GROUP][TRACE][WELCOME][GROUP_INFO_RETRY_NEEDED] group=${groupId} keyVersion=${keyVersion} reason=${reason}`,
-        );
-      }
+      await this.sendGroupStateUpdate(
+        groupId,
+        keyVersion,
+        groupKey,
+        roster,
+        'join',
+        acceptedPeerId,
+        eventTimestamp,
+      );
 
       // Transition group_status to 'active' now that rotation pipeline has completed.
       database.updateChatGroupStatus(chat.id, 'active');
@@ -641,6 +638,7 @@ export class GroupCreator {
         'join',
         acceptedPeerId,
         acceptedUser.username,
+        eventTimestamp,
       );
       console.log(
         `[GROUP][TRACE][WELCOME][DONE] group=${groupId} activated=true welcomedPeer=${acceptedPeerId.slice(-8)} keyVersion=${keyVersion}`,
@@ -650,6 +648,14 @@ export class GroupCreator {
         groupId,
         memberPeerId: acceptedPeerId,
       });
+      // Publish group-info DHT records in background (best effort). Do not block activation.
+      void this.publishGroupInfoRecords(groupId, keyVersion, roster, prevEpochBoundaries)
+        .catch((error: unknown) => {
+          const reason = error instanceof Error ? error.message : String(error);
+          console.warn(
+            `[GROUP][TRACE][WELCOME][GROUP_INFO_RETRY_NEEDED] group=${groupId} keyVersion=${keyVersion} reason=${reason}`,
+          );
+        });
     } catch (error: unknown) {
       if (rotationCommitted) {
         // Rotation already changed keyVersion/participants locally; don't roll status back to a pre-rotation value.
@@ -727,6 +733,7 @@ export class GroupCreator {
     roster: GroupRosterEntry[],
     event: 'join' | 'leave' | 'kick',
     targetPeerId: string,
+    eventTimestamp: number,
   ): Promise<void> {
     const { database, myPeerId } = this.deps;
 
@@ -765,6 +772,7 @@ export class GroupCreator {
           type: GroupMessageType.GROUP_STATE_UPDATE,
           groupId,
           keyVersion,
+          timestamp: eventTimestamp,
           encryptedGroupKey,
           roster,
           event,
@@ -1110,6 +1118,7 @@ export class GroupCreator {
     event: 'join' | 'leave' | 'kick',
     targetPeerId: string,
     targetUsername?: string,
+    eventTimestamp?: number,
   ): Promise<void> {
     const messageId = `group-system-${event}-${groupId}-${keyVersion}-${targetPeerId}`;
     if (this.deps.database.messageExists(messageId)) return;
@@ -1122,7 +1131,7 @@ export class GroupCreator {
       : event === 'leave'
         ? `${resolvedUsername} left the group`
         : `${resolvedUsername} was removed from the group`;
-    const timestamp = Date.now();
+    const timestamp = eventTimestamp ?? Date.now();
 
     await this.deps.database.createMessage({
       id: messageId,

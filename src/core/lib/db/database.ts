@@ -2177,6 +2177,20 @@ export class ChatDatabase {
             .run(groupStatus, chatId);
     }
 
+    recoverRekeyingGroupsOnStartup(): number {
+        const result = this.db.prepare(`
+            UPDATE chats
+            SET group_status = 'active',
+                updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+            WHERE type = 'group'
+              AND status = 'active'
+              AND group_status = 'rekeying'
+              AND (key_version > 0 OR permanent_key IS NOT NULL)
+        `).run();
+
+        return Number(result.changes ?? 0);
+    }
+
     updateChatKeyVersion(chatId: number, keyVersion: number): void {
         this.db.prepare("UPDATE chats SET key_version = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?")
             .run(keyVersion, chatId);
