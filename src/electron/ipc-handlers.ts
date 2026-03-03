@@ -1689,6 +1689,28 @@ function setupGroupHandlers(
     }
   });
 
+  ipcMain.handle(IPC_CHANNELS.KICK_GROUP_MEMBER, async (_event, chatId: number, targetPeerId: string) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+      if (!Number.isInteger(chatId) || chatId <= 0) {
+        return { success: false, error: 'Invalid group chat ID' };
+      }
+      if (!targetPeerId) {
+        return { success: false, error: 'Target peer ID is required' };
+      }
+
+      await p2pCore.messageHandler.kickGroupMember(chatId, targetPeerId);
+      console.log(`[IPC] Kicked member ${targetPeerId} from group chat: ${chatId}`);
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to kick group member:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to kick group member' };
+    }
+  });
+
   ipcMain.handle(IPC_CHANNELS.GET_SUBSCRIBED_TOPICS, async () => {
     try {
       const p2pCore = getP2PCore();

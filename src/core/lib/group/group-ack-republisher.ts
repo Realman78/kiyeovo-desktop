@@ -163,6 +163,9 @@ export class GroupAckRepublisher {
     if (pending.message_type === 'GROUP_WELCOME' || pending.message_type === 'GROUP_STATE_UPDATE') {
       return this.evaluateKeyBearingPendingAck(pending, payload);
     }
+    if (pending.message_type === 'GROUP_KICK') {
+      return this.evaluateKickPendingAck(pending, payload);
+    }
     return { action: 'remove', reason: 'invalid_type' };
   }
 
@@ -240,6 +243,24 @@ export class GroupAckRepublisher {
       return { action: 'remove', reason: 'target_not_participant' };
     }
 
+    return { action: 'republish' };
+  }
+
+  private evaluateKickPendingAck(pending: GroupPendingAck, payload: Record<string, unknown>): PendingActionResult {
+    const messageId = typeof payload.messageId === 'string' ? payload.messageId : null;
+    const timestamp = typeof payload.timestamp === 'number' ? payload.timestamp : null;
+    if (!messageId || timestamp === null || !Number.isFinite(timestamp) || timestamp <= 0) {
+      return { action: 'remove', reason: 'invalid_payload' };
+    }
+
+    const chat = this.deps.database.getChatByGroupId(pending.group_id);
+    const myPeerId = this.deps.node.peerId.toString();
+    if (!chat || chat.created_by !== myPeerId) {
+      return { action: 'remove', reason: !chat ? 'group_missing' : 'not_creator' };
+    }
+
+    // Kick targets are intentionally removed from participants during rotation,
+    // so this row remains valid even when target is no longer in roster.
     return { action: 'republish' };
   }
 

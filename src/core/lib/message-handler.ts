@@ -839,6 +839,54 @@ export class MessageHandler {
     this.groupMessaging.deactivateGroup(chat.group_id);
   }
 
+  async kickGroupMember(chatId: number, targetPeerId: string): Promise<void> {
+    const chat = this.database.getChatByIdWithUsernameAndLastMsg(chatId, this.node.peerId.toString());
+    if (!chat) {
+      throw new Error('Group chat not found');
+    }
+    if (chat.type !== 'group' || !chat.group_id) {
+      throw new Error('Chat is not a group chat');
+    }
+    if (!targetPeerId) {
+      throw new Error('Target peer ID is required');
+    }
+
+    const userIdentity = this.usernameRegistry.getUserIdentity();
+    if (!userIdentity) {
+      throw new Error('User identity not available');
+    }
+
+    const myPeerId = this.node.peerId.toString();
+    const myUser = this.database.getUserByPeerId(myPeerId);
+    const myUsername = myUser?.username || `user_${myPeerId.slice(-8)}`;
+    const creator = new GroupCreator({
+      node: this.node,
+      database: this.database,
+      userIdentity,
+      myPeerId,
+      myUsername,
+      onGroupMembersUpdated: this.onGroupMembersUpdated,
+      onMessageReceived: this.onMessageReceived,
+      nudgePeer: this.nudgePeer.bind(this),
+      onRegisterPrevEpochGrace: (groupId: string, keyVersion: number) => {
+        this.groupMessaging.registerGraceContextForEpoch(groupId, keyVersion);
+      },
+    });
+
+    await creator.kickMember(chat.group_id, targetPeerId);
+
+    const refreshed = this.database.getChatByGroupId(chat.group_id);
+    if (refreshed?.group_status === 'active' && (refreshed.key_version ?? 0) > 0) {
+      await this.groupMessaging.subscribeToGroupTopic(chat.group_id).catch((error: unknown) => {
+        console.warn(
+          `[GROUP-MSG] Failed to subscribe after kick processing for ${chat.group_id}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      });
+    }
+  }
+
   async retryGroupOfflineBackup(chatId: number, messageId: string): Promise<{ success: boolean; error: string | null }> {
     try {
       await this.groupMessaging.retryOfflineBackup(chatId, messageId);
@@ -1444,14 +1492,29 @@ export class MessageHandler {
           const responder = new GroupResponder(deps);
           await responder.handleGroupStateUpdate(parsed as any);
           const groupId = (parsed as { groupId: string }).groupId;
-          await this.groupMessaging.subscribeToGroupTopic(groupId).catch((error: unknown) => {
-            console.warn(
-              `[GROUP-MSG] Failed to subscribe after state update for ${groupId}: ${
-                error instanceof Error ? error.message : String(error)
-              }`,
-            );
-          });
+          const updatedChat = this.database.getChatByGroupId(groupId);
+          if (updatedChat?.group_status === 'removed' || updatedChat?.group_status === 'left') {
+            this.groupMessaging.deactivateGroup(groupId);
+          } else {
+            await this.groupMessaging.subscribeToGroupTopic(groupId).catch((error: unknown) => {
+              console.warn(
+                `[GROUP-MSG] Failed to subscribe after state update for ${groupId}: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+              );
+            });
+          }
           console.log(`[GROUP] Processed GROUP_STATE_UPDATE from ${senderInfo.username}`);
+          break;
+        }
+        case GroupMessageType.GROUP_KICK: {
+          const responder = new GroupResponder(deps);
+          const removedSelf = await responder.handleGroupKick(parsed as any);
+          const groupId = (parsed as { groupId: string }).groupId;
+          if (removedSelf) {
+            this.groupMessaging.deactivateGroup(groupId);
+          }
+          console.log(`[GROUP] Processed GROUP_KICK from ${senderInfo.username}`);
           break;
         }
 
@@ -1504,7 +1567,6 @@ export class MessageHandler {
         }
 
         // --- Messages not yet implemented — consume without saving as text ---
-        case GroupMessageType.GROUP_KICK:
         case GroupMessageType.GROUP_MESSAGE:
           console.log(`[GROUP] Received ${type} from ${senderInfo.username} — handler not yet implemented, consuming`);
           break;

@@ -23,6 +23,7 @@ import {
   type GroupInviteResponse,
   type GroupInviteResponseAck,
   type GroupLeaveRequest,
+  type GroupKick,
   type GroupWelcome,
   type GroupStateUpdate,
   type GroupControlAck,
@@ -535,6 +536,116 @@ export class GroupCreator {
     }
   }
 
+  async kickMember(groupId: string, targetPeerId: string): Promise<void> {
+    const { database, myPeerId } = this.deps;
+    const eventTimestamp = Date.now();
+    const chat = database.getChatByGroupId(groupId);
+    if (!chat || chat.created_by !== myPeerId) {
+      throw new Error(`Not creator of group ${groupId}`);
+    }
+    if (chat.type !== 'group') {
+      throw new Error(`Chat for group ${groupId} is not a group chat`);
+    }
+    if (targetPeerId === myPeerId) {
+      throw new Error('Creator cannot kick themselves');
+    }
+
+    const chatParticipants = database.getChatParticipants(chat.id);
+
+    const isParticipant = chatParticipants.some((p) => p.peer_id === targetPeerId);
+    if (!isParticipant) {
+      throw new Error('Target user is not an active member of this group');
+    }
+    if (chat.group_status === 'rekeying') {
+      throw new Error(`Group ${groupId} is already rekeying`);
+    }
+
+    const targetUser = database.getUserByPeerId(targetPeerId);
+    const previousGroupStatus = (chat.group_status ?? 'active') as GroupStatus;
+    let rotationCommitted = false;
+    database.updateChatGroupStatus(chat.id, 'rekeying');
+
+    try {
+      const preRotationParticipants = chatParticipants.map((p) => p.peer_id);
+      const prevVersion = chat.key_version ?? 0;
+      const prevEpochBoundaries = prevVersion > 0
+        ? await this.snapshotPrevEpochBoundaries(groupId, prevVersion, preRotationParticipants)
+        : {};
+
+      const { groupKey, keyVersion } = await this.rotateGroupKey(groupId, targetPeerId, 'kick');
+      rotationCommitted = true;
+      if (prevVersion >= 1) {
+        this.deps.onRegisterPrevEpochGrace?.(groupId, prevVersion);
+      }
+
+      const roster = this.buildRoster(chatParticipants.map((p) => p.peer_id));
+
+      await this.sendGroupStateUpdate(
+        groupId,
+        keyVersion,
+        groupKey,
+        roster,
+        'kick',
+        targetPeerId,
+        eventTimestamp,
+      );
+
+      try {
+        await this.sendGroupKick(groupId, targetPeerId, keyVersion, eventTimestamp);
+      } catch (error: unknown) {
+        const reason = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[GROUP][TRACE][KICK][KICK_MSG_FAILED] group=${groupId} to=${targetPeerId.slice(-8)} reason=${reason}`,
+        );
+      }
+
+      database.removePendingAck(groupId, targetPeerId, 'GROUP_INVITE');
+      database.removePendingAck(groupId, targetPeerId, 'GROUP_WELCOME');
+      database.removePendingAck(groupId, targetPeerId, 'GROUP_STATE_UPDATE');
+      database.removeInviteDeliveryAcksForMember(groupId, targetPeerId);
+      database.updateChatGroupStatus(chat.id, 'active');
+
+      await this.appendMembershipSystemMessage(
+        chat.id,
+        groupId,
+        keyVersion,
+        'kick',
+        targetPeerId,
+        targetUser?.username,
+        eventTimestamp,
+      );
+
+      this.deps.onGroupMembersUpdated?.({
+        chatId: chat.id,
+        groupId,
+        memberPeerId: targetPeerId,
+      });
+
+      void this.publishGroupInfoRecords(groupId, keyVersion, roster, prevEpochBoundaries)
+        .catch((error: unknown) => {
+          const reason = error instanceof Error ? error.message : String(error);
+          console.warn(
+            `[GROUP][TRACE][KICK][GROUP_INFO_RETRY_NEEDED] group=${groupId} keyVersion=${keyVersion} reason=${reason}`,
+          );
+        });
+
+      console.log(
+        `[GROUP][TRACE][KICK][DONE] group=${groupId} peer=${targetPeerId.slice(-8)} keyVersion=${keyVersion}`,
+      );
+    } catch (error: unknown) {
+      if (rotationCommitted) {
+        database.updateChatGroupStatus(chat.id, 'active');
+        const reason = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[GROUP][TRACE][KICK][PARTIAL_FAILURE] group=${groupId} peer=${targetPeerId.slice(-8)} status=active reason=${reason}`,
+        );
+        return;
+      }
+      database.updateChatGroupStatus(chat.id, previousGroupStatus);
+      throw error;
+    }
+  }
+
   async handleInviteDeliveredAck(ack: GroupInviteDeliveredAck, senderPeerId: string): Promise<void> {
     const { database, myPeerId } = this.deps;
     console.log(
@@ -605,7 +716,7 @@ export class GroupCreator {
 
     // Map the acked message type to the pending ack type
     const ackType = ack.ackedMessageType as AckMessageType;
-    if (ackType === 'GROUP_WELCOME' || ackType === 'GROUP_STATE_UPDATE') {
+    if (ackType === 'GROUP_WELCOME' || ackType === 'GROUP_STATE_UPDATE' || ackType === 'GROUP_KICK') {
       // Verify the ACK matches the currently pending message to prevent stale/duplicate ACKs
       // from clearing a newer pending entry for the same member+type.
       const pendingAcks = database.getPendingAcksForGroup(ack.groupId);
@@ -918,6 +1029,30 @@ export class GroupCreator {
     console.log(
       `[GROUP][TRACE][STATE_UPDATE][SUMMARY] group=${groupId} keyVersion=${keyVersion} ` +
       `attempted=${attempted} sent=${sent} failed=${failed} skippedMissingUser=${skippedMissingUser}`,
+    );
+  }
+
+  private async sendGroupKick(
+    groupId: string,
+    targetPeerId: string,
+    keyVersion: number,
+    eventTimestamp: number,
+  ): Promise<void> {
+    const kick: Omit<GroupKick, 'signature'> = {
+      type: GroupMessageType.GROUP_KICK,
+      groupId,
+      keyVersion,
+      kickedPeerId: targetPeerId,
+      messageId: randomUUID(),
+      timestamp: eventTimestamp,
+    };
+
+    const signature = this.sign(kick);
+    const signedKick: GroupKick = { ...kick, signature };
+    this.deps.database.insertPendingAck(groupId, targetPeerId, 'GROUP_KICK', JSON.stringify(signedKick));
+    await this.sendControlMessageToPeer(targetPeerId, signedKick);
+    console.log(
+      `[GROUP][TRACE][KICK][SEND] group=${groupId} to=${targetPeerId.slice(-8)} msgId=${signedKick.messageId} keyVersion=${keyVersion}`,
     );
   }
 

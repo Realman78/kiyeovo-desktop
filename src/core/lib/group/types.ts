@@ -104,6 +104,7 @@ export interface GroupLeaveRequest {
 export interface GroupKick {
   type: typeof GroupMessageType.GROUP_KICK;
   groupId: string;
+  keyVersion: number;
   kickedPeerId: string;
   messageId: string;
   timestamp: number;
@@ -228,7 +229,12 @@ export interface GroupLocalState {
 
 // --- Pending ACK tracking ---
 
-export type AckMessageType = 'GROUP_INVITE' | 'GROUP_INVITE_RESPONSE' | 'GROUP_WELCOME' | 'GROUP_STATE_UPDATE';
+export type AckMessageType =
+  | 'GROUP_INVITE'
+  | 'GROUP_INVITE_RESPONSE'
+  | 'GROUP_WELCOME'
+  | 'GROUP_STATE_UPDATE'
+  | 'GROUP_KICK';
 
 export interface PendingAck {
   groupId: string;

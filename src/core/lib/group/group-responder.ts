@@ -15,6 +15,7 @@ import {
   type GroupWelcome,
   type GroupStateUpdate,
   type GroupLeaveRequest,
+  type GroupKick,
   type GroupControlAck,
   type GroupStatus,
 } from './types.js';
@@ -231,8 +232,12 @@ export class GroupResponder {
     if (!chat) throw new Error(`Group ${groupId} not found`);
     if (chat.type !== 'group') throw new Error(`Chat ${groupId} is not a group`);
 
-    if (chat.group_status === 'left' || chat.group_status === 'removed') {
+    if (chat.group_status === 'left') {
       this.applyLocalGroupLeaveState(chat.id, groupId);
+      return;
+    }
+    if (chat.group_status === 'removed') {
+      this.applyLocalGroupRemovedState(chat.id, groupId);
       return;
     }
 
@@ -478,6 +483,31 @@ export class GroupResponder {
       return;
     }
 
+    if (update.event === 'kick' && update.targetPeerId === this.deps.myPeerId) {
+      this.applyLocalGroupRemovedState(chat.id, update.groupId);
+      await this.appendMembershipSystemMessage(
+        chat.id,
+        update.groupId,
+        update.keyVersion,
+        'kick',
+        update.targetPeerId,
+        update.roster.find((entry) => entry.peerId === update.targetPeerId)?.username,
+        creatorPeerId,
+        creator.username,
+        update.timestamp,
+      );
+      await this.sendControlAck(
+        creatorPeerId,
+        update.groupId,
+        GroupMessageType.GROUP_STATE_UPDATE,
+        update.messageId,
+      );
+      console.log(
+        `[GROUP][TRACE][STATE_UPDATE][APPLY_SELF_KICK] group=${update.groupId} msgId=${update.messageId} keyVersion=${update.keyVersion}`,
+      );
+      return;
+    }
+
     // Decrypt newly rotated group key
     const groupKey = privateDecrypt(
       userIdentity.offlinePrivateKey,
@@ -535,6 +565,88 @@ export class GroupResponder {
     console.log(
       `[GROUP][TRACE][STATE_UPDATE][APPLY] group=${update.groupId} msgId=${update.messageId} keyVersion=${update.keyVersion} rosterSize=${update.roster.length} event=${update.event} target=${update.targetPeerId.slice(-8)}`,
     );
+  }
+
+  async handleGroupKick(kick: GroupKick): Promise<boolean> {
+    const { database } = this.deps;
+    const chat = database.getChatByGroupId(kick.groupId);
+    if (!chat) {
+      console.log(`[GROUP][TRACE][KICK][DROP] group=${kick.groupId} reason=unknown_group`);
+      return false;
+    }
+
+    const creatorPeerId = chat.group_creator_peer_id;
+    if (!creatorPeerId) {
+      console.log(`[GROUP][TRACE][KICK][DROP] group=${kick.groupId} reason=no_creator`);
+      return false;
+    }
+    const creator = database.getUserByPeerId(creatorPeerId);
+    if (!creator) {
+      console.log(`[GROUP][TRACE][KICK][DROP] group=${kick.groupId} reason=unknown_creator creator=${creatorPeerId.slice(-8)}`);
+      return false;
+    }
+    if (!Number.isFinite(kick.timestamp) || kick.timestamp <= 0) {
+      console.log(`[GROUP][TRACE][KICK][DROP] group=${kick.groupId} msgId=${kick.messageId} reason=invalid_timestamp`);
+      return false;
+    }
+
+    this.verifySignature(kick, creator.signing_public_key);
+
+    if (kick.kickedPeerId !== this.deps.myPeerId) {
+      console.log(
+        `[GROUP][TRACE][KICK][DROP] group=${kick.groupId} msgId=${kick.messageId} reason=not_target target=${kick.kickedPeerId.slice(-8)}`,
+      );
+      return false;
+    }
+
+    const currentKeyVersion = chat.key_version ?? 0;
+    if (chat.group_status === 'removed') {
+      await this.sendControlAck(
+        creatorPeerId,
+        kick.groupId,
+        GroupMessageType.GROUP_KICK,
+        kick.messageId,
+      );
+      console.log(
+        `[GROUP][TRACE][KICK][DUPLICATE] group=${kick.groupId} msgId=${kick.messageId} currentKeyVersion=${currentKeyVersion} incomingKeyVersion=${kick.keyVersion}`,
+      );
+      return true;
+    }
+    if (currentKeyVersion >= kick.keyVersion) {
+      await this.sendControlAck(
+        creatorPeerId,
+        kick.groupId,
+        GroupMessageType.GROUP_KICK,
+        kick.messageId,
+      );
+      console.log(
+        `[GROUP][TRACE][KICK][DROP] group=${kick.groupId} msgId=${kick.messageId} reason=stale_key_version currentKeyVersion=${currentKeyVersion} incomingKeyVersion=${kick.keyVersion}`,
+      );
+      return false;
+    }
+
+    this.applyLocalGroupRemovedState(chat.id, kick.groupId);
+    await this.appendMembershipSystemMessage(
+      chat.id,
+      kick.groupId,
+      kick.keyVersion,
+      'kick',
+      kick.kickedPeerId,
+      this.deps.myUsername,
+      creatorPeerId,
+      creator.username,
+      kick.timestamp,
+    );
+    await this.sendControlAck(
+      creatorPeerId,
+      kick.groupId,
+      GroupMessageType.GROUP_KICK,
+      kick.messageId,
+    );
+    console.log(
+      `[GROUP][TRACE][KICK][APPLY] group=${kick.groupId} msgId=${kick.messageId} keyVersion=${kick.keyVersion}`,
+    );
+    return true;
   }
 
   async republishPendingControl(targetPeerId: string, payloadJson: string): Promise<void> {
@@ -694,6 +806,18 @@ export class GroupResponder {
     database.deleteChatById(chatId);
   }
 
+  private applyLocalGroupRemovedState(chatId: number, groupId: string): void {
+    const { database, myPeerId } = this.deps;
+    database.updateChatGroupStatus(chatId, 'removed' satisfies GroupStatus);
+    database.clearGroupChatRuntimeState(chatId);
+    database.removePendingAcksForGroup(groupId);
+    database.removeInviteDeliveryAcksForMember(groupId, myPeerId);
+    database.deleteGroupOfflineCursors(groupId);
+    database.deleteGroupSenderSeqs(groupId);
+    database.deleteGroupMemberSeqs(groupId);
+    database.deleteGroupOfflineSentMessagesByPrefix(`${GROUP_OFFLINE_BUCKET_PREFIX}/${groupId}/`);
+  }
+
   private async appendMembershipSystemMessage(
     chatId: number,
     groupId: string,
@@ -715,7 +839,9 @@ export class GroupResponder {
       ? `${resolvedUsername} joined the group`
       : event === 'leave'
         ? `${resolvedUsername} left the group`
-        : `${resolvedUsername} was removed from the group`;
+        : targetPeerId === this.deps.myPeerId
+          ? 'You were removed from the group'
+          : `${resolvedUsername} was removed from the group`;
     const appliedTimestamp = Date.now();
 
     await this.deps.database.createMessage({

@@ -472,7 +472,7 @@ export class ChatDatabase {
             CREATE TABLE IF NOT EXISTS group_pending_acks (
                 group_id TEXT NOT NULL,
                 target_peer_id TEXT NOT NULL,
-                message_type TEXT NOT NULL CHECK(message_type IN ('GROUP_INVITE', 'GROUP_INVITE_RESPONSE', 'GROUP_WELCOME', 'GROUP_STATE_UPDATE')),
+                message_type TEXT NOT NULL CHECK(message_type IN ('GROUP_INVITE', 'GROUP_INVITE_RESPONSE', 'GROUP_WELCOME', 'GROUP_STATE_UPDATE', 'GROUP_KICK')),
                 message_payload TEXT NOT NULL,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 last_published_at DATETIME DEFAULT CURRENT_TIMESTAMP,

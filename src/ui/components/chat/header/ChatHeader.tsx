@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useSelector, useDispatch } from "react-redux";
 import type { RootState } from "../../../state/store";
 import { Button } from "../../ui/Button";
-import { Bell, BellOff, MoreVertical, Shield, UserPlus, Ban, UserCheck, Info, Trash2, AlertCircle, Users, Clock, RefreshCw, LogOut, Bug } from "lucide-react";
+import { Bell, BellOff, MoreVertical, Shield, UserPlus, Ban, UserCheck, Info, Trash2, AlertCircle, Users, Clock, RefreshCw, LogOut, Bug, UserMinus } from "lucide-react";
 import { DropdownMenu, DropdownMenuItem } from "../../ui/DropdownMenu";
 import { updateChat, clearMessages, removeChat, setOfflineFetchStatus, markOfflineFetched } from "../../../state/slices/chatSlice";
 import { AboutUserModal } from "./AboutUserModal";
@@ -42,6 +42,9 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
   const [deleteChatAndUserConfirmOpen, setDeleteChatAndUserConfirmOpen] = useState(false);
   const [leaveGroupConfirmOpen, setLeaveGroupConfirmOpen] = useState(false);
   const [isLeavingGroup, setIsLeavingGroup] = useState(false);
+  const [kickMemberDialogOpen, setKickMemberDialogOpen] = useState(false);
+  const [selectedKickPeerId, setSelectedKickPeerId] = useState<string | null>(null);
+  const [isKickingMember, setIsKickingMember] = useState(false);
   const [inviteUsersDialogOpen, setInviteUsersDialogOpen] = useState(false);
   const [isCurrentUserGroupCreator, setIsCurrentUserGroupCreator] = useState(false);
   const [editUsernameModalOpen, setEditUsernameModalOpen] = useState(false);
@@ -218,6 +221,12 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
 
   const handleLeaveGroup = () => {
     setLeaveGroupConfirmOpen(true);
+    setDropdownOpen(false);
+  };
+
+  const handleKickMember = () => {
+    setSelectedKickPeerId(null);
+    setKickMemberDialogOpen(true);
     setDropdownOpen(false);
   };
 
@@ -423,6 +432,31 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
     }
   };
 
+  const confirmKickMember = async () => {
+    if (!activeChat || activeChat.type !== 'group' || !selectedKickPeerId) return;
+
+    setIsKickingMember(true);
+    try {
+      const result = await window.kiyeovoAPI.kickGroupMember(activeChat.id, selectedKickPeerId);
+      if (!result.success) {
+        toast.error(result.error || 'Failed to remove member');
+        return;
+      }
+
+      const targetName = groupMembers.find((m) => m.peerId === selectedKickPeerId)?.username ?? 'Member';
+      toast.info(`${targetName} was removed from the group`);
+      setKickMemberDialogOpen(false);
+      setSelectedKickPeerId(null);
+      await fetchGroupMembers();
+      await refreshGroupCreatorPermission();
+    } catch (error) {
+      console.error('Failed to remove group member:', error);
+      toast.error('Failed to remove member');
+    } finally {
+      setIsKickingMember(false);
+    }
+  };
+
   const isGroup = chatType === 'group';
   const groupStatusMessage = !isGroup ? null
     : groupStatus === 'awaiting_activation'
@@ -444,6 +478,7 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
     peerId: member.peerId,
     reason: member.status === 'pending' ? 'Invite pending' : 'Already in group',
   }));
+  const kickableMembers = groupMembers.filter((member) => member.status === 'confirmed');
 
   return <div className={`${showGroupStateMessage ? 'h-20' : 'h-16'} px-6 flex items-center justify-between border-b border-border ${activeChat?.status === 'pending' ? "" : "bg-card/50"}`}>
     <div className="flex items-center gap-3">
@@ -532,6 +567,14 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
                 onClick={handleInviteUsers}
               >
                 Invite users
+              </DropdownMenuItem>
+            )}
+            {groupStatus === 'active' && isCurrentUserGroupCreator && kickableMembers.length > 0 && (
+              <DropdownMenuItem
+                icon={<UserMinus className="w-4 h-4" />}
+                onClick={handleKickMember}
+              >
+                Remove member
               </DropdownMenuItem>
             )}
             {groupStatus === 'active' && (
@@ -701,6 +744,65 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
                 disabled={isLeavingGroup}
               >
                 {isLeavingGroup ? 'Leaving...' : 'Leave Group'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <Dialog open={kickMemberDialogOpen} onOpenChange={setKickMemberDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Remove Member</DialogTitle>
+              <DialogDescription>
+                Select a member to remove from this group.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogBody className="space-y-4">
+              <div className="max-h-56 overflow-y-auto border border-border rounded-md">
+                {kickableMembers.length === 0 ? (
+                  <div className="p-3 text-sm text-muted-foreground">No removable members.</div>
+                ) : (
+                  kickableMembers.map((member) => {
+                    const isSelected = selectedKickPeerId === member.peerId;
+                    return (
+                      <button
+                        key={member.peerId}
+                        type="button"
+                        disabled={isKickingMember}
+                        onClick={() => setSelectedKickPeerId(member.peerId)}
+                        className={`w-full px-3 py-2.5 text-left border-b border-border last:border-b-0 transition-colors ${
+                          isSelected ? 'bg-destructive/10 text-destructive' : 'hover:bg-secondary/50'
+                        }`}
+                      >
+                        {member.username}
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+              <div className="flex items-start gap-2 p-3 bg-warning/10 border border-warning/30 rounded">
+                <AlertCircle className="w-5 h-5 text-warning mt-0.5 shrink-0" />
+                <div className="text-sm text-warning">
+                  <p className="font-semibold mb-1">Consequences</p>
+                  <p className="text-xs">
+                    The member will lose access to new group messages immediately and can rejoin only through a new invite.
+                  </p>
+                </div>
+              </div>
+            </DialogBody>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setKickMemberDialogOpen(false)}
+                disabled={isKickingMember}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={confirmKickMember}
+                disabled={isKickingMember || !selectedKickPeerId}
+              >
+                {isKickingMember ? 'Removing...' : 'Remove Member'}
               </Button>
             </DialogFooter>
           </DialogContent>
