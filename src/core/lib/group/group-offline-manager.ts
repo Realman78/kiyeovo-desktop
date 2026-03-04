@@ -668,6 +668,7 @@ export class GroupOfflineManager {
   }
 
   private async getLatestStore(bucketKey: string): Promise<GroupOfflineStore | null> {
+    console.log("checking bucket", bucketKey);
     const startedAt = Date.now();
     const cached = this.getCachedStore(bucketKey);
     if (cached) {

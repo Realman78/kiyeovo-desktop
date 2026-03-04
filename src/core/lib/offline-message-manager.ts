@@ -105,6 +105,7 @@ export class OfflineMessageManager {
     ): Promise<OfflineMessageStore> {
         // Fetch all buckets in parallel for better performance (especially over Tor)
         const fetchPromises = bucketKeys.map(async (bucketKey) => {
+            console.log("fetching messages for bucket", bucketKey);
             const key = new TextEncoder().encode(bucketKey);
             const bucketMessages: OfflineMessage[] = [];
             let valueEventCount = 0;
