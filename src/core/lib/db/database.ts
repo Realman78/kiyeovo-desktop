@@ -2224,6 +2224,23 @@ export class ChatDatabase {
             .run(dhtKey, chatId);
     }
 
+    restoreGroupChatFromInvite(chatId: number, inviterPeerId: string, groupName: string): void {
+        this.db.prepare(`
+            UPDATE chats
+            SET name = ?,
+                created_by = ?,
+                status = 'pending',
+                group_status = 'invited_pending',
+                group_creator_peer_id = ?,
+                permanent_key = NULL,
+                group_key = NULL,
+                group_info_dht_key = NULL,
+                key_version = 0,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+            WHERE id = ?
+        `).run(groupName, inviterPeerId, inviterPeerId, chatId);
+    }
+
     clearGroupChatRuntimeState(chatId: number): void {
         this.db.prepare(`
             UPDATE chats

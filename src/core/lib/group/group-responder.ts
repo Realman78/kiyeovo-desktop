@@ -69,9 +69,48 @@ export class GroupResponder {
       return;
     }
 
-    // Check if we already have this group (dedup)
+    // Check if we already have this group.
+    // If local state is terminal (removed/left/invite_expired), treat this as a re-invite
+    // and revive the existing chat row instead of dropping as duplicate.
     const existing = database.getChatByGroupId(invite.groupId);
     if (existing) {
+      const canReactivate =
+        existing.group_status === 'removed'
+        || existing.group_status === 'left'
+        || existing.group_status === 'invite_expired';
+
+      if (canReactivate) {
+        database.restoreGroupChatFromInvite(existing.id, invite.inviterPeerId, invite.groupName);
+        database.deleteGroupKeyHistory(invite.groupId);
+        database.updateGroupParticipants(existing.id, [invite.inviterPeerId, this.deps.myPeerId]);
+        database.createNotification({
+          id: invite.inviteId,
+          notification_type: 'group_invitation',
+          notification_data: JSON.stringify({
+            groupId: invite.groupId,
+            groupName: invite.groupName,
+            inviterPeerId: invite.inviterPeerId,
+            inviteId: invite.inviteId,
+            expiresAt: invite.expiresAt,
+          }),
+          bucket_key: '',
+          status: 'pending',
+        });
+        console.log(
+          `[GROUP][TRACE][INVITE][REACTIVATE] group=${invite.groupId} inviteId=${invite.inviteId} chatId=${existing.id} prevStatus=${existing.group_status}`,
+        );
+        try {
+          await this.sendInviteDeliveredAck(invite);
+        } catch (error: unknown) {
+          console.warn(
+            `[GROUP] Failed to send reactivated invite delivery ACK for ${invite.groupId}: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        }
+        return;
+      }
+
       console.log(`[GROUP][TRACE][INVITE][DUPLICATE] group=${invite.groupId} inviteId=${invite.inviteId} chatId=${existing.id}`);
       try {
         await this.sendInviteDeliveredAck(invite);
