@@ -1094,7 +1094,7 @@ export class GroupCreator {
     if (prevVersion >= 1) {
       if (prevEpochBoundaries) {
         for (const [peerId, seq] of Object.entries(prevEpochBoundaries)) {
-          if (seq > 0) {
+          if (Number.isFinite(seq) && seq >= 0) {
             senderSeqBoundaries[peerId] = seq;
           }
         }
@@ -1186,11 +1186,21 @@ export class GroupCreator {
   ): Promise<Record<string, number>> {
     const { database, myPeerId } = this.deps;
     const boundaries: Record<string, number> = {};
+    const uniqueParticipants = [...new Set(participantPeerIds)];
+
+    // Start with explicit 0 boundaries for all known members of previous epoch.
+    // This makes boundary maps complete and prevents over-broad sender inference later.
+    for (const peerId of uniqueParticipants) {
+      boundaries[peerId] = 0;
+    }
+    if (boundaries[myPeerId] === undefined) {
+      boundaries[myPeerId] = 0;
+    }
 
     const observed = database.getAllMemberSeqs(groupId, prevVersion);
     for (const [peerId, seq] of Object.entries(observed)) {
       if (seq > 0) {
-        boundaries[peerId] = seq;
+        boundaries[peerId] = Math.max(boundaries[peerId] ?? 0, seq);
       }
     }
 
@@ -1198,8 +1208,6 @@ export class GroupCreator {
     if (mySeq > 0) {
       boundaries[myPeerId] = Math.max(boundaries[myPeerId] ?? 0, mySeq);
     }
-
-    const uniqueParticipants = [...new Set(participantPeerIds)];
     const dhtTargets = uniqueParticipants.filter((peerId) => peerId !== myPeerId);
 
     await this.mapWithConcurrency(

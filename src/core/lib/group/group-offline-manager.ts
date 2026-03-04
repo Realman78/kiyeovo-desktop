@@ -370,7 +370,7 @@ export class GroupOfflineManager {
       const keyBytes = Buffer.from(keyBase64, 'base64');
       if (keyBytes.length !== 32) continue;
 
-      const roster = this.getEpochSenderPeerIds(chat, versionMeta);
+      const roster = this.getEpochSenderPeerIds(chat, epoch.key_version, versionMeta);
 
       const senderDescriptors = roster
         .map((senderPeerId) => {
@@ -697,7 +697,6 @@ export class GroupOfflineManager {
             || (store.version === best.version && store.lastUpdated > best.lastUpdated)
           ) {
             best = store;
-            console.log("best store for bucket", bucketKey, best);
           }
         } catch {
           continue;
@@ -809,8 +808,10 @@ export class GroupOfflineManager {
     const threshold = epoch.used_until + GROUP_ROTATION_GRACE_WINDOW_MS;
     if (Date.now() < threshold) return { skip: false, reason: 'within_grace_window' };
 
-    const senderPeerIds = this.getEpochSenderPeerIds(chat, versionMeta);
-    if (senderPeerIds.length === 0) return { skip: false, reason: 'no_senders' };
+    const senderPeerIds = this.getEpochSenderPeerIds(chat, epoch.key_version, versionMeta);
+    if (senderPeerIds.length === 0) {
+      return { skip: true, reason: 'no_expected_senders' };
+    }
 
     const boundaries = versionMeta?.senderSeqBoundaries ?? {};
     const hasAllBoundaries = senderPeerIds.every((peerId) => boundaries[peerId] !== undefined);
@@ -834,11 +835,56 @@ export class GroupOfflineManager {
       : { skip: false, reason: 'cursor_threshold_not_met' };
   }
 
-  private getEpochSenderPeerIds(chat: Chat, versionMeta: GroupOfflineVersionMeta | null): string[] {
-    const fromMeta = versionMeta?.members ?? [];
-    const fromParticipants = this.deps.database.getChatParticipants(chat.id).map((p) => p.peer_id);
-    const base = fromMeta.length > 0 ? fromMeta : fromParticipants;
-    return base.filter((peerId) => peerId !== this.deps.myPeerId);
+  private getEpochSenderPeerIds(
+    chat: Chat,
+    keyVersion: number,
+    versionMeta: GroupOfflineVersionMeta | null,
+  ): string[] {
+    const participants = this.deps.database
+      .getChatParticipants(chat.id)
+      .map((p) => p.peer_id)
+      .filter((peerId) => peerId !== this.deps.myPeerId);
+    const localKnownSenders = this.getLocalKnownEpochSenders(chat, keyVersion);
+
+    if (versionMeta) {
+      const epochMembers = (versionMeta.members ?? [])
+        .filter((peerId) => peerId !== this.deps.myPeerId);
+      const boundaries = versionMeta.senderSeqBoundaries ?? {};
+      const boundarySenders = Object.keys(boundaries)
+        .filter((peerId) => peerId !== this.deps.myPeerId);
+
+      if (epochMembers.length === 0) {
+        return [];
+      }
+
+      const hasBoundariesForAllEpochMembers = epochMembers.every((peerId) => boundaries[peerId] !== undefined);
+      if (hasBoundariesForAllEpochMembers) {
+        return [...new Set([...boundarySenders, ...localKnownSenders])];
+      }
+
+      // Metadata exists but boundaries are incomplete: be conservative and scan epoch members.
+      return [...new Set([...epochMembers, ...localKnownSenders])];
+    }
+
+    if (localKnownSenders.length > 0) {
+      return localKnownSenders;
+    }
+
+    // Metadata unavailable: fallback to participant roster to avoid losing messages.
+    // This is broader, but safe.
+    return participants;
+  }
+
+  private getLocalKnownEpochSenders(chat: Chat, keyVersion: number): string[] {
+    if (!chat.group_id) return [];
+
+    const fromSeqs = Object.keys(this.deps.database.getAllMemberSeqs(chat.group_id, keyVersion));
+    const fromCursors = this.deps.database
+      .getGroupOfflineCursors(chat.group_id, keyVersion)
+      .map((cursor) => cursor.sender_peer_id);
+
+    return [...new Set([...fromSeqs, ...fromCursors])]
+      .filter((peerId) => peerId !== this.deps.myPeerId);
   }
 
   private verifyOfflineMessageSignature(msg: GroupOfflineMessage, signingPubKeyBase64: string): boolean {
@@ -1027,8 +1073,8 @@ export class GroupOfflineManager {
     const threshold = epoch.used_until + GROUP_ROTATION_GRACE_WINDOW_MS;
     if (Date.now() < threshold) return { prune: false, reason: 'within_grace_window' };
 
-    const senderPeerIds = this.getEpochSenderPeerIds(chat, versionMeta);
-    if (senderPeerIds.length === 0) return { prune: false, reason: 'no_senders' };
+    const senderPeerIds = this.getEpochSenderPeerIds(chat, epoch.key_version, versionMeta);
+    if (senderPeerIds.length === 0) return { prune: true, reason: 'no_expected_senders' };
 
     const boundaries = versionMeta?.senderSeqBoundaries ?? {};
     const hasAllBoundaries = senderPeerIds.every((peerId) => boundaries[peerId] !== undefined);

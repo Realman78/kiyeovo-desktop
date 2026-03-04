@@ -59,7 +59,7 @@ const ChatWrapper = ({
 
   const FooterToDisplay = useMemo(() => {
     if (activeContactAttempt) {
-      return <InvitationManager peerId={activeContactAttempt.peerId} />
+      return <InvitationManager key={activeContactAttempt.peerId} peerId={activeContactAttempt.peerId} />
     }
     if (activePendingKeyExchange) {
       return <PendingKxManager peerId={activePendingKeyExchange.peerId} />
