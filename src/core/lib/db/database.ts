@@ -7,7 +7,7 @@ import { generalErrorHandler } from '../../utils/general-error.js';
 import type { ContactMode, OfflineMessage } from '../../types.js';
 import type { AckMessageType, GroupOfflineMessage } from '../group/types.js';
 import { DEFAULT_BOOTSTRAP_NODES } from '../../default-bootstrap-nodes.js';
-import { PENDING_KEY_EXCHANGE_EXPIRATION } from '../../constants.js';
+import { GROUP_OFFLINE_BUCKET_PREFIX, PENDING_KEY_EXCHANGE_EXPIRATION } from '../../constants.js';
 
 export interface User {
     peer_id: string
@@ -2251,6 +2251,34 @@ export class ChatDatabase {
                 updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
             WHERE id = ?
         `).run(chatId);
+    }
+
+    resetGroupRuntimeForReinvite(chatId: number, groupId: string): void {
+        const clearChatRuntimeStmt = this.db.prepare(`
+            UPDATE chats
+            SET permanent_key = NULL,
+                group_key = NULL,
+                group_info_dht_key = NULL,
+                key_version = 0,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+            WHERE id = ?
+        `);
+        const deleteKeyHistoryStmt = this.db.prepare('DELETE FROM group_key_history WHERE group_id = ?');
+        const deleteOfflineCursorsStmt = this.db.prepare('DELETE FROM group_offline_cursors WHERE group_id = ?');
+        const deleteSenderSeqStmt = this.db.prepare('DELETE FROM group_sender_seq WHERE group_id = ?');
+        const deleteMemberSeqStmt = this.db.prepare('DELETE FROM group_member_seq WHERE group_id = ?');
+        const deleteOfflineSentStmt = this.db.prepare('DELETE FROM group_offline_sent_messages WHERE bucket_key LIKE ?');
+
+        const txn = this.db.transaction((cId: number, gId: string) => {
+            clearChatRuntimeStmt.run(cId);
+            deleteKeyHistoryStmt.run(gId);
+            deleteOfflineCursorsStmt.run(gId);
+            deleteSenderSeqStmt.run(gId);
+            deleteMemberSeqStmt.run(gId);
+            deleteOfflineSentStmt.run(`${GROUP_OFFLINE_BUCKET_PREFIX}/${gId}/%`);
+        });
+
+        txn(chatId, groupId);
     }
 
     updateGroupParticipants(chatId: number, peerIds: string[]): void {

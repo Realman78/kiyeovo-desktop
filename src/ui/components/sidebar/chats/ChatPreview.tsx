@@ -10,6 +10,7 @@ type ChatPreviewProps = {
 }
 export const ChatPreview: FC<ChatPreviewProps> = ({ chat, onSelectChat, selectedChatId }) => {
     const isAwaitingActivation = chat.type === 'group' && chat.groupStatus === 'awaiting_activation';
+    const isArchivedGroup = chat.type === 'group' && chat.groupStatus === 'removed';
     const previewText = isAwaitingActivation
         ? 'Waiting for creator activation...'
         : (chat.lastMessage || "SYSTEM: No messages yet");
@@ -24,7 +25,12 @@ export const ChatPreview: FC<ChatPreviewProps> = ({ chat, onSelectChat, selected
                 <div className="flex items-center justify-between mb-1">
                     <span className="font-medium text-sm text-sidebar-foreground truncate flex items-center gap-1.5">
                         {chat.type === 'group' && <Users className="w-3.5 h-3.5 text-primary shrink-0" />}
-                        <span className="truncate max-w-45">{chat.name}</span>
+                        {isArchivedGroup && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-500/15 text-slate-600 dark:text-slate-300 uppercase tracking-wide shrink-0">
+                                Archived
+                            </span>
+                        )}
+                        <span title={chat.name} className="truncate max-w-45">{chat.name}</span>
                         {isAwaitingActivation && (
                             <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400 uppercase tracking-wide">
                                 Awaiting Activation

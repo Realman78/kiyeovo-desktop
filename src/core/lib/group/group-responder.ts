@@ -70,34 +70,21 @@ export class GroupResponder {
     }
 
     // Check if we already have this group.
-    // If local state is terminal (removed/left/invite_expired), treat this as a re-invite
-    // and revive the existing chat row instead of dropping as duplicate.
+    // If local state is terminal (removed/left/invite_expired), keep archived chat intact
+    // and only add a fresh invite notification.
     const existing = database.getChatByGroupId(invite.groupId);
     if (existing) {
+      // `left` normally deletes the chat row, but we keep it here as a defensive
+      // compatibility guard for legacy/manual DB states.
       const canReactivate =
         existing.group_status === 'removed'
         || existing.group_status === 'left'
         || existing.group_status === 'invite_expired';
 
       if (canReactivate) {
-        database.restoreGroupChatFromInvite(existing.id, invite.inviterPeerId, invite.groupName);
-        database.deleteGroupKeyHistory(invite.groupId);
-        database.updateGroupParticipants(existing.id, [invite.inviterPeerId, this.deps.myPeerId]);
-        database.createNotification({
-          id: invite.inviteId,
-          notification_type: 'group_invitation',
-          notification_data: JSON.stringify({
-            groupId: invite.groupId,
-            groupName: invite.groupName,
-            inviterPeerId: invite.inviterPeerId,
-            inviteId: invite.inviteId,
-            expiresAt: invite.expiresAt,
-          }),
-          bucket_key: '',
-          status: 'pending',
-        });
+        this.createInviteNotificationIfMissing(invite);
         console.log(
-          `[GROUP][TRACE][INVITE][REACTIVATE] group=${invite.groupId} inviteId=${invite.inviteId} chatId=${existing.id} prevStatus=${existing.group_status}`,
+          `[GROUP][TRACE][INVITE][ARCHIVED_REINVITE] group=${invite.groupId} inviteId=${invite.inviteId} chatId=${existing.id} currentStatus=${existing.group_status}`,
         );
         try {
           await this.sendInviteDeliveredAck(invite);
@@ -150,19 +137,7 @@ export class GroupResponder {
     );
 
     // Create notification for UI
-    database.createNotification({
-      id: invite.inviteId,
-      notification_type: 'group_invitation',
-      notification_data: JSON.stringify({
-        groupId: invite.groupId,
-        groupName: invite.groupName,
-        inviterPeerId: invite.inviterPeerId,
-        inviteId: invite.inviteId,
-        expiresAt: invite.expiresAt,
-      }),
-      bucket_key: '',
-      status: 'pending',
-    });
+    this.createInviteNotificationIfMissing(invite);
 
     try {
       await this.sendInviteDeliveredAck(invite);
@@ -183,7 +158,11 @@ export class GroupResponder {
 
     const chat = database.getChatByGroupId(groupId);
     if (!chat) throw new Error(`Group ${groupId} not found`);
-    if (chat.group_status !== 'invited_pending') {
+    const isTerminalStatus =
+      chat.group_status === 'removed'
+      || chat.group_status === 'left'
+      || chat.group_status === 'invite_expired';
+    if (chat.group_status !== 'invited_pending' && !isTerminalStatus) {
       throw new Error(`Cannot respond to group ${groupId} in status ${chat.group_status}`);
     }
 
@@ -217,7 +196,9 @@ export class GroupResponder {
 
     if (Date.now() > inviteData.expiresAt) {
       database.updateNotificationStatus(inviteNotification.id, 'expired');
-      database.updateChatGroupStatus(chat.id, 'invite_expired' satisfies GroupStatus);
+      if (chat.group_status === 'invited_pending') {
+        database.updateChatGroupStatus(chat.id, 'invite_expired' satisfies GroupStatus);
+      }
       throw new Error(`Invite for group ${groupId} has expired`);
     }
     console.log(
@@ -250,12 +231,16 @@ export class GroupResponder {
 
     // Update local UI state immediately after local intent is persisted.
     database.updateNotificationStatus(inviteNotification.id, accept ? 'accepted' : 'rejected');
-    database.updateChatGroupStatus(
-      chat.id,
-      accept ? ('awaiting_activation' satisfies GroupStatus) : ('invite_expired' satisfies GroupStatus),
-    );
+    const nextGroupStatus: GroupStatus = accept
+      ? 'awaiting_activation'
+      : (chat.group_status === 'invited_pending' ? 'invite_expired' : 'removed');
+    database.updateChatGroupStatus(chat.id, nextGroupStatus);
+
+    if (accept && isTerminalStatus) {
+      database.resetGroupRuntimeForReinvite(chat.id, groupId);
+    }
     console.log(
-      `[GROUP][TRACE][RESP_SEND][LOCAL_STATE] group=${groupId} chatId=${chat.id} groupStatus=${accept ? 'awaiting_activation' : 'invite_expired'} notification=${accept ? 'accepted' : 'rejected'}`,
+      `[GROUP][TRACE][RESP_SEND][LOCAL_STATE] group=${groupId} chatId=${chat.id} groupStatus=${nextGroupStatus} notification=${accept ? 'accepted' : 'rejected'}`,
     );
 
     // Send via pairwise offline bucket to creator
@@ -739,6 +724,25 @@ export class GroupResponder {
       `[GROUP][TRACE][DELIVERED_ACK][SEND] group=${invite.groupId} inviteId=${invite.inviteId} to=${invite.inviterPeerId.slice(-8)} ackId=${signedAck.ackId}`,
     );
     await this.sendControlMessageToPeer(invite.inviterPeerId, signedAck);
+  }
+
+  private createInviteNotificationIfMissing(invite: GroupInvite): void {
+    const existingNotification = this.deps.database.getNotificationById(invite.inviteId);
+    if (existingNotification) return;
+
+    this.deps.database.createNotification({
+      id: invite.inviteId,
+      notification_type: 'group_invitation',
+      notification_data: JSON.stringify({
+        groupId: invite.groupId,
+        groupName: invite.groupName,
+        inviterPeerId: invite.inviterPeerId,
+        inviteId: invite.inviteId,
+        expiresAt: invite.expiresAt,
+      }),
+      bucket_key: '',
+      status: 'pending',
+    });
   }
 
   // --- Helpers ---
