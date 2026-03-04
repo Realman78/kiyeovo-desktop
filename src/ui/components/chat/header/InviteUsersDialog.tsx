@@ -234,8 +234,8 @@ export const InviteUsersDialog = ({
                 )}
               </div>
               <p className="text-xs text-muted-foreground mt-2">
-                {maxSelectable > 0
-                  ? `You can invite up to ${maxSelectable} more ${maxSelectable === 1 ? 'user' : 'users'}.`
+                {Math.max(0, maxSelectable - selectedPeerIds.size) > 0
+                  ? `You can invite up to ${Math.max(0, maxSelectable - selectedPeerIds.size)} more ${Math.max(0, maxSelectable - selectedPeerIds.size) === 1 ? 'user' : 'users'}.`
                   : 'Group member limit reached.'}
               </p>
             </div>

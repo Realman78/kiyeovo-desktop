@@ -578,7 +578,13 @@ export class GroupCreator {
         this.deps.onRegisterPrevEpochGrace?.(groupId, prevVersion);
       }
 
-      const roster = this.buildRoster(chatParticipants.map((p) => p.peer_id));
+      const postRotationPeerIds = preRotationParticipants.filter((peerId) => peerId !== targetPeerId);
+      const roster = this.buildRoster(postRotationPeerIds);
+      const includesTargetInRoster = roster.some((entry) => entry.peerId === targetPeerId);
+      console.log(
+        `[GROUP][TRACE][KICK][ROSTER] group=${groupId} keyVersion=${keyVersion} ` +
+        `count=${roster.length} includesTarget=${includesTargetInRoster}`,
+      );
 
       await this.sendGroupStateUpdate(
         groupId,

@@ -769,7 +769,7 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
                         type="button"
                         disabled={isKickingMember}
                         onClick={() => setSelectedKickPeerId(member.peerId)}
-                        className={`w-full px-3 py-2.5 text-left border-b border-border last:border-b-0 transition-colors ${
+                        className={`cursor-pointer w-full px-3 py-2.5 text-left border-b border-border last:border-b-0 transition-colors ${
                           isSelected ? 'bg-destructive/10 text-destructive' : 'hover:bg-secondary/50'
                         }`}
                       >
