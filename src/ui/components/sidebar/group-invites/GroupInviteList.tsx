@@ -59,6 +59,7 @@ export const GroupInviteList: FC = () => {
                 id: dbGroupChat.id,
                 type: dbGroupChat.type,
                 name: dbGroupChat.name,
+                groupId: dbGroupChat.group_id,
                 peerId: dbGroupChat.other_peer_id,
                 lastMessage: dbGroupChat.last_message_content || 'SYSTEM: No messages yet',
                 lastMessageTimestamp: dbGroupChat.last_message_timestamp
@@ -79,6 +80,8 @@ export const GroupInviteList: FC = () => {
                   id: mappedGroupChat.id,
                   updates: {
                     name: mappedGroupChat.name,
+                    groupId: mappedGroupChat.groupId,
+                    peerId: mappedGroupChat.peerId,
                     lastMessage: mappedGroupChat.lastMessage,
                     lastMessageTimestamp: mappedGroupChat.lastMessageTimestamp,
                     status: mappedGroupChat.status,

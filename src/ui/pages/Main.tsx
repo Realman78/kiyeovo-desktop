@@ -105,11 +105,33 @@ export const Main = () => {
         })();
         return;
       }
-
-      dispatch(updateChat({
-        id: data.chatId,
-        updates: { status: 'active', groupStatus: 'active', fetchedOffline: false, isFetchingOffline: false },
-      }));
+      void (async () => {
+        try {
+          const result = await window.kiyeovoAPI.getChatById(data.chatId);
+          if (result.success && result.chat) {
+            const dbChat = result.chat;
+            dispatch(updateChat({
+              id: data.chatId,
+              updates: {
+                name: dbChat.type === 'group' ? dbChat.name : (dbChat.username || dbChat.name),
+                groupId: dbChat.group_id,
+                peerId: dbChat.other_peer_id,
+                status: 'active',
+                groupStatus: 'active',
+                fetchedOffline: false,
+                isFetchingOffline: false,
+              },
+            }));
+            return;
+          }
+        } catch (error) {
+          console.error(`[UI] Failed to hydrate activated group chat ${data.chatId}:`, error);
+        }
+        dispatch(updateChat({
+          id: data.chatId,
+          updates: { status: 'active', groupStatus: 'active', fetchedOffline: false, isFetchingOffline: false },
+        }));
+      })();
     });
 
     // Group members updated — creator/member-side roster changes.
@@ -150,6 +172,9 @@ export const Main = () => {
           dispatch(updateChat({
             id: data.chatId,
             updates: {
+              name: dbChat.type === 'group' ? dbChat.name : (dbChat.username || dbChat.name),
+              groupId: dbChat.group_id,
+              peerId: dbChat.other_peer_id,
               status: dbChat.status,
               groupStatus: dbChat.group_status,
             },

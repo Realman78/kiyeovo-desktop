@@ -601,6 +601,11 @@ export class GroupResponder {
 
     const currentKeyVersion = chat.key_version ?? 0;
     if (chat.group_status === 'removed') {
+      this.deps.onGroupMembersUpdated?.({
+        chatId: chat.id,
+        groupId: kick.groupId,
+        memberPeerId: kick.kickedPeerId,
+      });
       await this.sendControlAck(
         creatorPeerId,
         kick.groupId,
@@ -626,6 +631,11 @@ export class GroupResponder {
     }
 
     this.applyLocalGroupRemovedState(chat.id, kick.groupId);
+    this.deps.onGroupMembersUpdated?.({
+      chatId: chat.id,
+      groupId: kick.groupId,
+      memberPeerId: kick.kickedPeerId,
+    });
     await this.appendMembershipSystemMessage(
       chat.id,
       kick.groupId,

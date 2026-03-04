@@ -1,19 +1,19 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { finalizeSendingMessage, setMessages, updateChat, updateLocalMessageSendState, type ChatMessage } from "../../../state/slices/chatSlice";
 import type { RootState } from "../../../state/store";
 import { useDispatch, useSelector } from "react-redux";
 import { formatTimestampToHourMinute } from "../../../utils/dateUtils";
 import { PendingNotifications } from "./PendingNotifications";
-import { FileMessage } from "./FileMessage";
+import { MessageRow } from "./MessageRow";
 import type { MessageSentStatus } from "../../../types";
 import { FILE_ACCEPTANCE_TIMEOUT, SHOW_TIMESTAMP_INTERVAL } from "../../../constants";
-import { Info, Loader2 } from "lucide-react";
 import { useToast } from "../../ui/use-toast";
 
 type MessagesContainerProps = {
   messages: ChatMessage[];
   isPending: boolean;
 }
+
 export const MessagesContainer = ({ messages, isPending }: MessagesContainerProps) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const myPeerId = useSelector((state: RootState) => state.user.peerId);
@@ -23,7 +23,6 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
   const { toast } = useToast();
 
   const [error, setError] = useState<string | null>(null);
-  const [nowTs, setNowTs] = useState(Date.now());
 
   const parseFileContent = (content: string | null | undefined): { fileName?: string; fileSize?: number } => {
     if (!content) return {};
@@ -49,14 +48,6 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
     }
     return `${message.content} at ${formatTimestampToHourMinute(message.eventTimestamp)}.${normalized.includes('joined the group') ? ' This member can only see your messages after this system message, not strictly after the join time.' : ''}`;
   };
-
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setNowTs(Date.now());
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
 
   useEffect(() => {
     const fetchMessages = async () => {
@@ -142,7 +133,7 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
   let previousSenderPeerId: string | null = null;
   let senderStreak = 0;
 
-  const handleRetryFailedMessage = async (message: ChatMessage) => {
+  const handleRetryFailedMessage = useCallback(async (message: ChatMessage) => {
     if (!activeChat) return;
     const retryBlockedByRekeyCooldown =
       message.failedReason === 'group_rekeying' &&
@@ -233,7 +224,7 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
       dispatch(updateLocalMessageSendState({ messageId: message.id, state: 'failed' }));
       toast.error(err instanceof Error ? err.message : 'Unexpected resend error');
     }
-  };
+  }, [activeChat, dispatch, toast]);
 
   return <div className={`flex-1 overflow-y-auto p-6 space-y-2`}>
     {showEmptyState && (
@@ -272,127 +263,41 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
       </div>
     </div>}
     {messages.map((message, index) => {
-      if (message.senderPeerId === previousSenderPeerId) {
-        senderStreak += 1;
-      } else {
-        previousSenderPeerId = message.senderPeerId;
-        senderStreak = 1;
+      const isSystemMessage = message.messageType === 'system';
+      if (isSystemMessage) {
+        // Break sender grouping across system events.
+        previousSenderPeerId = null;
+        senderStreak = 0;
       }
 
       const senderChanged =
-        index === 0 || messages[index - 1].senderPeerId !== message.senderPeerId;
+        !isSystemMessage && (previousSenderPeerId === null || previousSenderPeerId !== message.senderPeerId);
+      if (!isSystemMessage) {
+        senderStreak = senderChanged ? 1 : senderStreak + 1;
+        previousSenderPeerId = message.senderPeerId;
+      }
+
       const hasPendingSendState = !!message.localSendState;
       const showTimestamp =
         hasPendingSendState ||
         senderChanged ||
-        message.timestamp - messages[index - 1].timestamp > SHOW_TIMESTAMP_INTERVAL;
+        (index > 0 && message.timestamp - messages[index - 1].timestamp > SHOW_TIMESTAMP_INTERVAL);
       const showSenderLabel =
+        !isSystemMessage &&
         message.senderPeerId !== myPeerId &&
         !!activeChat?.groupId &&
         (senderChanged || senderStreak % 10 === 0);
-      const isSystemMessage = message.messageType === 'system';
-      const rekeyRetryRemainingMs =
-        message.localSendState === 'failed' &&
-        message.failedReason === 'group_rekeying' &&
-        message.retryAfterTs
-          ? Math.max(0, message.retryAfterTs - nowTs)
-          : 0;
-      const isRetryBlocked = rekeyRetryRemainingMs > 0;
-
-      if (isSystemMessage) {
-        const membershipInfoTooltip = getMembershipInfoTooltip(message);
-        return (
-          <div key={message.id} className="w-full flex flex-col items-center animate-fade-in">
-            <div
-              className="max-w-[80%] rounded-md px-3 py-1.5 bg-muted/50 text-muted-foreground text-xs text-center"
-              style={{ wordBreak: "break-word" }}
-            >
-              {message.content}
-            </div>
-            <span className="text-xs text-muted-foreground mt-1 font-mono inline-flex items-center gap-1">
-              {formatTimestampToHourMinute(message.timestamp)}
-              {membershipInfoTooltip && (
-                <span className="relative inline-flex items-center group">
-                  <button
-                    type="button"
-                    className="inline-flex items-center justify-center rounded-full p-0.5 hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    aria-label={membershipInfoTooltip}
-                  >
-                    <Info className="w-3 h-3" />
-                  </button>
-                  <span className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 hidden w-72 -translate-x-1/2 rounded-md border bg-popover px-2 py-1.5 text-left text-[11px] text-popover-foreground shadow-md group-hover:block group-focus-within:block">
-                    {membershipInfoTooltip}
-                  </span>
-                </span>
-              )}
-            </span>
-          </div>
-        );
-      }
-
       return (
-        <div
+        <MessageRow
           key={message.id}
-          className={`flex flex-col animate-fade-in ${message.senderPeerId === myPeerId || !!activePendingKeyExchange ? "items-end" : "items-start"}`}
-        >
-          {showSenderLabel &&
-            <span className="text-xs text-muted-foreground font-mono">{message.senderUsername ?? message.senderPeerId}</span>
-          }
-          <div
-            className={`max-w-[70%] rounded-lg px-4 py-2.5 ${message.senderPeerId === myPeerId || !!activePendingKeyExchange ? "bg-message-sent text-message-sent-foreground rounded-br-sm" : "bg-message-received text-message-received-foreground rounded-bl-sm"}`}
-            style={{ wordBreak: "break-word" }}
-          >
-            {message.messageType === 'file' && message.fileName ? (
-              <FileMessage
-                fileId={message.id}
-                chatId={message.chatId}
-                fileName={message.fileName}
-                fileSize={message.fileSize || 0}
-                filePath={message.filePath}
-                transferStatus={message.transferStatus || 'pending'}
-                transferProgress={message.transferProgress}
-                transferError={message.transferError}
-                transferExpiresAt={message.transferExpiresAt}
-                isFromCurrentUser={message.senderPeerId === myPeerId}
-              />
-            ) : (
-              <p className="text-sm text-left leading-relaxed">{message.content}</p>
-            )}
-          </div>
-          {showTimestamp && (
-            <span className="text-xs text-muted-foreground mt-1 font-mono inline-flex items-center gap-1">
-              {formatTimestampToHourMinute(message.timestamp)}
-              {message.localSendState === 'sending' && (
-                <>
-                  <span>•</span>
-                  <Loader2 className="w-3 h-3 animate-spin" />
-                  <span>Sending...</span>
-                </>
-              )}
-              {message.localSendState === 'queued' && " • Queued for sending"}
-              {message.localSendState === 'failed' && (isRetryBlocked
-                ? ` • Group membership updating (${Math.ceil(rekeyRetryRemainingMs / 1000)}s)`
-                : " • Failed to send")}
-              {!message.localSendState && message.messageSentStatus === 'offline' && " • offline"}
-              {message.localSendState === 'failed' && (
-                <>
-                  <span>•</span>
-                  <button
-                    type="button"
-                    className="underline underline-offset-2 hover:text-foreground"
-                    disabled={isRetryBlocked}
-                    title={isRetryBlocked
-                      ? 'Group is rekeying. Retry is temporarily disabled to avoid fallback-only delivery.'
-                      : undefined}
-                    onClick={() => { void handleRetryFailedMessage(message); }}
-                  >
-                    {isRetryBlocked ? `Retry in ${Math.ceil(rekeyRetryRemainingMs / 1000)}s` : 'Retry'}
-                  </button>
-                </>
-              )}
-            </span>
-          )}
-        </div>
+          message={message}
+          myPeerId={myPeerId}
+          hasActivePendingKeyExchange={!!activePendingKeyExchange}
+          showSenderLabel={showSenderLabel}
+          showTimestamp={showTimestamp}
+          membershipInfoTooltip={getMembershipInfoTooltip(message)}
+          onRetry={handleRetryFailedMessage}
+        />
       );
     })}
     <div ref={messagesEndRef} />
