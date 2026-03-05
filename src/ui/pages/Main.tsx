@@ -367,7 +367,7 @@ export const Main = () => {
             .slice(0, 15);
 
           const topGroupChatIds = startupChats
-            .filter((c: any) => c.type === 'group' && c.groupStatus === 'active')
+            .filter((c: any) => c.type === 'group' && (c.groupStatus === 'active' || c.groupStatus === 'rekeying' || c.groupStatus === 'removed'))
             .map((chat: any) => chat.id);
           const topDirectChatIds = startupChats
             .filter((c: any) => c.type === 'direct')
@@ -470,7 +470,8 @@ export const Main = () => {
             }
           };
 
-          await Promise.allSettled([groupCheckTask(), directCheckTask()]);
+          await directCheckTask();
+          await groupCheckTask();
         } else {
           console.error('[UI] Failed to fetch chats:', result.error);
         }

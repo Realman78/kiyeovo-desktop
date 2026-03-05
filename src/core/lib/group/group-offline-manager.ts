@@ -278,11 +278,16 @@ export class GroupOfflineManager {
   }
 
   private resolveTargetChats(chatIds?: number[]): Chat[] {
+    const allowRemovedForExplicitChecks = !!chatIds && chatIds.length > 0;
     const groups = this.deps.database.getAllGroupChats(CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES * 5)
       .filter(c =>
         c.type === 'group'
         && !!c.group_id
-        && (c.group_status === 'active' || c.group_status === 'rekeying')
+        && (
+          c.group_status === 'active'
+          || c.group_status === 'rekeying'
+          || (allowRemovedForExplicitChecks && c.group_status === 'removed')
+        )
         && (c.key_version ?? 0) > 0,
       );
 
@@ -346,22 +351,23 @@ export class GroupOfflineManager {
           `reason=old_epoch_missing_used_until`
         );
       }
-      const isActiveEpoch = epoch.key_version === (chat.key_version ?? 0);
-      const versionMeta = isActiveEpoch
+      const metaKeyVersion = this.resolveEpochBoundaryMetaVersion(chat, epoch.key_version);
+      const versionMeta = metaKeyVersion === null
         ? null
-        : await this.getVersionMeta(chat, epoch.key_version);
+        : await this.getVersionMeta(chat, metaKeyVersion);
       const metaMs = Date.now() - metaStart;
       const skipDecision = this.evaluateEpochSkipDecision(chat, epoch, versionMeta);
       if (skipDecision.skip) {
         console.log(
           `[GROUP-OFFLINE][TIMING][CHAT:${chat.id}] epoch=${epoch.key_version} skipped ` +
-          `reason=${skipDecision.reason} metaMs=${metaMs} totalMs=${Date.now() - epochStart}`
+          `reason=${skipDecision.reason} metaKeyVersion=${metaKeyVersion ?? 'none'} ` +
+          `metaMs=${metaMs} totalMs=${Date.now() - epochStart}`
         );
         continue;
       }
       console.log(
         `[GROUP-OFFLINE][TIMING][CHAT:${chat.id}] epoch=${epoch.key_version} scanning ` +
-        `reason=${skipDecision.reason} metaMs=${metaMs}`
+        `reason=${skipDecision.reason} metaKeyVersion=${metaKeyVersion ?? 'none'} metaMs=${metaMs}`
       );
 
       const keyBase64 = this.deps.database.getGroupKeyForEpoch(chat.group_id, epoch.key_version);
@@ -548,6 +554,13 @@ export class GroupOfflineManager {
         `metaMs=${metaMs} storeFetchMs=${storesFetchMs} senderBuckets=${senderStores.length} ` +
         `delivered=${epochMessagesDelivered} totalMs=${Date.now() - epochStart}`
       );
+
+      if (this.canEpochBePrunedWithoutMeta(chat, epoch)) {
+        const pruneDecision = this.evaluateEpochPruneDecision(chat, epoch, versionMeta);
+        if (pruneDecision.prune) {
+          this.pruneEpochState(chat, epoch, pruneDecision.reason);
+        }
+      }
     }
 
     console.log(
@@ -847,23 +860,12 @@ export class GroupOfflineManager {
     const localKnownSenders = this.getLocalKnownEpochSenders(chat, keyVersion);
 
     if (versionMeta) {
-      const epochMembers = (versionMeta.members ?? [])
-        .filter((peerId) => peerId !== this.deps.myPeerId);
       const boundaries = versionMeta.senderSeqBoundaries ?? {};
       const boundarySenders = Object.keys(boundaries)
         .filter((peerId) => peerId !== this.deps.myPeerId);
-
-      if (epochMembers.length === 0) {
-        return [];
-      }
-
-      const hasBoundariesForAllEpochMembers = epochMembers.every((peerId) => boundaries[peerId] !== undefined);
-      if (hasBoundariesForAllEpochMembers) {
+      if (boundarySenders.length > 0) {
         return [...new Set([...boundarySenders, ...localKnownSenders])];
       }
-
-      // Metadata exists but boundaries are incomplete: be conservative and scan epoch members.
-      return [...new Set([...epochMembers, ...localKnownSenders])];
     }
 
     if (localKnownSenders.length > 0) {
@@ -873,6 +875,15 @@ export class GroupOfflineManager {
     // Metadata unavailable: fallback to participant roster to avoid losing messages.
     // This is broader, but safe.
     return participants;
+  }
+
+  private resolveEpochBoundaryMetaVersion(chat: Chat, epochKeyVersion: number): number | null {
+    const currentKeyVersion = chat.key_version ?? 0;
+    if (epochKeyVersion >= currentKeyVersion) {
+      return null;
+    }
+    const candidate = epochKeyVersion + 1;
+    return candidate <= currentKeyVersion ? candidate : null;
   }
 
   private getLocalKnownEpochSenders(chat: Chat, keyVersion: number): string[] {
@@ -1020,7 +1031,10 @@ export class GroupOfflineManager {
       if (!this.canEpochBePrunedWithoutMeta(chat, epoch)) {
         continue;
       }
-      const versionMeta = await this.getVersionMeta(chat, epoch.key_version);
+      const metaKeyVersion = this.resolveEpochBoundaryMetaVersion(chat, epoch.key_version);
+      const versionMeta = metaKeyVersion === null
+        ? null
+        : await this.getVersionMeta(chat, metaKeyVersion);
       const pruneDecision = this.evaluateEpochPruneDecision(chat, epoch, versionMeta);
       if (!pruneDecision.prune) {
         console.log(
@@ -1028,26 +1042,37 @@ export class GroupOfflineManager {
         );
         continue;
       }
-
-      this.deps.database.deleteGroupOfflineCursorsForEpoch(chat.group_id, epoch.key_version);
-      this.deps.database.deleteGroupKeyHistoryForEpoch(chat.group_id, epoch.key_version);
-      this.deps.database.deleteGroupSenderSeqForEpoch(chat.group_id, epoch.key_version);
-      this.deps.database.deleteGroupMemberSeqsForEpoch(chat.group_id, epoch.key_version);
-
-      const versionMetaCacheKey = `${chat.group_id}:${epoch.key_version}`;
-      this.versionMetaCache.delete(versionMetaCacheKey);
-
-      const bucketPrefix = `${GROUP_OFFLINE_BUCKET_PREFIX}/${chat.group_id}/${epoch.key_version}/`;
-      this.deps.database.deleteGroupOfflineSentMessagesByPrefix(bucketPrefix);
-      for (const bucketKey of this.localStoreCache.keys()) {
-        if (bucketKey.startsWith(bucketPrefix)) {
-          this.localStoreCache.delete(bucketKey);
-        }
-      }
-      console.log(
-        `[GROUP-OFFLINE][TIMING][PRUNE][CHAT:${chat.id}] epoch=${epoch.key_version} action=pruned`
-      );
+      this.pruneEpochState(chat, epoch, pruneDecision.reason);
     }
+  }
+
+  private pruneEpochState(
+    chat: Chat,
+    epoch: { key_version: number; used_until: number | null },
+    reason: string,
+  ): void {
+    if (!chat.group_id) return;
+
+    this.deps.database.deleteGroupOfflineCursorsForEpoch(chat.group_id, epoch.key_version);
+    this.deps.database.deleteGroupKeyHistoryForEpoch(chat.group_id, epoch.key_version);
+    this.deps.database.deleteGroupSenderSeqForEpoch(chat.group_id, epoch.key_version);
+    this.deps.database.deleteGroupMemberSeqsForEpoch(chat.group_id, epoch.key_version);
+
+    const epochMetaCacheKey = `${chat.group_id}:${epoch.key_version}`;
+    this.versionMetaCache.delete(epochMetaCacheKey);
+    const successorMetaCacheKey = `${chat.group_id}:${epoch.key_version + 1}`;
+    this.versionMetaCache.delete(successorMetaCacheKey);
+
+    const bucketPrefix = `${GROUP_OFFLINE_BUCKET_PREFIX}/${chat.group_id}/${epoch.key_version}/`;
+    this.deps.database.deleteGroupOfflineSentMessagesByPrefix(bucketPrefix);
+    for (const bucketKey of this.localStoreCache.keys()) {
+      if (bucketKey.startsWith(bucketPrefix)) {
+        this.localStoreCache.delete(bucketKey);
+      }
+    }
+    console.log(
+      `[GROUP-OFFLINE][TIMING][PRUNE][CHAT:${chat.id}] epoch=${epoch.key_version} action=pruned reason=${reason}`
+    );
   }
 
   private canEpochBePrunedWithoutMeta(

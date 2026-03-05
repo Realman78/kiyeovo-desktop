@@ -549,18 +549,22 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
             >
               About group
             </DropdownMenuItem>
-            <DropdownMenuItem
-              icon={activeChat?.muted ? <Bell className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
-              onClick={handleToggleMute}
-            >
-              {activeChat?.muted ? 'Enable notifications' : 'Disable notifications'}
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              icon={<RefreshCw className="w-4 h-4" />}
-              onClick={handleCheckMissedGroupMessages}
-            >
-              Check missed messages
-            </DropdownMenuItem>
+            {groupStatus === 'active' && (
+              <DropdownMenuItem
+                icon={activeChat?.muted ? <Bell className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
+                onClick={handleToggleMute}
+              >
+                {activeChat?.muted ? 'Enable notifications' : 'Disable notifications'}
+              </DropdownMenuItem>
+            )}
+            {groupStatus === 'active' && (
+              <DropdownMenuItem
+                icon={<RefreshCw className="w-4 h-4" />}
+                onClick={handleCheckMissedGroupMessages}
+              >
+                Check missed messages
+              </DropdownMenuItem>
+            )}
             {groupStatus === 'active' && isCurrentUserGroupCreator && (
               <DropdownMenuItem
                 icon={<UserPlus className="w-4 h-4" />}
@@ -769,9 +773,8 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
                         type="button"
                         disabled={isKickingMember}
                         onClick={() => setSelectedKickPeerId(member.peerId)}
-                        className={`cursor-pointer w-full px-3 py-2.5 text-left border-b border-border last:border-b-0 transition-colors ${
-                          isSelected ? 'bg-destructive/10 text-destructive' : 'hover:bg-secondary/50'
-                        }`}
+                        className={`cursor-pointer w-full px-3 py-2.5 text-left border-b border-border last:border-b-0 transition-colors ${isSelected ? 'bg-destructive/10 text-destructive' : 'hover:bg-secondary/50'
+                          }`}
                       >
                         {member.username}
                       </button>

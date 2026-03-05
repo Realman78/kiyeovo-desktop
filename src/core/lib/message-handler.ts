@@ -55,6 +55,8 @@ export class MessageHandler {
   private nudgeTrailingTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private nudgeFetchTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private groupNudgeFetchTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private groupStateCatchupInFlight = new Set<number>();
+  private groupStateCatchupPending = new Map<number, { groupId: string; targetKeyVersion: number; reason: string }>();
   private peerActivityCheckCooldowns = new Map<string, number>();
   private groupAckRepublishTimer: ReturnType<typeof setTimeout> | null = null;
   private groupAckStartupTimer: ReturnType<typeof setTimeout> | null = null;
@@ -426,6 +428,68 @@ export class MessageHandler {
       }
     } catch (error: unknown) {
       generalErrorHandler(error, `[NUDGE] Failed group offline bucket check for ${remoteId.slice(-8)} group=${groupId.slice(0, 8)}`);
+    }
+  }
+
+  private scheduleGroupStateUpdateCatchup(chatId: number, groupId: string, reason: string): void {
+    const targetKeyVersion = this.database.getChatByGroupId(groupId)?.key_version ?? 0;
+    const pending = this.groupStateCatchupPending.get(chatId);
+    if (!pending || targetKeyVersion >= pending.targetKeyVersion) {
+      this.groupStateCatchupPending.set(chatId, { groupId, targetKeyVersion, reason });
+    }
+
+    if (this.groupStateCatchupInFlight.has(chatId)) {
+      console.log(
+        `[GROUP-OFFLINE][STATE-CATCHUP][QUEUED] chatId=${chatId} group=${groupId.slice(0, 8)} ` +
+        `reason=in_flight trigger=${reason} targetKeyVersion=${targetKeyVersion}`,
+      );
+      return;
+    }
+
+    void this.runQueuedGroupStateCatchup(chatId);
+  }
+
+  private async runQueuedGroupStateCatchup(chatId: number): Promise<void> {
+    while (true) {
+      const pending = this.groupStateCatchupPending.get(chatId);
+      if (!pending) {
+        return;
+      }
+      this.groupStateCatchupPending.delete(chatId);
+
+      const { groupId, reason, targetKeyVersion } = pending;
+      const preCheckVersion = this.database.getChatByGroupId(groupId)?.key_version ?? targetKeyVersion;
+      this.groupStateCatchupInFlight.add(chatId);
+      const startedAt = Date.now();
+
+      try {
+        console.log(
+          `[GROUP-OFFLINE][STATE-CATCHUP][START] chatId=${chatId} group=${groupId.slice(0, 8)} ` +
+          `trigger=${reason} targetKeyVersion=${targetKeyVersion} preCheckVersion=${preCheckVersion}`,
+        );
+        const { checkedChatIds, unreadFromChats, gapWarnings } = await this.checkGroupOfflineMessages([chatId]);
+        const unread = unreadFromChats.get(chatId) ?? 0;
+        console.log(
+          `[GROUP-OFFLINE][STATE-CATCHUP][DONE] chatId=${chatId} group=${groupId.slice(0, 8)} ` +
+          `checked=${checkedChatIds.length} unread=${unread} gaps=${gapWarnings.length} took=${Date.now() - startedAt}ms`,
+        );
+        if (checkedChatIds.length > 0 && unread > 0) {
+          this.onOfflineMessagesFetchComplete?.(checkedChatIds);
+        }
+      } catch (error: unknown) {
+        generalErrorHandler(error, `[GROUP-OFFLINE] State-update catch-up failed for chat ${chatId}`);
+      } finally {
+        this.groupStateCatchupInFlight.delete(chatId);
+      }
+
+      const postCheckVersion = this.database.getChatByGroupId(groupId)?.key_version ?? preCheckVersion;
+      if (postCheckVersion > preCheckVersion && !this.groupStateCatchupPending.has(chatId)) {
+        this.groupStateCatchupPending.set(chatId, {
+          groupId,
+          reason: 'version_advanced_during_catchup',
+          targetKeyVersion: postCheckVersion,
+        });
+      }
     }
   }
 
@@ -1339,6 +1403,8 @@ export class MessageHandler {
     this.nudgeTrailingTimers.clear();
     this.nudgeFetchTimers.clear();
     this.groupNudgeFetchTimers.clear();
+    this.groupStateCatchupInFlight.clear();
+    this.groupStateCatchupPending.clear();
     this.peerActivityCheckCooldowns.clear();
 
     if (this.cleanupPeerEvents) {
@@ -1490,9 +1556,22 @@ export class MessageHandler {
         }
         case GroupMessageType.GROUP_STATE_UPDATE: {
           const responder = new GroupResponder(deps);
-          await responder.handleGroupStateUpdate(parsed as any);
           const groupId = (parsed as { groupId: string }).groupId;
+          const beforeUpdateChat = this.database.getChatByGroupId(groupId);
+          const previousKeyVersion = beforeUpdateChat?.key_version ?? 0;
+          const previousGroupStatus = beforeUpdateChat?.group_status ?? null;
+          await responder.handleGroupStateUpdate(parsed as any);
           const updatedChat = this.database.getChatByGroupId(groupId);
+          const keyVersionAdvanced = (updatedChat?.key_version ?? 0) > previousKeyVersion;
+          const becameRemoved = updatedChat?.group_status === 'removed';
+          if (updatedChat && (keyVersionAdvanced || becameRemoved || previousGroupStatus === 'rekeying')) {
+            const trigger = keyVersionAdvanced
+              ? 'key_version_advanced'
+              : becameRemoved
+                ? 'became_removed'
+                : 'was_rekeying';
+            this.scheduleGroupStateUpdateCatchup(updatedChat.id, groupId, trigger);
+          }
           if (updatedChat?.group_status === 'removed' || updatedChat?.group_status === 'left') {
             this.groupMessaging.deactivateGroup(groupId);
           } else {

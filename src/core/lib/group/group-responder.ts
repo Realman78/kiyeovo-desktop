@@ -862,12 +862,9 @@ export class GroupResponder {
   private applyLocalGroupRemovedState(chatId: number, groupId: string): void {
     const { database, myPeerId } = this.deps;
     database.updateChatGroupStatus(chatId, 'removed' satisfies GroupStatus);
-    database.clearGroupChatRuntimeState(chatId);
     database.removePendingAcksForGroup(groupId);
     database.removeInviteDeliveryAcksForMember(groupId, myPeerId);
-    database.deleteGroupOfflineCursors(groupId);
-    database.deleteGroupSenderSeqs(groupId);
-    database.deleteGroupMemberSeqs(groupId);
+    // Keep cursors/seqs so post-removal catch-up can resume without rescanning from scratch.
     database.deleteGroupOfflineSentMessagesByPrefix(`${GROUP_OFFLINE_BUCKET_PREFIX}/${groupId}/`);
   }
 
