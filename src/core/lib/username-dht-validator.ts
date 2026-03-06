@@ -5,7 +5,7 @@ import {
   canonicalUsernameRegistrationPayloadJson,
   isUsernameRegistrationRecord,
   verifyUsernameRegistrationSignature,
-} from './username-record';
+} from './username-record.js';
 
 type UsernameKeyKind = 'by-name' | 'by-peer';
 

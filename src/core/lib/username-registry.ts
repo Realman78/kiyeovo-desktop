@@ -10,7 +10,7 @@ import {
   isUsernameRegistrationRecord,
   signUsernameRegistrationPayload,
   verifyUsernameRegistrationSignature,
-} from './username-record';
+} from './username-record.js';
 
 export class UsernameRegistry {
   private static readonly USERNAME_REGEX = /^[A-Za-z0-9_]+$/;
