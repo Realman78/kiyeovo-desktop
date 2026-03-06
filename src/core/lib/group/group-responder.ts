@@ -1,11 +1,12 @@
 import { randomUUID, privateDecrypt } from 'crypto';
 import { ed25519 } from '@noble/curves/ed25519';
+import type { QueryEvent } from '@libp2p/kad-dht';
 import type { ChatNode, GroupChatActivatedEvent, GroupMembersUpdatedEvent, MessageReceivedEvent } from '../../types.js';
 import type { ChatDatabase } from '../db/database.js';
 import type { EncryptedUserIdentity } from '../encrypted-user-identity.js';
 import { OfflineMessageManager } from '../offline-message-manager.js';
 import { toBase64Url } from '../base64url.js';
-import { GROUP_OFFLINE_BUCKET_PREFIX } from '../../constants.js';
+import { GROUP_INFO_LATEST_PREFIX, GROUP_INFO_VERSION_PREFIX, GROUP_OFFLINE_BUCKET_PREFIX } from '../../constants.js';
 import {
   GroupMessageType,
   type GroupInvite,
@@ -17,6 +18,8 @@ import {
   type GroupLeaveRequest,
   type GroupKick,
   type GroupControlAck,
+  type GroupInfoLatest,
+  type GroupInfoVersioned,
   type GroupStatus,
 } from './types.js';
 
@@ -450,6 +453,7 @@ export class GroupResponder {
     console.log(
       `[GROUP][TRACE][WELCOME][DONE] group=${welcome.groupId} msgId=${welcome.messageId} ackSent=true`,
     );
+    void this.syncGroupInfoChainFromDht(welcome.groupId, chat.id, welcome.keyVersion, creator.signing_public_key);
   }
 
   async handleGroupStateUpdate(update: GroupStateUpdate): Promise<void> {
@@ -589,6 +593,7 @@ export class GroupResponder {
     console.log(
       `[GROUP][TRACE][STATE_UPDATE][APPLY] group=${update.groupId} msgId=${update.messageId} keyVersion=${update.keyVersion} rosterSize=${update.roster.length} event=${update.event} target=${update.targetPeerId.slice(-8)}`,
     );
+    void this.syncGroupInfoChainFromDht(update.groupId, chat.id, update.keyVersion, creator.signing_public_key);
   }
 
   async handleGroupKick(kick: GroupKick): Promise<boolean> {
@@ -844,6 +849,293 @@ export class GroupResponder {
     const ackedMessageId = typeof m.ackedMessageId === 'string' ? m.ackedMessageId : 'n/a';
     const ackId = typeof m.ackId === 'string' ? m.ackId : 'n/a';
     return `type=${type} group=${groupId} inviteId=${inviteId} msgId=${messageId} ackedMsgId=${ackedMessageId} ackId=${ackId}`;
+  }
+
+  private async syncGroupInfoChainFromDht(
+    groupId: string,
+    chatId: number,
+    localKeyVersion: number,
+    creatorSigningPubKeyBase64: string,
+  ): Promise<void> {
+    const history = this.deps.database
+      .getGroupKeyHistory(groupId)
+      .filter((row) => row.key_version <= localKeyVersion);
+    if (history.length === 0) return;
+
+    const historyByVersion = new Map<number, typeof history[number]>();
+    for (const row of history) {
+      historyByVersion.set(row.key_version, row);
+    }
+
+    const missingLocalVersions: number[] = [];
+    for (const row of history) {
+      const needsStateHash = !row.state_hash;
+      const needsUsedUntil = row.key_version < localKeyVersion && row.used_until == null;
+      if (needsStateHash || needsUsedUntil) {
+        missingLocalVersions.push(row.key_version);
+      }
+    }
+    if (missingLocalVersions.length === 0) {
+      console.log(
+        `[GROUP-INFO][SYNC][SKIP] group=${groupId} chatId=${chatId} reason=already_synced localKeyVersion=${localKeyVersion}`,
+      );
+      return;
+    }
+    console.log(
+      `[GROUP-INFO][SYNC][START] group=${groupId} chatId=${chatId} localKeyVersion=${localKeyVersion} missingEpochs=${missingLocalVersions.length}`,
+    );
+
+    const creatorPubBytes = Buffer.from(creatorSigningPubKeyBase64, 'base64');
+    const creatorPubKeyBase64url = toBase64Url(creatorPubBytes);
+    const latestDhtKey = `${GROUP_INFO_LATEST_PREFIX}/${groupId}/${creatorPubKeyBase64url}`;
+    const latest = await this.fetchLatestGroupInfoRecord(latestDhtKey, groupId, creatorPubBytes);
+    if (!latest) {
+      console.log(
+        `[GROUP-INFO][SYNC][SKIP] group=${groupId} chatId=${chatId} reason=latest_unavailable`,
+      );
+      return;
+    }
+
+    const latestVersion = latest.latestVersion;
+    if (latestVersion < 1) {
+      console.log(
+        `[GROUP-INFO][SYNC][SKIP] group=${groupId} chatId=${chatId} reason=latest_version_invalid latestVersion=${latestVersion}`,
+      );
+      return;
+    }
+
+    const maxRelevantVersion = Math.min(latestVersion, localKeyVersion);
+    const minMissingVersion = Math.min(...missingLocalVersions);
+    if (minMissingVersion > maxRelevantVersion) {
+      console.log(
+        `[GROUP-INFO][SYNC][SKIP] group=${groupId} chatId=${chatId} reason=latest_behind_local latestVersion=${latestVersion} localKeyVersion=${localKeyVersion}`,
+      );
+      return;
+    }
+
+    let fetchStartVersion = minMissingVersion;
+    if (fetchStartVersion > 1) {
+      const previous = historyByVersion.get(fetchStartVersion - 1);
+      if (!previous?.state_hash) {
+        fetchStartVersion = 1;
+      }
+    }
+    if (fetchStartVersion > maxRelevantVersion) {
+      console.log(
+        `[GROUP-INFO][SYNC][SKIP] group=${groupId} chatId=${chatId} reason=nothing_to_fetch fetchStart=${fetchStartVersion} maxRelevant=${maxRelevantVersion}`,
+      );
+      return;
+    }
+    console.log(
+      `[GROUP-INFO][SYNC][FETCH_PLAN] group=${groupId} chatId=${chatId} latestVersion=${latestVersion} fetchRange=${fetchStartVersion}-${maxRelevantVersion} concurrency=5`,
+    );
+
+    const versionedRecords = await this.fetchVersionedRecordsRange(
+      groupId,
+      creatorPubKeyBase64url,
+      creatorPubBytes,
+      fetchStartVersion,
+      maxRelevantVersion,
+      5,
+    );
+    if (!versionedRecords) {
+      return;
+    }
+
+    let previousStateHash = '';
+    if (fetchStartVersion > 1) {
+      previousStateHash = historyByVersion.get(fetchStartVersion - 1)?.state_hash ?? '';
+      if (!previousStateHash) {
+        console.warn(
+          `[GROUP-INFO][SYNC][CHAIN_FAIL] group=${groupId} chatId=${chatId} reason=missing_anchor_hash version=${fetchStartVersion - 1}`,
+        );
+        return;
+      }
+    }
+    for (let version = fetchStartVersion; version <= maxRelevantVersion; version++) {
+      const record = versionedRecords.get(version);
+      if (!record) {
+        console.warn(
+          `[GROUP-INFO][SYNC][CHAIN_FAIL] group=${groupId} chatId=${chatId} reason=version_gap version=${version} maxRelevantVersion=${maxRelevantVersion}`,
+        );
+        return;
+      }
+
+      if (version === 1) {
+        if (record.prevVersionHash !== '') {
+          console.warn(
+            `[GROUP-INFO][SYNC][CHAIN_FAIL] group=${groupId} chatId=${chatId} reason=invalid_genesis_prev_hash value=${record.prevVersionHash}`,
+          );
+          return;
+        }
+      } else if (record.prevVersionHash !== previousStateHash) {
+        console.warn(
+          `[GROUP-INFO][SYNC][CHAIN_FAIL] group=${groupId} chatId=${chatId} reason=prev_hash_mismatch version=${version}`,
+        );
+        return;
+      }
+
+      previousStateHash = record.stateHash;
+    }
+
+    if (latestVersion <= maxRelevantVersion) {
+      const latestVersioned = versionedRecords.get(latestVersion);
+      if (!latestVersioned || latestVersioned.stateHash !== latest.latestStateHash) {
+        console.warn(
+          `[GROUP-INFO][SYNC][CHAIN_FAIL] group=${groupId} chatId=${chatId} reason=latest_state_hash_mismatch latestVersion=${latestVersion}`,
+        );
+        return;
+      }
+    }
+
+    for (let version = fetchStartVersion; version <= maxRelevantVersion; version++) {
+      const localEpoch = historyByVersion.get(version);
+      const record = versionedRecords.get(version);
+      if (!localEpoch || !record) continue;
+
+      if (localEpoch.state_hash !== record.stateHash) {
+        this.deps.database.updateGroupKeyStateHash(groupId, version, record.stateHash);
+      }
+
+      if (version < localKeyVersion) {
+        const nextRecord = versionedRecords.get(version + 1);
+        if (nextRecord && localEpoch.used_until !== nextRecord.activatedAt) {
+          this.deps.database.markGroupKeyUsedUntil(groupId, version, nextRecord.activatedAt);
+        }
+      }
+    }
+
+    this.deps.database.updateChatGroupInfoDhtKey(chatId, latestDhtKey);
+    console.log(
+      `[GROUP-INFO][SYNC][OK] group=${groupId} chatId=${chatId} localKeyVersion=${localKeyVersion} latestVersion=${latestVersion} fetchRange=${fetchStartVersion}-${maxRelevantVersion}`,
+    );
+  }
+
+  private async fetchVersionedRecordsRange(
+    groupId: string,
+    creatorPubKeyBase64url: string,
+    creatorPubKey: Uint8Array,
+    startVersion: number,
+    endVersion: number,
+    concurrency: number,
+  ): Promise<Map<number, GroupInfoVersioned> | null> {
+    const versions: number[] = [];
+    for (let version = startVersion; version <= endVersion; version++) {
+      versions.push(version);
+    }
+    if (versions.length === 0) return new Map<number, GroupInfoVersioned>();
+
+    const records = new Map<number, GroupInfoVersioned>();
+    let index = 0;
+    let failedVersion: number | null = null;
+    const workerCount = Math.max(1, Math.min(concurrency, versions.length));
+
+    const workers = Array.from({ length: workerCount }, async () => {
+      while (true) {
+        const current = index;
+        index += 1;
+        if (current >= versions.length) break;
+        if (failedVersion !== null) break;
+
+        const version = versions[current];
+        if (version === undefined) break;
+        const dhtKey = `${GROUP_INFO_VERSION_PREFIX}/${groupId}/${creatorPubKeyBase64url}/${version}`;
+        const record = await this.fetchVersionedGroupInfoRecord(dhtKey, groupId, version, creatorPubKey);
+        if (!record) {
+          failedVersion = version;
+          return;
+        }
+        records.set(version, record);
+      }
+    });
+
+    await Promise.all(workers);
+
+    if (failedVersion !== null) {
+      console.warn(
+        `[GROUP-INFO][SYNC][CHAIN_FAIL] group=${groupId} reason=missing_versioned_record version=${failedVersion} fetchRange=${startVersion}-${endVersion}`,
+      );
+      return null;
+    }
+
+    return records;
+  }
+
+  private async fetchLatestGroupInfoRecord(
+    dhtKey: string,
+    groupId: string,
+    creatorPubKey: Uint8Array,
+  ): Promise<GroupInfoLatest | null> {
+    const keyBytes = new TextEncoder().encode(dhtKey);
+    let best: GroupInfoLatest | null = null;
+
+    try {
+      for await (const event of this.deps.node.services.dht.get(keyBytes) as AsyncIterable<QueryEvent>) {
+        if (event.name !== 'VALUE' || event.value.length === 0) continue;
+        try {
+          const record = JSON.parse(new TextDecoder().decode(event.value)) as GroupInfoLatest;
+          if (record.groupId !== groupId) continue;
+          if (!this.verifyGroupInfoRecordSignature(record, creatorPubKey)) continue;
+          if (!best
+            || record.latestVersion > best.latestVersion
+            || (record.latestVersion === best.latestVersion && record.lastUpdated > best.lastUpdated)
+          ) {
+            best = record;
+          }
+        } catch {
+          continue;
+        }
+      }
+    } catch {
+      return null;
+    }
+
+    return best;
+  }
+
+  private async fetchVersionedGroupInfoRecord(
+    dhtKey: string,
+    groupId: string,
+    version: number,
+    creatorPubKey: Uint8Array,
+  ): Promise<GroupInfoVersioned | null> {
+    const keyBytes = new TextEncoder().encode(dhtKey);
+    let best: GroupInfoVersioned | null = null;
+
+    try {
+      for await (const event of this.deps.node.services.dht.get(keyBytes) as AsyncIterable<QueryEvent>) {
+        if (event.name !== 'VALUE' || event.value.length === 0) continue;
+        try {
+          const record = JSON.parse(new TextDecoder().decode(event.value)) as GroupInfoVersioned;
+          if (record.groupId !== groupId || record.version !== version) continue;
+          if (!this.verifyGroupInfoRecordSignature(record, creatorPubKey)) continue;
+          // Versioned key is immutable; any valid record is equivalent. Keep first valid.
+          if (!best) {
+            best = record;
+          }
+        } catch {
+          continue;
+        }
+      }
+    } catch {
+      return null;
+    }
+
+    return best;
+  }
+
+  private verifyGroupInfoRecordSignature(
+    record: GroupInfoLatest | GroupInfoVersioned,
+    creatorPubKey: Uint8Array,
+  ): boolean {
+    try {
+      const { creatorSignature, ...payload } = record;
+      const payloadBytes = new TextEncoder().encode(JSON.stringify(payload));
+      const sigBytes = Buffer.from(creatorSignature, 'base64');
+      return ed25519.verify(sigBytes, payloadBytes, creatorPubKey);
+    } catch {
+      return false;
+    }
   }
 
   private applyLocalGroupLeaveState(chatId: number, groupId: string): void {

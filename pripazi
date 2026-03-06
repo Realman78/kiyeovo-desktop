@@ -199,4 +199,5 @@ Example strict CSP for production:
 Line 139 opens DevTools in dev mode - that is fine. Just make sure isDev() correctly returns false in packaged builds.
 
 
-marin
+IMPROVEMENT:
+persistent stream per session

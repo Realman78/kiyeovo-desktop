@@ -44,6 +44,10 @@ export class GroupInfoRepublisher {
 
       for (const pending of due) {
         try {
+          console.log(
+            `[GROUP-INFO][ITEM][START] group=${pending.group_id} keyVersion=${pending.key_version} ` +
+            `attempt=${pending.attempts + 1}/${GROUP_INFO_REPUBLISH_MAX_ATTEMPTS}`,
+          );
           const pruneReason = this.getPruneReason(pending);
           if (pruneReason) {
             this.deps.database.removePendingGroupInfoPublish(pending.group_id, pending.key_version);
@@ -75,17 +79,24 @@ export class GroupInfoRepublisher {
           this.deps.database.removePendingGroupInfoPublish(pending.group_id, pending.key_version);
           published++;
           console.log(
-            `[GROUP-INFO][ITEM][DONE] group=${pending.group_id} keyVersion=${pending.key_version}`,
+            `[GROUP-INFO][ITEM][DONE] group=${pending.group_id} keyVersion=${pending.key_version} ` +
+            `attempt=${pending.attempts + 1}/${GROUP_INFO_REPUBLISH_MAX_ATTEMPTS}`,
           );
         } catch (error: unknown) {
           failed++;
           const errorText = error instanceof Error ? error.message : String(error);
-          const nextRetryAt = Date.now() + this.computeRetryDelay(pending.attempts);
+          const retryDelayMs = this.computeRetryDelay(pending.attempts);
+          const nextRetryAt = Date.now() + retryDelayMs;
+          const nextAttempt = pending.attempts + 1;
           this.deps.database.markPendingGroupInfoPublishAttempt(
             pending.group_id,
             pending.key_version,
             nextRetryAt,
             errorText,
+          );
+          console.warn(
+            `[GROUP-INFO][ITEM][RETRY_SCHEDULED] group=${pending.group_id} keyVersion=${pending.key_version} ` +
+            `attempt=${nextAttempt}/${GROUP_INFO_REPUBLISH_MAX_ATTEMPTS} nextRetryInMs=${retryDelayMs} reason=${errorText}`
           );
           generalErrorHandler(
             error,

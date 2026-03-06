@@ -1151,21 +1151,48 @@ export class GroupCreator {
     const signedLatest: GroupInfoLatest = { ...latestPayload, creatorSignature: latestSignature };
 
     const latestDhtKey = `${GROUP_INFO_LATEST_PREFIX}/${groupId}/${creatorPubKeyBase64url}`;
+    const startedAt = Date.now();
+    console.log(
+      `[GROUP-INFO][PUBLISH][START] group=${groupId} keyVersion=${keyVersion} ` +
+      `members=${members.length} boundaries=${Object.keys(senderSeqBoundaries).length}`
+    );
     try {
+      const versionedStart = Date.now();
       await putJsonToDHT(this.deps.node, versionedDhtKey, signedVersioned, { warnOnQueryError: true, warnPrefix: 'GROUP' });
+      console.log(
+        `[GROUP-INFO][PUBLISH][VERSIONED_OK] group=${groupId} keyVersion=${keyVersion} took=${Date.now() - versionedStart}ms`
+      );
+
+      const latestStart = Date.now();
       await putJsonToDHT(this.deps.node, latestDhtKey, signedLatest, { warnOnQueryError: true, warnPrefix: 'GROUP' });
-      database.removePendingGroupInfoPublish(groupId, keyVersion);
+      console.log(
+        `[GROUP-INFO][PUBLISH][LATEST_OK] group=${groupId} keyVersion=${keyVersion} took=${Date.now() - latestStart}ms`
+      );
     } catch (error: unknown) {
       const reason = error instanceof Error ? error.message : String(error);
-      database.upsertPendingGroupInfoPublish(
-        groupId,
-        keyVersion,
-        versionedDhtKey,
-        JSON.stringify(signedVersioned),
-        latestDhtKey,
-        JSON.stringify(signedLatest),
-        Date.now() + GROUP_INFO_REPUBLISH_RETRY_BASE_DELAY,
-        reason,
+      try {
+        database.upsertPendingGroupInfoPublish(
+          groupId,
+          keyVersion,
+          versionedDhtKey,
+          JSON.stringify(signedVersioned),
+          latestDhtKey,
+          JSON.stringify(signedLatest),
+          Date.now() + GROUP_INFO_REPUBLISH_RETRY_BASE_DELAY,
+          reason,
+        );
+        console.warn(
+          `[GROUP-INFO][PUBLISH][QUEUED_RETRY] group=${groupId} keyVersion=${keyVersion} reason=${reason}`
+        );
+      } catch (queueError: unknown) {
+        const queueReason = queueError instanceof Error ? queueError.message : String(queueError);
+        console.error(
+          `[GROUP-INFO][PUBLISH][QUEUE_RETRY_FAILED] group=${groupId} keyVersion=${keyVersion} ` +
+          `publishReason=${reason} queueReason=${queueReason}`
+        );
+      }
+      console.warn(
+        `[GROUP-INFO][PUBLISH][FAIL] group=${groupId} keyVersion=${keyVersion} reason=${reason} took=${Date.now() - startedAt}ms`
       );
       throw error;
     }
@@ -1177,6 +1204,11 @@ export class GroupCreator {
     if (prevVersion >= 1) {
       database.markGroupKeyUsedUntil(groupId, prevVersion, Date.now());
     }
+
+    database.removePendingGroupInfoPublish(groupId, keyVersion);
+    console.log(
+      `[GROUP-INFO][PUBLISH][DONE] group=${groupId} keyVersion=${keyVersion} took=${Date.now() - startedAt}ms`
+    );
   }
 
   private async snapshotPrevEpochBoundaries(

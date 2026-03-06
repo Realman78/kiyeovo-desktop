@@ -249,6 +249,15 @@ export async function groupInfoLatestValidator(
   if (record.groupId !== pathGroupId) {
     throw new Error(`groupId mismatch: payload=${record.groupId}, keyPath=${pathGroupId}`);
   }
+  if (!Number.isInteger(record.latestVersion) || record.latestVersion < 1) {
+    throw new Error(`Invalid latestVersion: ${String(record.latestVersion)}`);
+  }
+  if (typeof record.latestStateHash !== 'string' || record.latestStateHash.length === 0) {
+    throw new Error('Invalid latestStateHash');
+  }
+  if (!Number.isFinite(record.lastUpdated) || record.lastUpdated <= 0) {
+    throw new Error(`Invalid lastUpdated: ${String(record.lastUpdated)}`);
+  }
 
   if (!record.creatorSignature) {
     throw new Error('Missing creatorSignature');
@@ -316,6 +325,9 @@ export async function groupInfoLatestValidateUpdate(
     if (incomingInfo.latestStateHash !== existingInfo.latestStateHash) {
       throw new Error('stale record rejected');
     }
+    if (incomingInfo.lastUpdated < existingInfo.lastUpdated) {
+      throw new Error('stale record rejected');
+    }
   }
 }
 
@@ -364,6 +376,15 @@ export async function groupInfoVersionedValidator(
   }
   if (record.version !== pathVersion) {
     throw new Error(`Version mismatch: key says ${versionStr}, payload says ${record.version}`);
+  }
+  if (!Number.isFinite(record.activatedAt) || record.activatedAt <= 0) {
+    throw new Error(`Invalid activatedAt: ${String(record.activatedAt)}`);
+  }
+  if (typeof record.prevVersionHash !== 'string') {
+    throw new Error('Invalid prevVersionHash');
+  }
+  if (typeof record.stateHash !== 'string' || record.stateHash.length === 0) {
+    throw new Error('Invalid stateHash');
   }
 
   if (!record.creatorSignature) {
