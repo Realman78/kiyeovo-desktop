@@ -274,6 +274,8 @@ export class UsernameRegistry {
       peerIdUnregistered: false,
     }
 
+    this.database.setSetting('auto_register', 'never');
+
     const targetUsername = this.currentUsername?.trim();
     if (!targetUsername) {
       this.stopReregistration();
