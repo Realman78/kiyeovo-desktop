@@ -122,7 +122,10 @@ export class UsernameRegistry {
       }
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : '';
-      const isExpectedError = errMsg.includes('not found') || errMsg.includes('No peers found');
+      console.log("TODO MAKNI OVO - ", errMsg)
+      const isExpectedError = errMsg.includes('not found')
+        || errMsg.includes('No peers found')
+        || errMsg.includes('Could not send correction');
       if (!isExpectedError) {
         generalErrorHandler(err, 'Failed to register username');
         throw err;

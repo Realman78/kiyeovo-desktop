@@ -105,6 +105,7 @@ export async function usernameRegistrationValidateUpdate(
   existing: Uint8Array,
   incoming: Uint8Array,
 ): Promise<void> {
+  console.log("started")
   const { kind, hash } = parseUsernameKey(key);
   let existingRegistration: UserRegistration;
   try {
@@ -143,4 +144,6 @@ export async function usernameRegistrationValidateUpdate(
       throw new Error('stale record rejected');
     }
   }
-}
+  console.log(
+    `DHT validator: accepted write to ${new TextDecoder().decode(key)}... with`, incomingRegistration
+  );}
