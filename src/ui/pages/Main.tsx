@@ -96,6 +96,7 @@ export const Main = () => {
                 fetchedOffline: false,
                 isFetchingOffline: false,
                 groupStatus: 'active',
+                needsRemovedCatchup: Boolean(dbChat.needs_removed_catchup),
               };
               dispatch(addChat(newChat));
             }
@@ -120,6 +121,7 @@ export const Main = () => {
                 groupStatus: 'active',
                 fetchedOffline: false,
                 isFetchingOffline: false,
+                needsRemovedCatchup: Boolean(dbChat.needs_removed_catchup),
               },
             }));
             return;
@@ -164,6 +166,7 @@ export const Main = () => {
                 : false,
               isFetchingOffline: false,
               groupStatus: dbChat.group_status,
+              needsRemovedCatchup: Boolean(dbChat.needs_removed_catchup),
             };
             dispatch(addChat(newChat));
             return;
@@ -177,6 +180,7 @@ export const Main = () => {
               peerId: dbChat.other_peer_id,
               status: dbChat.status,
               groupStatus: dbChat.group_status,
+              needsRemovedCatchup: Boolean(dbChat.needs_removed_catchup),
             },
           }));
         } catch (error) {
@@ -357,6 +361,7 @@ export const Main = () => {
             blocked: dbChat.blocked,
             muted: dbChat.muted,
             groupStatus: dbChat.group_status,
+            needsRemovedCatchup: Boolean(dbChat.needs_removed_catchup),
           }));
 
           dispatch(setChats(mappedChats));
@@ -367,7 +372,11 @@ export const Main = () => {
             .slice(0, 15);
 
           const topGroupChatIds = startupChats
-            .filter((c: any) => c.type === 'group' && (c.groupStatus === 'active' || c.groupStatus === 'rekeying' || c.groupStatus === 'removed'))
+            .filter((c: any) => c.type === 'group' && (
+              c.groupStatus === 'active'
+              || c.groupStatus === 'rekeying'
+              || (c.groupStatus === 'removed' && c.needsRemovedCatchup)
+            ))
             .map((chat: any) => chat.id);
           const topDirectChatIds = startupChats
             .filter((c: any) => c.type === 'direct')
@@ -452,6 +461,7 @@ export const Main = () => {
                     blocked: dbChat.blocked,
                     muted: dbChat.muted,
                     groupStatus: dbChat.group_status,
+                    needsRemovedCatchup: Boolean(dbChat.needs_removed_catchup),
                   }));
                   dispatch(setChats(refreshedChats));
                   console.log('[UI] Chats refreshed successfully');

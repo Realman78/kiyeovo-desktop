@@ -110,7 +110,7 @@ export class GroupCreator {
       participants: [myPeerId],
     });
 
-    database.updateChatGroupStatus(chatId, 'invited_pending' satisfies GroupStatus);
+    database.transitionChatGroupStatus(chatId, 'invited_pending' satisfies GroupStatus, 'group_created');
     database.updateChatKeyVersion(chatId, 0);
 
     // Send invites
@@ -465,7 +465,7 @@ export class GroupCreator {
 
     const previousGroupStatus = (chat.group_status ?? 'active') as GroupStatus;
     let rotationCommitted = false;
-    database.updateChatGroupStatus(chat.id, 'rekeying');
+    database.transitionChatGroupStatus(chat.id, 'rekeying', 'leave_request_rotation_start');
 
     try {
       const preRotationParticipants = database.getChatParticipants(chat.id).map((p) => p.peer_id);
@@ -495,7 +495,7 @@ export class GroupCreator {
 
       database.removePendingAcksForMember(request.groupId, request.peerId);
       database.removeInviteDeliveryAcksForMember(request.groupId, request.peerId);
-      database.updateChatGroupStatus(chat.id, 'active');
+      database.transitionChatGroupStatus(chat.id, 'active', 'leave_request_rotation_done');
 
       await this.appendMembershipSystemMessage(
         chat.id,
@@ -524,14 +524,14 @@ export class GroupCreator {
       );
     } catch (error: unknown) {
       if (rotationCommitted) {
-        database.updateChatGroupStatus(chat.id, 'active');
+        database.transitionChatGroupStatus(chat.id, 'active', 'leave_request_partial_failure_keep_active');
         const reason = error instanceof Error ? error.message : String(error);
         console.warn(
           `[GROUP][TRACE][LEAVE][PARTIAL_FAILURE] group=${request.groupId} peer=${request.peerId.slice(-8)} status=active reason=${reason}`,
         );
         return;
       }
-      database.updateChatGroupStatus(chat.id, previousGroupStatus);
+      database.transitionChatGroupStatus(chat.id, previousGroupStatus, 'leave_request_rotation_rollback');
       throw error;
     }
   }
@@ -563,7 +563,7 @@ export class GroupCreator {
     const targetUser = database.getUserByPeerId(targetPeerId);
     const previousGroupStatus = (chat.group_status ?? 'active') as GroupStatus;
     let rotationCommitted = false;
-    database.updateChatGroupStatus(chat.id, 'rekeying');
+    database.transitionChatGroupStatus(chat.id, 'rekeying', 'kick_rotation_start');
 
     try {
       const preRotationParticipants = chatParticipants.map((p) => p.peer_id);
@@ -609,7 +609,7 @@ export class GroupCreator {
       database.removePendingAck(groupId, targetPeerId, 'GROUP_WELCOME');
       database.removePendingAck(groupId, targetPeerId, 'GROUP_STATE_UPDATE');
       database.removeInviteDeliveryAcksForMember(groupId, targetPeerId);
-      database.updateChatGroupStatus(chat.id, 'active');
+      database.transitionChatGroupStatus(chat.id, 'active', 'kick_rotation_done');
 
       await this.appendMembershipSystemMessage(
         chat.id,
@@ -640,14 +640,14 @@ export class GroupCreator {
       );
     } catch (error: unknown) {
       if (rotationCommitted) {
-        database.updateChatGroupStatus(chat.id, 'active');
+        database.transitionChatGroupStatus(chat.id, 'active', 'kick_partial_failure_keep_active');
         const reason = error instanceof Error ? error.message : String(error);
         console.warn(
           `[GROUP][TRACE][KICK][PARTIAL_FAILURE] group=${groupId} peer=${targetPeerId.slice(-8)} status=active reason=${reason}`,
         );
         return;
       }
-      database.updateChatGroupStatus(chat.id, previousGroupStatus);
+      database.transitionChatGroupStatus(chat.id, previousGroupStatus, 'kick_rotation_rollback');
       throw error;
     }
   }
@@ -788,7 +788,7 @@ export class GroupCreator {
 
     const previousGroupStatus = (chat.group_status ?? 'active') as GroupStatus;
     let rotationCommitted = false;
-    database.updateChatGroupStatus(chat.id, 'rekeying');
+    database.transitionChatGroupStatus(chat.id, 'rekeying', 'welcome_rotation_start');
 
     try {
       const preRotationParticipants = database.getChatParticipants(chat.id).map(p => p.peer_id);
@@ -864,7 +864,7 @@ export class GroupCreator {
       );
 
       // Transition group_status to 'active' now that rotation pipeline has completed.
-      database.updateChatGroupStatus(chat.id, 'active');
+      database.transitionChatGroupStatus(chat.id, 'active', 'welcome_rotation_done');
       await this.appendMembershipSystemMessage(
         chat.id,
         groupId,
@@ -894,7 +894,7 @@ export class GroupCreator {
       if (rotationCommitted) {
         // Rotation already changed keyVersion/participants locally; don't roll status back to a pre-rotation value.
         // Keep group active and rely persisted pending ACKs / retries for eventual delivery.
-        database.updateChatGroupStatus(chat.id, 'active');
+        database.transitionChatGroupStatus(chat.id, 'active', 'welcome_partial_failure_keep_active');
         const reason = error instanceof Error ? error.message : String(error);
         console.warn(
           `[GROUP][TRACE][WELCOME][PARTIAL_FAILURE] group=${groupId} welcomedPeer=${acceptedPeerId.slice(-8)} status=active reason=${reason}`,
@@ -902,7 +902,7 @@ export class GroupCreator {
         return;
       }
 
-      database.updateChatGroupStatus(chat.id, previousGroupStatus);
+      database.transitionChatGroupStatus(chat.id, previousGroupStatus, 'welcome_rotation_rollback');
       throw error;
     }
   }

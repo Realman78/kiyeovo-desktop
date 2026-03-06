@@ -57,6 +57,7 @@ interface CachedVersionMetaEntry {
 
 interface GroupChatCheckResult {
   processed: boolean;
+  completed: boolean;
   unreadAdded: number;
   gapWarnings: GroupOfflineGapWarning[];
 }
@@ -262,6 +263,9 @@ export class GroupOfflineManager {
       if (processed) {
         checkedChatIds.push(chat.id);
       }
+      if (chat.group_status === 'removed' && result.completed) {
+        this.deps.database.markRemovedCatchupCompleted(chat.id);
+      }
     }
 
     const totalUnread = Array.from(unreadFromChats.values()).reduce((sum, count) => sum + count, 0);
@@ -286,7 +290,7 @@ export class GroupOfflineManager {
         && (
           c.group_status === 'active'
           || c.group_status === 'rekeying'
-          || (allowRemovedForExplicitChecks && c.group_status === 'removed')
+          || (c.group_status === 'removed' && (allowRemovedForExplicitChecks || c.needs_removed_catchup))
         )
         && (c.key_version ?? 0) > 0,
       );
@@ -303,7 +307,7 @@ export class GroupOfflineManager {
 
   private async runGroupCheckWithSingleFlight(chat: Chat): Promise<GroupChatCheckResult> {
     if (!chat.group_id) {
-      return { processed: false, unreadAdded: 0, gapWarnings: [] };
+      return { processed: false, completed: false, unreadAdded: 0, gapWarnings: [] };
     }
 
     const existing = this.groupCheckInFlight.get(chat.group_id);
@@ -329,7 +333,7 @@ export class GroupOfflineManager {
   private async checkGroupChat(
     chat: Chat,
   ): Promise<GroupChatCheckResult> {
-    if (!chat.group_id) return { processed: false, unreadAdded: 0, gapWarnings: [] };
+    if (!chat.group_id) return { processed: false, completed: false, unreadAdded: 0, gapWarnings: [] };
     const chatStart = Date.now();
 
     let sawAnyStore = false;
@@ -570,6 +574,7 @@ export class GroupOfflineManager {
 
     return {
       processed: sawAnyStore,
+      completed: true,
       unreadAdded,
       gapWarnings,
     };

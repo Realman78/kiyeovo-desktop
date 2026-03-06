@@ -5,7 +5,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { generalErrorHandler } from '../../utils/general-error.js';
 import type { ContactMode, OfflineMessage } from '../../types.js';
-import type { AckMessageType, GroupOfflineMessage } from '../group/types.js';
+import type { AckMessageType, GroupOfflineMessage, GroupStatus } from '../group/types.js';
+import { assertGroupTransition, isGroupStatus } from '../group/group-state-machine.js';
 import { DEFAULT_BOOTSTRAP_NODES } from '../../default-bootstrap-nodes.js';
 import { GROUP_OFFLINE_BUCKET_PREFIX, PENDING_KEY_EXCHANGE_EXPIRATION } from '../../constants.js';
 
@@ -47,6 +48,8 @@ export interface Chat {
     group_creator_peer_id?: string
     group_info_dht_key?: string
     group_status?: string // GroupStatus from group/types.ts
+    needs_removed_catchup?: boolean
+    removed_at?: number | null
     created_at: Date
     updated_at: Date
 }
@@ -232,6 +235,8 @@ export class ChatDatabase {
             trusted_out_of_band: Boolean(row.trusted_out_of_band),
             muted: Boolean(row.muted),
             key_version: row.key_version ?? 0,
+            needs_removed_catchup: Boolean(row.needs_removed_catchup),
+            removed_at: row.removed_at ?? null,
         };
     }
 
@@ -273,11 +278,14 @@ export class ChatDatabase {
                 group_creator_peer_id TEXT,
                 group_info_dht_key TEXT,
                 group_status TEXT,
+                needs_removed_catchup INTEGER NOT NULL DEFAULT 0,
+                removed_at INTEGER,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (created_by) REFERENCES users (peer_id)
             )
         `);
+        this.ensureChatsRemovedCatchupColumns();
 
 
         // Messages table
@@ -561,6 +569,26 @@ export class ChatDatabase {
     private ensureEventTimestampColumn(): void {
         try {
             this.db.exec('ALTER TABLE messages ADD COLUMN event_timestamp DATETIME');
+        } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            if (!msg.toLowerCase().includes('duplicate column name')) {
+                throw error;
+            }
+        }
+    }
+
+    private ensureChatsRemovedCatchupColumns(): void {
+        try {
+            this.db.exec('ALTER TABLE chats ADD COLUMN needs_removed_catchup INTEGER NOT NULL DEFAULT 0');
+        } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            if (!msg.toLowerCase().includes('duplicate column name')) {
+                throw error;
+            }
+        }
+
+        try {
+            this.db.exec('ALTER TABLE chats ADD COLUMN removed_at INTEGER');
         } catch (error) {
             const msg = error instanceof Error ? error.message : String(error);
             if (!msg.toLowerCase().includes('duplicate column name')) {
@@ -2196,8 +2224,61 @@ export class ChatDatabase {
     }
 
     updateChatGroupStatus(chatId: number, groupStatus: string): void {
-        this.db.prepare("UPDATE chats SET group_status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?")
-            .run(groupStatus, chatId);
+        if (groupStatus === 'removed') {
+            this.db.prepare(`
+                UPDATE chats
+                SET group_status = ?,
+                    needs_removed_catchup = 1,
+                    removed_at = ?,
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                WHERE id = ?
+            `).run(groupStatus, Date.now(), chatId);
+            return;
+        }
+
+        this.db.prepare(`
+            UPDATE chats
+            SET group_status = ?,
+                needs_removed_catchup = 0,
+                removed_at = NULL,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+            WHERE id = ?
+        `).run(groupStatus, chatId);
+    }
+
+    transitionChatGroupStatus(chatId: number, nextStatus: GroupStatus, reason: string): void {
+        const row = this.db.prepare('SELECT group_status FROM chats WHERE id = ?')
+            .get(chatId) as { group_status: string | null } | undefined;
+        if (!row) {
+            throw new Error(`Chat ${chatId} not found`);
+        }
+
+        const current = row.group_status;
+        if (current === nextStatus) {
+            return;
+        }
+
+        if (current !== null) {
+            if (!isGroupStatus(current)) {
+                throw new Error(
+                    `Unknown group status in DB for chat ${chatId}: ${current} (reason=${reason})`,
+                );
+            }
+            assertGroupTransition(current, nextStatus, reason);
+        }
+
+        this.updateChatGroupStatus(chatId, nextStatus);
+        console.log(
+            `[GROUP][STATE][TRANSITION] chatId=${chatId} from=${current ?? 'null'} to=${nextStatus} reason=${reason}`,
+        );
+    }
+
+    markRemovedCatchupCompleted(chatId: number): void {
+        this.db.prepare(`
+            UPDATE chats
+            SET needs_removed_catchup = 0
+            WHERE id = ? AND group_status = 'removed'
+        `).run(chatId);
     }
 
     recoverRekeyingGroupsOnStartup(): number {
@@ -2231,6 +2312,8 @@ export class ChatDatabase {
                 created_by = ?,
                 status = 'pending',
                 group_status = 'invited_pending',
+                needs_removed_catchup = 0,
+                removed_at = NULL,
                 group_creator_peer_id = ?,
                 permanent_key = NULL,
                 group_key = NULL,

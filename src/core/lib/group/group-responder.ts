@@ -131,7 +131,7 @@ export class GroupResponder {
       participants: [invite.inviterPeerId],
     });
 
-    database.updateChatGroupStatus(chatId, 'invited_pending' satisfies GroupStatus);
+    database.transitionChatGroupStatus(chatId, 'invited_pending' satisfies GroupStatus, 'invite_received');
     console.log(
       `[GROUP][TRACE][INVITE][APPLY] group=${invite.groupId} inviteId=${invite.inviteId} chatId=${chatId} status=invited_pending`,
     );
@@ -197,7 +197,7 @@ export class GroupResponder {
     if (Date.now() > inviteData.expiresAt) {
       database.updateNotificationStatus(inviteNotification.id, 'expired');
       if (chat.group_status === 'invited_pending') {
-        database.updateChatGroupStatus(chat.id, 'invite_expired' satisfies GroupStatus);
+        database.transitionChatGroupStatus(chat.id, 'invite_expired' satisfies GroupStatus, 'respond_invite_expired');
       }
       throw new Error(`Invite for group ${groupId} has expired`);
     }
@@ -234,7 +234,7 @@ export class GroupResponder {
     const nextGroupStatus: GroupStatus = accept
       ? 'awaiting_activation'
       : (chat.group_status === 'invited_pending' ? 'invite_expired' : 'removed');
-    database.updateChatGroupStatus(chat.id, nextGroupStatus);
+    database.transitionChatGroupStatus(chat.id, nextGroupStatus, 'respond_invite_local_state');
 
     if (accept && isTerminalStatus) {
       database.resetGroupRuntimeForReinvite(chat.id, groupId);
@@ -433,7 +433,7 @@ export class GroupResponder {
     database.updateGroupParticipants(chat.id, participantPeerIds);
 
     // Transition to active (both group_status and the top-level status so ChatList shows it)
-    database.updateChatGroupStatus(chat.id, 'active' satisfies GroupStatus);
+    database.transitionChatGroupStatus(chat.id, 'active' satisfies GroupStatus, 'welcome_applied');
     database.updateChatStatus(chat.id, 'active');
     console.log(
       `[GROUP][TRACE][WELCOME][APPLY] group=${welcome.groupId} chatId=${chat.id} keyVersion=${welcome.keyVersion} rosterSize=${welcome.roster.length} status=active`,
@@ -557,7 +557,7 @@ export class GroupResponder {
     const participantPeerIds = update.roster.map(r => r.peerId);
     database.updateGroupParticipants(chat.id, participantPeerIds);
     database.updateChatKeyVersion(chat.id, update.keyVersion);
-    database.updateChatGroupStatus(chat.id, 'active');
+    database.transitionChatGroupStatus(chat.id, 'active', 'state_update_applied');
     database.updateChatStatus(chat.id, 'active');
 
     if (chat.group_status !== 'active' || chat.status !== 'active') {
@@ -848,7 +848,7 @@ export class GroupResponder {
 
   private applyLocalGroupLeaveState(chatId: number, groupId: string): void {
     const { database, myPeerId } = this.deps;
-    database.updateChatGroupStatus(chatId, 'left' satisfies GroupStatus);
+    database.transitionChatGroupStatus(chatId, 'left' satisfies GroupStatus, 'local_leave_applied');
     database.removePendingAcksForGroup(groupId);
     database.removeInviteDeliveryAcksForMember(groupId, myPeerId);
     database.deleteGroupOfflineCursors(groupId);
@@ -861,7 +861,7 @@ export class GroupResponder {
 
   private applyLocalGroupRemovedState(chatId: number, groupId: string): void {
     const { database, myPeerId } = this.deps;
-    database.updateChatGroupStatus(chatId, 'removed' satisfies GroupStatus);
+    database.transitionChatGroupStatus(chatId, 'removed' satisfies GroupStatus, 'local_removed_applied');
     database.removePendingAcksForGroup(groupId);
     database.removeInviteDeliveryAcksForMember(groupId, myPeerId);
     // Keep cursors/seqs so post-removal catch-up can resume without rescanning from scratch.

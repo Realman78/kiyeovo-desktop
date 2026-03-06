@@ -53,6 +53,7 @@ export interface Chat {
   blocked?: boolean; // Whether the other user is blocked
   hasPendingFile?: boolean; // Whether chat has a pending file request
   groupStatus?: string; // Group-specific status (invited_pending, active, etc.)
+  needsRemovedCatchup?: boolean; // Removed-group startup one-time catchup flag
 }
 
 interface ChatState {
