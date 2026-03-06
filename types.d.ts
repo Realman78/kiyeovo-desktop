@@ -38,7 +38,7 @@ declare global {
             getAutoRegister: () => Promise<{ autoRegister: boolean }>;
             setAutoRegister: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
             onRestoreUsername: (callback: (username: string) => void) => () => void;
-            unregister: (username: string) => Promise<{ usernameUnregistered: boolean; peerIdUnregistered: boolean }>;
+            unregister: () => Promise<{ usernameUnregistered: boolean; peerIdUnregistered: boolean }>;
 
             // Send message
             sendMessage: (identifier: string, message: string) => Promise<SendMessageResponse>;

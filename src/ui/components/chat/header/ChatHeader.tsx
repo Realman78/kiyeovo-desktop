@@ -471,7 +471,7 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
   const showGroupStateMessage = Boolean(groupStatusMessage);
 
   const memberSummary = groupMembers.length > 0
-    ? groupMembers.map(m => m.status === 'pending' ? `${m.username} (invited)` : m.username).join(', ')
+    ? groupMembers.map(m => m.status === 'pending' ? `${m.username} (invited)` : m.username).sort().join(', ')
     : 'No members yet';
   const availableInviteSlots = Math.max(0, MAX_GROUP_MEMBERS - (groupMembers.length + 1));
   const disabledInvitePeers = groupMembers.map((member) => ({

@@ -26,6 +26,7 @@ export const BOOTSTRAP_PORT = 9000;
  */
 export const DHT_PROTOCOL = '/kiyeovo/1.0.0/dht';
 export const USERNAME_RECORD_PREFIX = 'kiyeovo-user-';
+export const USERNAME_DHT_PREFIX = '/kiyeovo-username';
 export const K_BUCKET_SIZE = 20;
 export const PREFIX_LENGTH = 6;
 export const MDNS_SERVICE_TAG = 'kiyeovo.local';

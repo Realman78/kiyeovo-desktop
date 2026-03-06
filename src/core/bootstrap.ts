@@ -24,6 +24,11 @@ import {
 import { filterOnionAddressesMapper } from './utils/miscellaneous.js';
 import { offlineMessageSelector, offlineMessageValidateUpdate, offlineMessageValidator } from './lib/offline-message-validator.js';
 import { groupOfflineMessageValidator, groupInfoLatestValidator, groupInfoVersionedValidator, groupOfflineMessageSelector, groupInfoLatestSelector, groupOfflineValidateUpdate, groupInfoLatestValidateUpdate, groupInfoVersionedValidateUpdate } from './lib/group/group-dht-validator.js';
+import {
+  usernameRegistrationSelector,
+  usernameRegistrationValidateUpdate,
+  usernameRegistrationValidator,
+} from './lib/username-dht-validator.js';
 
 dotenv.config();
 
@@ -117,12 +122,14 @@ async function createBootstrapNode(): Promise<ChatNode> {
         prefixLength: PREFIX_LENGTH,
         validators: {
           'kiyeovo-offline': offlineMessageValidator,
+          'kiyeovo-username': usernameRegistrationValidator,
           'kiyeovo-group-offline': groupOfflineMessageValidator,
           'kiyeovo-group-info-latest': groupInfoLatestValidator,
           'kiyeovo-group-info-v': groupInfoVersionedValidator,
         },
         selectors: {
           'kiyeovo-offline': offlineMessageSelector,
+          'kiyeovo-username': usernameRegistrationSelector,
           'kiyeovo-group-offline': groupOfflineMessageSelector,
           'kiyeovo-group-info-latest': groupInfoLatestSelector,
         },
@@ -130,6 +137,9 @@ async function createBootstrapNode(): Promise<ChatNode> {
           const keyStr = new TextDecoder().decode(key);
           if (keyStr.startsWith('/kiyeovo-offline/')) {
             return offlineMessageValidateUpdate(key, existing, incoming);
+          }
+          if (keyStr.startsWith('/kiyeovo-username/')) {
+            return usernameRegistrationValidateUpdate(key, existing, incoming);
           }
           if (keyStr.startsWith('/kiyeovo-group-offline/')) {
             return groupOfflineValidateUpdate(key, existing, incoming);

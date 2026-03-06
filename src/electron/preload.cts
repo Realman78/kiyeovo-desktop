@@ -71,8 +71,8 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     },
 
     // Unregister
-    unregister: async (username: string): Promise<{ usernameUnregistered: boolean; peerIdUnregistered: boolean }> => {
-        return ipcRenderer.invoke(IPC_CHANNELS.UNREGISTER_REQUEST, username);
+    unregister: async (): Promise<{ usernameUnregistered: boolean; peerIdUnregistered: boolean }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.UNREGISTER_REQUEST);
     },
 
     // Send message

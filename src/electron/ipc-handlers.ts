@@ -160,14 +160,14 @@ function setupRegistrationHandlers(
   });
 
   // Unregister
-  ipcMain.handle(IPC_CHANNELS.UNREGISTER_REQUEST, async (_event, username: string) => {
+  ipcMain.handle(IPC_CHANNELS.UNREGISTER_REQUEST, async () => {
     try {
       const p2pCore = getP2PCore();
       if (!p2pCore) {
         return { usernameUnregistered: false, peerIdUnregistered: false };
       }
 
-      const result = await p2pCore.usernameRegistry.unregister(username);
+      const result = await p2pCore.usernameRegistry.unregister();
       return result;
     } catch (error) {
       console.error('[IPC] Failed to unregister:', error);

@@ -13,6 +13,11 @@ import type { ChatNode } from '../types.js';
 import { EncryptedUserIdentity } from './encrypted-user-identity.js';
 import { offlineMessageValidator, offlineMessageSelector, offlineMessageValidateUpdate } from './offline-message-validator.js';
 import {
+  usernameRegistrationSelector,
+  usernameRegistrationValidateUpdate,
+  usernameRegistrationValidator,
+} from './username-dht-validator.js';
+import {
   groupOfflineMessageValidator, groupOfflineMessageSelector, groupOfflineValidateUpdate,
   groupInfoLatestValidator, groupInfoLatestSelector, groupInfoLatestValidateUpdate,
   groupInfoVersionedValidator, groupInfoVersionedValidateUpdate,
@@ -207,12 +212,14 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
           prefixLength: PREFIX_LENGTH,
           validators: {
             'kiyeovo-offline': offlineMessageValidator,
+            'kiyeovo-username': usernameRegistrationValidator,
             'kiyeovo-group-offline': groupOfflineMessageValidator,
             'kiyeovo-group-info-latest': groupInfoLatestValidator,
             'kiyeovo-group-info-v': groupInfoVersionedValidator,
           },
           selectors: {
             'kiyeovo-offline': offlineMessageSelector,
+            'kiyeovo-username': usernameRegistrationSelector,
             'kiyeovo-group-offline': groupOfflineMessageSelector,
             'kiyeovo-group-info-latest': groupInfoLatestSelector,
           },
@@ -220,6 +227,9 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
             const keyStr = new TextDecoder().decode(key);
             if (keyStr.startsWith('/kiyeovo-offline/')) {
               return offlineMessageValidateUpdate(key, existing, incoming);
+            }
+            if (keyStr.startsWith('/kiyeovo-username/')) {
+              return usernameRegistrationValidateUpdate(key, existing, incoming);
             }
             if (keyStr.startsWith('/kiyeovo-group-offline/')) {
               return groupOfflineValidateUpdate(key, existing, incoming);

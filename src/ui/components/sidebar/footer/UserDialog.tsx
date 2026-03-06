@@ -77,7 +77,7 @@ const UserDialog = ({ open, onOpenChange, onRegister, backendError, isRegisterin
         setIsUnregistering(true);
         setUnregisterError("");
         try {
-            const result = await window.kiyeovoAPI.unregister(user.username);
+            const result = await window.kiyeovoAPI.unregister();
             if (result.usernameUnregistered && result.peerIdUnregistered) {
                 onOpenChange(false);
                 toast.info("Username and peer ID unregistered successfully");

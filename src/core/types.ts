@@ -156,6 +156,7 @@ export interface UserRegistration {
   peerID: string
   timestamp: number
   username: string
+  kind?: 'active' | 'released'
   signingPublicKey: string  // Ed25519 for signature verification
   offlinePublicKey: string // RSA for offline message encryption
   signature: string

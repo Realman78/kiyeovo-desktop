@@ -1,11 +1,16 @@
 import { ChatDatabase, User } from './db/database.js';
 import * as readline from 'readline';
 import type { ChatNode, UserRegistration } from '../types.js';
-import { ERRORS, REREGISTRATION_INTERVAL } from '../constants.js';
+import { ERRORS, REREGISTRATION_INTERVAL, USERNAME_DHT_PREFIX } from '../constants.js';
 import { EncryptedUserIdentity } from './encrypted-user-identity.js';
 import { generalErrorHandler } from '../utils/general-error.js';
 import { hashUsingSha256 } from '../utils/crypto.js';
 import { QueryEvent } from '@libp2p/kad-dht';
+import {
+  isUsernameRegistrationRecord,
+  signUsernameRegistrationPayload,
+  verifyUsernameRegistrationSignature,
+} from './username-record';
 
 export class UsernameRegistry {
   private static readonly USERNAME_REGEX = /^[A-Za-z0-9_]+$/;
@@ -70,8 +75,8 @@ export class UsernameRegistry {
     }
 
     const myPeerId = this.node.peerId.toString();
-    const usernameKey = UsernameRegistry.TEXT_ENCODER.encode(hashUsingSha256(username));
-    const peerIdKey = UsernameRegistry.TEXT_ENCODER.encode(hashUsingSha256(myPeerId));
+    const usernameKey = this.buildUsernameByNameKey(username);
+    const peerIdKey = this.buildUsernameByPeerIdKey(myPeerId);
 
     const userRegistration = this.#createUserRegistrationObject(username);
     const userRegistrationJson = JSON.stringify(userRegistration);
@@ -88,9 +93,25 @@ export class UsernameRegistry {
 
           let existingRegistration: UserRegistration | null = null;
           try {
-            existingRegistration = JSON.parse(rawData) as UserRegistration;
+            const parsed = JSON.parse(rawData) as unknown;
+            if (!isUsernameRegistrationRecord(parsed) || !verifyUsernameRegistrationSignature(parsed)) {
+              continue;
+            }
+            existingRegistration = parsed;
           } catch (e) {
             // Invalid JSON means we can't verify ownership, treat as garbage/available
+            continue;
+          }
+          if (!existingRegistration) {
+            continue;
+          }
+          if ((existingRegistration.kind ?? 'active') === 'released') {
+            // Username was explicitly released; allow claim.
+            continue;
+          }
+          const age = Date.now() - existingRegistration.timestamp;
+          if (age > UsernameRegistry.MAX_REGISTRATION_AGE) {
+            // Stale record can be reclaimed.
             continue;
           }
           if (existingRegistration && existingRegistration.peerID && existingRegistration.peerID !== myPeerId) {
@@ -115,60 +136,62 @@ export class UsernameRegistry {
       this.stopReregistration();
     }
 
-    let errorCount = 0;
-    let hadSuccess = false;
     // Store username -> user data record (for username lookups)
-    for await (const event of this.node.services.dht.put(usernameKey, valueBytes) as AsyncIterable<QueryEvent>) {
-      if (event.name === 'QUERY_ERROR') errorCount++;
-      else if (event.name === 'PEER_RESPONSE') hadSuccess = true;
+    const usernamePublish = await this.publishRecord(usernameKey, valueBytes);
+    if (usernamePublish.acceptedCount === 0 && usernamePublish.rejectedCount > 0) {
+      if (oldUsername) {
+        this.currentUsername = oldUsername;
+        this.startReregistration();
+      }
+      throw new Error(`Username registration rejected by DHT validators (${usernamePublish.rejectedCount} peer(s) rejected)`);
     }
 
-    if (errorCount > 0 && !hadSuccess) {
-      console.log(`Failed to register username: All ${errorCount} peers unreachable`);
-        // If new username registration fails, restart old re-registration
-        if (oldUsername) {
-          this.currentUsername = oldUsername;
-          this.startReregistration();
+    if (usernamePublish.errorCount > 0 && usernamePublish.acceptedCount === 0) {
+      if (oldUsername) {
+        this.currentUsername = oldUsername;
+        this.startReregistration();
+      }
+      throw new Error(`Username registration failed: all ${usernamePublish.errorCount} peers unreachable`);
+    }
+
+    const rollbackUsernameOnPeerWriteFailure = async (): Promise<void> => {
+      try {
+        const released = await this.releaseUsernameByName(username);
+        if (!released) {
+          console.warn(`Peer ID write failed and rollback release for '${username}' did not fully propagate.`);
         }
-        return false;
-    }
-
-    errorCount = 0;
-    hadSuccess = false;
+      } catch (rollbackError: unknown) {
+        generalErrorHandler(rollbackError, `Failed rollback release for partially committed username '${username}'`);
+      }
+    };
 
     // Store peerID -> user data record (contains all info)
-    for await (const event of this.node.services.dht.put(peerIdKey, valueBytes) as AsyncIterable<QueryEvent>) {
-      if (event.name === 'QUERY_ERROR') errorCount++;
-      else if (event.name === 'PEER_RESPONSE') hadSuccess = true;
+    const peerPublish = await this.publishRecord(peerIdKey, valueBytes);
+    if (peerPublish.acceptedCount === 0 && peerPublish.rejectedCount > 0) {
+      await rollbackUsernameOnPeerWriteFailure();
+      if (oldUsername) {
+        this.currentUsername = oldUsername;
+        this.startReregistration();
+      }
+      throw new Error(`Peer ID registration rejected by DHT validators (${peerPublish.rejectedCount} peer(s) rejected)`);
     }
 
-    if (errorCount > 0 && !hadSuccess) {
-      console.log(`Failed to register peer ID: All ${errorCount} peers unreachable`);
-        // If peer ID record fails, restart old re-registration
-        if (oldUsername) {
-          this.currentUsername = oldUsername;
-          this.startReregistration();
-        }
-        return false;
+    if (peerPublish.errorCount > 0 && peerPublish.acceptedCount === 0) {
+      await rollbackUsernameOnPeerWriteFailure();
+      if (oldUsername) {
+        this.currentUsername = oldUsername;
+        this.startReregistration();
+      }
+      throw new Error(`Peer ID registration failed: all ${peerPublish.errorCount} peers unreachable`);
     }
 
     console.log(`Stored records: username:${username} → peerID:${myPeerId} → full user data`);
 
-    // Clear old username from DHT if this is a username change
+    // After new username is committed, release the old username explicitly.
     if (oldUsername && oldUsername !== username) {
-      const oldUsernameKey = UsernameRegistry.TEXT_ENCODER.encode(hashUsingSha256(oldUsername));
-      try {
-        for await (const event of this.node.services.dht.put(
-          oldUsernameKey, 
-          UsernameRegistry.TEXT_ENCODER.encode('')
-        ) as AsyncIterable<QueryEvent>) {
-          if (event.name === 'QUERY_ERROR') {
-            console.warn(`Failed to clear old username '${oldUsername}' from DHT (non-fatal). Reason: ${event.error.message}`);
-          }
-        }
-        console.log(`Cleared old username '${oldUsername}' from DHT`);
-      } catch (err: unknown) {
-        console.warn(`Failed to clear old username from DHT: ${err instanceof Error ? err.message : String(err)}`);
+      const released = await this.releaseUsernameByName(oldUsername);
+      if (!released) {
+        console.warn(`Failed to release old username '${oldUsername}'. It may remain reserved until stale.`);
       }
     }
 
@@ -237,8 +260,8 @@ export class UsernameRegistry {
     return success ? lastUsername : null;
   }
 
-  // Use this when you want to go offline or stop using a username temporarily
-  async unregister(username: string): Promise<{ usernameUnregistered: boolean; peerIdUnregistered: boolean }> {
+  // Use this when you want to release your current username and stop being reachable by it.
+  async unregister(): Promise<{ usernameUnregistered: boolean; peerIdUnregistered: boolean }> {
     if (!this.userIdentity) {
       throw new Error('User identity not initialized');
     }
@@ -248,54 +271,57 @@ export class UsernameRegistry {
       peerIdUnregistered: false,
     }
 
-    // Clear username from DHT
-    const usernameKey = UsernameRegistry.TEXT_ENCODER.encode(hashUsingSha256(username));
-    const peerIdKey = UsernameRegistry.TEXT_ENCODER.encode(hashUsingSha256(this.node.peerId.toString()));
-
-    let errorCount = 0;
-    let hadSuccess = false;
-    for await (const event of this.node.services.dht.put(
-      usernameKey, 
-      UsernameRegistry.TEXT_ENCODER.encode('')
-    ) as AsyncIterable<QueryEvent>) {
-      if (event.name === 'QUERY_ERROR') errorCount++;
-      else if (event.name === 'PEER_RESPONSE') hadSuccess = true;
+    const targetUsername = this.currentUsername?.trim();
+    if (!targetUsername) {
+      this.stopReregistration();
+      this.currentUsername = null;
+      return result;
     }
 
-    if (errorCount > 0 && !hadSuccess) {
-      console.log(`Failed to unregister username: All ${errorCount} peers unreachable`);
-      result.usernameUnregistered = false;
+    const myPeerId = this.node.peerId.toString();
+    const releaseRecord = this.#createReleasedRegistrationObject(targetUsername);
+    const valueBytes = UsernameRegistry.TEXT_ENCODER.encode(JSON.stringify(releaseRecord));
+
+    const publishReleaseRecord = async (key: Uint8Array): Promise<boolean> => {
+      const publish = await this.publishRecord(key, valueBytes);
+      if (publish.acceptedCount === 0 && publish.rejectedCount > 0) return false;
+      if (publish.errorCount > 0 && publish.acceptedCount === 0) return false;
+      return publish.acceptedCount > 0;
+    };
+
+    try {
+      const [usernameRelease, peerRelease] = await Promise.allSettled([
+        publishReleaseRecord(this.buildUsernameByNameKey(targetUsername)),
+        publishReleaseRecord(this.buildUsernameByPeerIdKey(myPeerId)),
+      ]);
+
+      result.usernameUnregistered = usernameRelease.status === 'fulfilled' ? usernameRelease.value : false;
+      result.peerIdUnregistered = peerRelease.status === 'fulfilled' ? peerRelease.value : false;
+    } catch (error: unknown) {
+      generalErrorHandler(error, 'Failed to publish username release record');
     }
 
-    // Stop re-registration and clear in-memory username
     this.currentUsername = null;
-    result.usernameUnregistered = true;
-    
-    errorCount = 0;
-    hadSuccess = false;
-    for await (const event of this.node.services.dht.put(
-      peerIdKey, 
-      UsernameRegistry.TEXT_ENCODER.encode('')
-    ) as AsyncIterable<QueryEvent>) {
-      if (event.name === 'QUERY_ERROR') errorCount++;
-      else if (event.name === 'PEER_RESPONSE') hadSuccess = true;
-    }
-    if (errorCount > 0 && !hadSuccess) {
-      console.log(`Failed to unregister peer ID: All ${errorCount} peers unreachable`);
-      result.peerIdUnregistered = false;
-    }
-    result.peerIdUnregistered = true;
-
     this.stopReregistration();
     return result;
   }
 
   async lookup(username: string): Promise<UserRegistration> {
-    return this.#lookupByKey(username, ERRORS.USERNAME_NOT_FOUND, (reg) => reg.username === username);
+    return this.#lookupByKey(
+      this.buildUsernameByNameKey(username),
+      username,
+      ERRORS.USERNAME_NOT_FOUND,
+      (reg) => reg.username === username,
+    );
   }
 
   async lookupByPeerId(peerId: string): Promise<UserRegistration> {
-    return this.#lookupByKey(peerId, 'Peer ID not found in DHT');
+    return this.#lookupByKey(
+      this.buildUsernameByPeerIdKey(peerId),
+      peerId,
+      'Peer ID not found in DHT',
+      undefined,
+    );
   }
 
   /**
@@ -305,51 +331,15 @@ export class UsernameRegistry {
    * @throws {Error} If username or peer ID not found or signature invalid
    */
   async #lookupByKey(
-    keyString: string,
+    key: Uint8Array,
+    keyLabel: string,
     notFoundError: string,
-    extraValidation?: (reg: UserRegistration) => boolean
+    extraValidation?: (reg: UserRegistration) => boolean,
   ): Promise<UserRegistration> {
-    const key = UsernameRegistry.TEXT_ENCODER.encode(hashUsingSha256(keyString));
     const currentTime = Date.now();
-
-    try {
-      for await (const event of this.node.services.dht.get(key) as AsyncIterable<QueryEvent>) {
-        if (event.name === 'VALUE' && event.value) {
-          try {
-            const rawData = UsernameRegistry.TEXT_DECODER.decode(event.value).trim();
-            
-            // Skip empty or tombstone records
-            if (!rawData || rawData === '{}') continue;
-
-            const registration = JSON.parse(rawData) as unknown;
-            if (!this.isValidUserRegistration(registration)) continue;
-
-            // Check if registration is too old (replay attack prevention)
-            const age = currentTime - registration.timestamp;
-            if (age > UsernameRegistry.MAX_REGISTRATION_AGE) {
-              console.log(`Discarding old registration for ${keyString} (age: ${Math.round(age / 1000)}s)`);
-              continue;
-            }
-
-            if (extraValidation && !extraValidation(registration)) {
-              continue;
-            }
-
-            const { signature, ...dataToVerify } = registration;
-            if (!EncryptedUserIdentity.verifyKeyExchangeSignature(
-              signature, dataToVerify, registration.signingPublicKey
-            )) {
-              throw new Error(`Invalid signature for registration`);
-            }
-
-            return registration;
-          } catch (parseErr: unknown) {
-            generalErrorHandler(parseErr, `Failed to parse DHT value for ${keyString}`);
-          }
-        }
-      }
-    } catch (dhtErr: unknown) {
-      console.log(`DHT get failed for ${keyString}:`, dhtErr instanceof Error ? dhtErr.message : String(dhtErr));
+    const result = await this.readRegistrationForKey(key, keyLabel, currentTime, extraValidation);
+    if (result) {
+      return result;
     }
 
     throw new Error(notFoundError);
@@ -447,60 +437,164 @@ export class UsernameRegistry {
     if (!this.userIdentity) {
       throw new Error('User identity not initialized');
     }
+    const identity = this.userIdentity;
 
-    const registrationData = {
+    const registrationData: Omit<UserRegistration, 'signature'> = {
       peerID: this.node.peerId.toString(),
       username,
-      signingPublicKey: Buffer.from(this.userIdentity.signingPublicKey).toString('base64'),
-      offlinePublicKey: Buffer.from(this.userIdentity.offlinePublicKey).toString('base64'),
+      kind: 'active',
+      signingPublicKey: Buffer.from(identity.signingPublicKey).toString('base64'),
+      offlinePublicKey: Buffer.from(identity.offlinePublicKey).toString('base64'),
       timestamp: Date.now(),
     };
 
-    const dataToSign = JSON.stringify(registrationData);
-    const signature = this.userIdentity.sign(dataToSign);
+    const signature = signUsernameRegistrationPayload(registrationData, (payload) =>
+      identity.sign(payload),
+    );
 
     return {
       ...registrationData,
-      signature: Buffer.from(signature).toString('base64')
+      signature,
     } as UserRegistration;
   }
 
-  async #promptRegistration(username: string): Promise<'yes' | 'no' | 'always' | 'never'> {
-    return new Promise((resolve) => {
-      const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout
-      });
+  #createReleasedRegistrationObject(username: string): UserRegistration {
+    if (!this.userIdentity) {
+      throw new Error('User identity not initialized');
+    }
+    const identity = this.userIdentity;
 
-      rl.question(`Register as '${username}'? (y/n/always/never): `, (answer) => {
-        rl.close();
-        const normalized = answer.trim().toLowerCase();
-        if (normalized === 'y' || normalized === 'yes') {
-          resolve('yes');
-        } else if (normalized === 'always') {
-          resolve('always');
-        } else if (normalized === 'never') {
-          resolve('never');
-        } else {
-          resolve('no');
-        }
-      });
-    });
+    const registrationData: Omit<UserRegistration, 'signature'> = {
+      peerID: this.node.peerId.toString(),
+      username,
+      kind: 'released',
+      signingPublicKey: Buffer.from(identity.signingPublicKey).toString('base64'),
+      offlinePublicKey: Buffer.from(identity.offlinePublicKey).toString('base64'),
+      timestamp: Date.now(),
+    };
+
+    const signature = signUsernameRegistrationPayload(registrationData, (payload) =>
+      identity.sign(payload),
+    );
+
+    return {
+      ...registrationData,
+      signature,
+    } as UserRegistration;
   }
+
 
   private isValidUserRegistration(registration: unknown): registration is UserRegistration {
-    return typeof registration === 'object' && 
-    registration !== null && 
-    'peerID' in registration && 
-    typeof registration.peerID === 'string' && 
-    'username' in registration && 
-    typeof registration.username === 'string' && 
-    'signingPublicKey' in registration && typeof registration.signingPublicKey === 'string' && 'offlinePublicKey' in registration && typeof registration.offlinePublicKey === 'string' && 'timestamp' in registration && typeof registration.timestamp === 'number' && 'signature' in registration && typeof registration.signature === 'string';
+    return isUsernameRegistrationRecord(registration);
   }
 
-  // Note: DHT records will expire naturally over time
-  // If unregistration is needed in the future, we can implement it
-  // by overwriting records with empty data or using a different approach
+  private async readRegistrationForKey(
+    key: Uint8Array,
+    keyLabel: string,
+    currentTime: number,
+    extraValidation?: (reg: UserRegistration) => boolean,
+  ): Promise<UserRegistration | null> {
+    let newestRecord: UserRegistration | null = null;
+
+    try {
+      for await (const event of this.node.services.dht.get(key) as AsyncIterable<QueryEvent>) {
+        if (event.name !== 'VALUE' || !event.value) continue;
+        try {
+          const rawData = UsernameRegistry.TEXT_DECODER.decode(event.value).trim();
+
+          // Skip empty garbage records
+          if (!rawData || rawData === '{}') continue;
+
+          const registration = JSON.parse(rawData) as unknown;
+          if (!this.isValidUserRegistration(registration)) continue;
+          if (!verifyUsernameRegistrationSignature(registration)) {
+            continue;
+          }
+
+          // Check if registration is too old (replay attack prevention)
+          const age = currentTime - registration.timestamp;
+          if (age > UsernameRegistry.MAX_REGISTRATION_AGE) {
+            console.log(`Discarding old registration for ${keyLabel} (age: ${Math.round(age / 1000)}s)`);
+            continue;
+          }
+
+          if (extraValidation && !extraValidation(registration)) {
+            continue;
+          }
+
+          if (newestRecord == null || registration.timestamp > newestRecord.timestamp) {
+            newestRecord = registration;
+            continue;
+          }
+
+          // Deterministic tie-break: prefer active over released on same timestamp.
+          if (
+            newestRecord.timestamp === registration.timestamp &&
+            (newestRecord.kind ?? 'active') === 'released' &&
+            (registration.kind ?? 'active') !== 'released'
+          ) {
+            newestRecord = registration;
+          }
+        } catch (parseErr: unknown) {
+          generalErrorHandler(parseErr, `Failed to parse DHT value for ${keyLabel}`);
+        }
+      }
+    } catch (dhtErr: unknown) {
+      console.log(`DHT get failed for ${keyLabel}:`, dhtErr instanceof Error ? dhtErr.message : String(dhtErr));
+    }
+
+    if (!newestRecord) {
+      return null;
+    }
+
+    if ((newestRecord.kind ?? 'active') === 'released') {
+      return null;
+    }
+
+    return newestRecord;
+  }
+
+  private async publishRecord(
+    key: Uint8Array,
+    valueBytes: Uint8Array,
+  ): Promise<{ errorCount: number; acceptedCount: number; rejectedCount: number }> {
+    let errorCount = 0;
+    let acceptedCount = 0;
+    let rejectedCount = 0;
+
+    for await (const event of this.node.services.dht.put(key, valueBytes) as AsyncIterable<QueryEvent>) {
+      if (event.name === 'QUERY_ERROR') {
+        errorCount++;
+      } else if (event.name === 'PEER_RESPONSE') {
+        const accepted = event.record != null
+          && Buffer.from(event.record.value).equals(Buffer.from(valueBytes));
+        if (accepted) acceptedCount++;
+        else rejectedCount++;
+      }
+    }
+
+    return { errorCount, acceptedCount, rejectedCount };
+  }
+
+  private async releaseUsernameByName(username: string): Promise<boolean> {
+    const releaseRecord = this.#createReleasedRegistrationObject(username);
+    const valueBytes = UsernameRegistry.TEXT_ENCODER.encode(JSON.stringify(releaseRecord));
+    const publish = await this.publishRecord(this.buildUsernameByNameKey(username), valueBytes);
+    if (publish.acceptedCount === 0 && publish.rejectedCount > 0) return false;
+    if (publish.errorCount > 0 && publish.acceptedCount === 0) return false;
+    return publish.acceptedCount > 0;
+  }
+
+  private buildUsernameByNameKey(username: string): Uint8Array {
+    const hashed = hashUsingSha256(username);
+    return UsernameRegistry.TEXT_ENCODER.encode(`${USERNAME_DHT_PREFIX}/by-name/${hashed}`);
+  }
+
+  private buildUsernameByPeerIdKey(peerId: string): Uint8Array {
+    const hashed = hashUsingSha256(peerId);
+    return UsernameRegistry.TEXT_ENCODER.encode(`${USERNAME_DHT_PREFIX}/by-peer/${hashed}`);
+  }
+
 }
 
 // podsjetnik za potpisivanje
