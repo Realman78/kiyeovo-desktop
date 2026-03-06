@@ -147,6 +147,7 @@ export interface CommandConstants {
 export interface ErrorConstants {
   readonly USERNAME_TAKEN: string
   readonly USERNAME_NOT_FOUND: string
+  readonly USERNAME_LOOKUP_FAILED: string
   readonly MESSAGE_TIMEOUT: string
   readonly CONNECTION_FAILED: string
   readonly NO_PEERS_FOUND: string

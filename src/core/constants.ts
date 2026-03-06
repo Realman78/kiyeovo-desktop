@@ -102,6 +102,7 @@ export const COMMANDS: CommandConstants = {
 export const ERRORS: ErrorConstants = {
   USERNAME_TAKEN: 'Username already taken',
   USERNAME_NOT_FOUND: 'Username not found',
+  USERNAME_LOOKUP_FAILED: 'Username lookup failed',
   MESSAGE_TIMEOUT: 'Message timeout',
   CONNECTION_FAILED: 'Connection failed',
   NO_PEERS_FOUND: 'No peers found'

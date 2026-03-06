@@ -207,3 +207,38 @@ index a9a1491..7c83c35 100644
    logPrefix: string
    metricsPrefix: string
    datastorePrefix: string
+diff --git a/node_modules/@libp2p/kad-dht/dist/src/content-fetching/index.js b/node_modules/@libp2p/kad-dht/dist/src/content-fetching/index.js
+index 25a99df..c435f5c 100644
+--- a/node_modules/@libp2p/kad-dht/dist/src/content-fetching/index.js
++++ b/node_modules/@libp2p/kad-dht/dist/src/content-fetching/index.js
+@@ -89,9 +89,10 @@ export class ContentFetching {
+                 yield event;
+             }
+             if (!sentCorrection) {
+-                throw new QueryError('Could not send correction');
++                // Do not fail read path if correction cannot be sent; the best value is still usable.
++                this.log.error('Failed error correcting entry');
++                continue;
+             }
+-            this.log.error('Failed error correcting entry');
+         }
+     }
+     /**
+diff --git a/node_modules/@libp2p/kad-dht/src/content-fetching/index.ts b/node_modules/@libp2p/kad-dht/src/content-fetching/index.ts
+index 5a4d9d2..561f60f 100644
+--- a/node_modules/@libp2p/kad-dht/src/content-fetching/index.ts
++++ b/node_modules/@libp2p/kad-dht/src/content-fetching/index.ts
+@@ -129,10 +129,10 @@ export class ContentFetching {
+         yield event
+       }
+ 
+       if (!sentCorrection) {
+-        throw new QueryError('Could not send correction')
+-
+-      this.log.error('Failed error correcting entry')
++        // Do not fail read path if correction cannot be sent; the best value is still usable.
++        this.log.error('Failed error correcting entry')
++        continue
+       }
+     }
+   }

@@ -16,6 +16,7 @@ import {
   GROUP_INFO_REPUBLISH_STARTUP_DELAY,
   GROUP_INFO_REPUBLISH_INTERVAL,
   GROUP_INFO_REPUBLISH_JITTER,
+  ERRORS,
 } from '../constants.js';
 import { SessionManager } from './session-manager.js';
 import { MessageEncryption } from './message-encryption.js';
@@ -641,7 +642,11 @@ export class MessageHandler {
         const userRegistration = await this.usernameRegistry.lookup(targetUsernameOrPeerId);
         targetPeerId = peerIdFromString(userRegistration.peerID);
       } catch (lookupErr: unknown) {
-        throw new Error(`User '${targetUsernameOrPeerId}' not found: ${lookupErr instanceof Error ? lookupErr.message : String(lookupErr)}`);
+        const lookupErrorText = lookupErr instanceof Error ? lookupErr.message : String(lookupErr);
+        if (lookupErrorText === ERRORS.USERNAME_NOT_FOUND) {
+          throw new Error(`User '${targetUsernameOrPeerId}' not found`);
+        }
+        throw new Error(`Failed to resolve user '${targetUsernameOrPeerId}': ${lookupErrorText}`);
       }
 
       user = await this.keyExchange.initiateKeyExchange(targetPeerId, targetUsernameOrPeerId, message);

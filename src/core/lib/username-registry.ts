@@ -17,6 +17,13 @@ export class UsernameRegistry {
   private static readonly TEXT_ENCODER = new TextEncoder();
   private static readonly TEXT_DECODER = new TextDecoder();
   private static readonly MAX_REGISTRATION_AGE = REREGISTRATION_INTERVAL * 2;
+  private static readonly LOOKUP_RETRYABLE_ERRORS = [
+    'Could not send correction',
+    'No peers found',
+    'all peers errored',
+    'query timed out',
+    'DHT is not started',
+  ];
 
   private node: ChatNode;
   private currentUsername: string | null = null;
@@ -546,6 +553,13 @@ export class UsernameRegistry {
       }
     } catch (dhtErr: unknown) {
       console.log(`DHT get failed for ${keyLabel}:`, dhtErr instanceof Error ? dhtErr.message : String(dhtErr));
+      const dhtErrMessage = dhtErr instanceof Error ? dhtErr.message : String(dhtErr);
+      if (this.isRetryableLookupFailure(dhtErrMessage)) {
+        throw new Error(`${ERRORS.USERNAME_LOOKUP_FAILED}: ${dhtErrMessage}`);
+      }
+      throw dhtErr instanceof Error
+        ? dhtErr
+        : new Error(`${ERRORS.USERNAME_LOOKUP_FAILED}: ${dhtErrMessage}`);
     }
 
     if (!newestRecord) {
@@ -557,6 +571,12 @@ export class UsernameRegistry {
     }
 
     return newestRecord;
+  }
+
+  private isRetryableLookupFailure(message: string): boolean {
+    return UsernameRegistry.LOOKUP_RETRYABLE_ERRORS.some((needle) =>
+      message.toLowerCase().includes(needle.toLowerCase()),
+    );
   }
 
   private async publishRecord(
