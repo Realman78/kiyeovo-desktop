@@ -448,6 +448,20 @@ export class GroupResponder {
     // Notify UI that this group chat is now active
     this.deps.onGroupChatActivated?.({ chatId: chat.id });
 
+    // The joiner does not receive GROUP_STATE_UPDATE for their own join event.
+    // Persist an equivalent local system message on welcome apply.
+    await this.appendMembershipSystemMessage(
+      chat.id,
+      welcome.groupId,
+      welcome.keyVersion,
+      'join',
+      this.deps.myPeerId,
+      this.deps.myUsername,
+      creatorPeerId,
+      creator.username,
+      Date.now(),
+    );
+
     // Send ACK back to creator
     await this.sendWelcomeAck(welcome);
     console.log(
@@ -1178,7 +1192,9 @@ export class GroupResponder {
       ?? this.deps.database.getUserByPeerId(targetPeerId)?.username
       ?? targetPeerId.slice(-8);
     const content = event === 'join'
-      ? `${resolvedUsername} joined the group`
+      ? targetPeerId === this.deps.myPeerId
+        ? 'You joined the group'
+        : `${resolvedUsername} joined the group`
       : event === 'leave'
         ? `${resolvedUsername} left the group`
         : targetPeerId === this.deps.myPeerId
