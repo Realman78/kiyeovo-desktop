@@ -20,9 +20,11 @@ Still secure: brute force is still blocked by submit lockout.
 Cons
 Still “startup blocked” (by design) until the user submits; but at least it feels responsive.
 
+1.0 onaj bug kadi se desi timeout connectiona pa ude i bude zbugiran connecting... status
+
 1.1
 I joined with a user and while the joining was happening, Alice (creator) was sending messages, but Chad did not receive them in real time, only when I checked missed messages. Alice error: [GROUP-MSG] Retrying publish for group=c883e511-02a7-4f23-9df9-4f495c094c44 after retryable error: PublishError.NoPeersSubscribedToTopic (attempt1Ms=1)
-we already went thourgh this and have not found the issue, I will have to investigate later. What do you say to the idea that if Chad is online when a new user joins or leaves or is removed, that the check missed messages gets triggered on his end? of course, only if he is online when the actual system message arrives, not when he comes online and the system message is fetched from the bucket. dont implement, let's just think about it
+we already went thourgh this and have not found the issue, I will have to investigate later. What do you say to the idea that if Chad is online when a new user joins or leaves or is removed, that the check missed messages gets triggered on his end? of course, only if he is online when the actual system message arrives, not when he comes online and the system message is fetched from the bucket. dont implement, let us just think about it
 
 1.1.1 nekakav rate limit na DHT zapise (na validatorima)
 
@@ -201,3 +203,12 @@ Line 139 opens DevTools in dev mode - that is fine. Just make sure isDev() corre
 
 IMPROVEMENT:
 persistent stream per session
+
+
+
+
+
+16. Missing: identity across modes                                                                                                                                                                                                                   
+                                                                                                                                                                                                                                                      
+  The plan says single DB, but what about the user's identity? Same keypair in both modes means a peer who knows your peer ID in fast mode could correlate you to your anonymous-mode identity if they ever see the same peer ID on the Tor network.  
+  If you want true isolation, you'd need separate keypairs per mode. If you don't care about cross-mode correlation (reasonable for v1), document that explicitly as a known tradeoff.

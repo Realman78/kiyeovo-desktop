@@ -148,14 +148,20 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
 
     const toProbe = connections.slice(0, 3);
     try {
+      const pingWithHardTimeout = (remotePeer: unknown) =>
+        Promise.race([
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (node.services as any).ping.ping(remotePeer, {
+            signal: AbortSignal.timeout(30_000),
+          }),
+          new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('ping_probe_hard_timeout')), 32_000);
+          }),
+        ]);
+
       // Promise.any: resolves as soon as one ping succeeds, rejects only if ALL fail
       await Promise.any(
-        toProbe.map(conn =>
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (node.services as any).ping.ping(conn.remotePeer, {
-            signal: AbortSignal.timeout(15000),
-          }),
-        ),
+        toProbe.map(conn => pingWithHardTimeout(conn.remotePeer)),
       );
       return true;
     } catch {
@@ -335,6 +341,10 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
         await Promise.allSettled(existing.map(c => c.close()));
       }
       await connectToBootstrap(node, database);
+      // Emit immediate optimistic status so UI doesn't stay in "Connecting..."
+      // if the periodic checker was waiting on a stale in-flight probe.
+      const postDialConnections = node.getConnections().length;
+      sendDHTConnectionStatus({ connected: postDialConnections > 0 });
       // Verify the new connection is actually alive
       await checkDHTStatus();
     },
