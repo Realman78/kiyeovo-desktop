@@ -1,3 +1,74 @@
+diff --git a/node_modules/@libp2p/kad-dht/dist/src/content-fetching/index.js b/node_modules/@libp2p/kad-dht/dist/src/content-fetching/index.js
+index ed65ccc..fbf265b 100644
+--- a/node_modules/@libp2p/kad-dht/dist/src/content-fetching/index.js
++++ b/node_modules/@libp2p/kad-dht/dist/src/content-fetching/index.js
+@@ -56,7 +56,13 @@ export class ContentFetching {
+      */
+     async *sendCorrectionRecord(key, vals, best, options) {
+         this.log('sendCorrection for %b', key);
++        const keyStr = new TextDecoder().decode(key);
++        const isUsernameKey = keyStr.startsWith('/kiyeovo-username/');
+         const fixupRec = createPutRecord(key, best);
++        const fixupRecordValue = Libp2pRecord.deserialize(fixupRec).value;
++        if (isUsernameKey) {
++            console.warn(`[USERNAME-CORRECTION][START] key=${keyStr} candidateValues=${vals.length}`);
++        }
+         for (const { value, from } of vals) {
+             // no need to do anything
+             if (uint8ArrayEquals(value, best)) {
+@@ -77,21 +83,48 @@ export class ContentFetching {
+             }
+             // send correction
+             let sentCorrection = false;
++            let queryErrorCount = 0;
++            let peerResponseCount = 0;
++            let mismatchedResponseCount = 0;
+             const request = {
+                 type: MessageType.PUT_VALUE,
+                 key,
+                 record: fixupRec
+             };
+             for await (const event of this.network.sendRequest(from, request, options)) {
+-                if (event.name === 'PEER_RESPONSE' && (event.record != null) && uint8ArrayEquals(event.record.value, Libp2pRecord.deserialize(fixupRec).value)) {
+-                    sentCorrection = true;
++                if (event.name === 'QUERY_ERROR') {
++                    queryErrorCount++;
++                    if (isUsernameKey) {
++                        const errText = event.error instanceof Error ? event.error.message : String(event.error);
++                        console.warn(`[USERNAME-CORRECTION][QUERY_ERROR] key=${keyStr} target=${from.toString()} path=${event.path.index}/${event.path.total} err=${errText}`);
++                    }
++                }
++                if (event.name === 'PEER_RESPONSE') {
++                    peerResponseCount++;
++                    const matches = event.record != null && uint8ArrayEquals(event.record.value, fixupRecordValue);
++                    if (matches) {
++                        sentCorrection = true;
++                    }
++                    else {
++                        mismatchedResponseCount++;
++                    }
++                    if (isUsernameKey) {
++                        console.warn(`[USERNAME-CORRECTION][PEER_RESPONSE] key=${keyStr} target=${from.toString()} path=${event.path.index}/${event.path.total} hasRecord=${event.record != null} matchesFixup=${matches}`);
++                    }
+                 }
+                 yield event;
+             }
+             if (!sentCorrection) {
+-                throw new QueryError('Could not send correction');
++                // Do not fail read path if correction cannot be sent; the best value is still usable.
++                this.log.error('Failed error correcting entry');
++                if (isUsernameKey) {
++                    console.error(`[USERNAME-CORRECTION][FAILED] key=${keyStr} target=${from.toString()} peerResponses=${peerResponseCount} mismatchedResponses=${mismatchedResponseCount} queryErrors=${queryErrorCount}`);
++                }
++                continue;
++            }
++            if (isUsernameKey) {
++                console.warn(`[USERNAME-CORRECTION][OK] key=${keyStr} target=${from.toString()} peerResponses=${peerResponseCount} queryErrors=${queryErrorCount}`);
+             }
+-            this.log.error('Failed error correcting entry');
+         }
+     }
+     /**
 diff --git a/node_modules/@libp2p/kad-dht/dist/src/index.d.ts b/node_modules/@libp2p/kad-dht/dist/src/index.d.ts
 index a8a01b8..2b6d186 100644
 --- a/node_modules/@libp2p/kad-dht/dist/src/index.d.ts
@@ -14,7 +85,7 @@ index a8a01b8..2b6d186 100644
       * How often to query our own PeerId in order to ensure we have a
       * good view on the KAD address space local to our PeerId
 diff --git a/node_modules/@libp2p/kad-dht/dist/src/kad-dht.js b/node_modules/@libp2p/kad-dht/dist/src/kad-dht.js
-index 79b18c0..676379f 100644
+index 79b18c0..d8bcc42 100644
 --- a/node_modules/@libp2p/kad-dht/dist/src/kad-dht.js
 +++ b/node_modules/@libp2p/kad-dht/dist/src/kad-dht.js
 @@ -221,6 +221,7 @@ export class KadDHT extends TypedEventEmitter {
@@ -25,8 +96,38 @@ index 79b18c0..676379f 100644
              logPrefix,
              metricsPrefix,
              datastorePrefix,
+diff --git a/node_modules/@libp2p/kad-dht/dist/src/network.js b/node_modules/@libp2p/kad-dht/dist/src/network.js
+index 559b220..5897253 100644
+--- a/node_modules/@libp2p/kad-dht/dist/src/network.js
++++ b/node_modules/@libp2p/kad-dht/dist/src/network.js
+@@ -3,7 +3,7 @@ import { Libp2pRecord } from '@libp2p/record';
+ import { AdaptiveTimeout } from '@libp2p/utils/adaptive-timeout';
+ import { pbStream } from 'it-protobuf-stream';
+ import { TypedEventEmitter } from 'main-event';
+-import { Message } from './message/dht.js';
++import { Message, MessageType } from './message/dht.js';
+ import { fromPbPeerInfo } from './message/utils.js';
+ import { sendQueryEvent, peerResponseEvent, queryErrorEvent, dialPeerEvent } from './query/events.js';
+ /**
+@@ -196,6 +196,16 @@ export class Network extends TypedEventEmitter {
+         catch (err) {
+             this.metrics.errors?.increment({ [type]: true });
+             stream?.abort(err);
++            let keyStr = '';
++            try {
++                keyStr = msg.key != null ? new TextDecoder().decode(msg.key) : '';
++            }
++            catch { }
++            if (type === MessageType.PUT_VALUE && keyStr.startsWith('/kiyeovo-username/')) {
++                const errText = err instanceof Error ? err.message : String(err);
++                const elapsedMs = Date.now() - signal.start;
++                console.error(`[USERNAME-CORRECTION][SEND_REQUEST_ERROR] to=${to.toString()} key=${keyStr} path=${options.path.index}/${options.path.total} timeoutMs=${signal.timeout} elapsedMs=${elapsedMs} aborted=${signal.aborted} err=${errText}`);
++            }
+             yield queryErrorEvent({ from: to, error: err, path: options.path }, options);
+         }
+         finally {
 diff --git a/node_modules/@libp2p/kad-dht/dist/src/rpc/handlers/put-value.d.ts b/node_modules/@libp2p/kad-dht/dist/src/rpc/handlers/put-value.d.ts
-index c75bc4e..f8fed58 100644
+index c75bc4e..2add8e2 100644
 --- a/node_modules/@libp2p/kad-dht/dist/src/rpc/handlers/put-value.d.ts
 +++ b/node_modules/@libp2p/kad-dht/dist/src/rpc/handlers/put-value.d.ts
 @@ -7,6 +7,7 @@ export interface PutValueHandlerInit {
@@ -46,7 +147,7 @@ index c75bc4e..f8fed58 100644
      private readonly datastorePrefix;
      constructor(components: PutValueHandlerComponents, init: PutValueHandlerInit);
 diff --git a/node_modules/@libp2p/kad-dht/dist/src/rpc/handlers/put-value.js b/node_modules/@libp2p/kad-dht/dist/src/rpc/handlers/put-value.js
-index 2db17ed..1216f8e 100644
+index 2db17ed..a33e58e 100644
 --- a/node_modules/@libp2p/kad-dht/dist/src/rpc/handlers/put-value.js
 +++ b/node_modules/@libp2p/kad-dht/dist/src/rpc/handlers/put-value.js
 @@ -5,14 +5,16 @@ import { bufferToRecordKey } from '../../utils.js';
@@ -89,7 +190,7 @@ index 2db17ed..1216f8e 100644
              this.log('put record for %b into datastore under key %k', key, recordKey);
          }
 diff --git a/node_modules/@libp2p/kad-dht/dist/src/rpc/index.d.ts b/node_modules/@libp2p/kad-dht/dist/src/rpc/index.d.ts
-index 2c4606c..7704a27 100644
+index 2c4606c..f86b850 100644
 --- a/node_modules/@libp2p/kad-dht/dist/src/rpc/index.d.ts
 +++ b/node_modules/@libp2p/kad-dht/dist/src/rpc/index.d.ts
 @@ -16,6 +16,7 @@ export interface RPCInit {
@@ -207,38 +308,3 @@ index a9a1491..7c83c35 100644
    logPrefix: string
    metricsPrefix: string
    datastorePrefix: string
-diff --git a/node_modules/@libp2p/kad-dht/dist/src/content-fetching/index.js b/node_modules/@libp2p/kad-dht/dist/src/content-fetching/index.js
-index 25a99df..c435f5c 100644
---- a/node_modules/@libp2p/kad-dht/dist/src/content-fetching/index.js
-+++ b/node_modules/@libp2p/kad-dht/dist/src/content-fetching/index.js
-@@ -89,9 +89,10 @@ export class ContentFetching {
-                 yield event;
-             }
-             if (!sentCorrection) {
--                throw new QueryError('Could not send correction');
-+                // Do not fail read path if correction cannot be sent; the best value is still usable.
-+                this.log.error('Failed error correcting entry');
-+                continue;
-             }
--            this.log.error('Failed error correcting entry');
-         }
-     }
-     /**
-diff --git a/node_modules/@libp2p/kad-dht/src/content-fetching/index.ts b/node_modules/@libp2p/kad-dht/src/content-fetching/index.ts
-index 5a4d9d2..561f60f 100644
---- a/node_modules/@libp2p/kad-dht/src/content-fetching/index.ts
-+++ b/node_modules/@libp2p/kad-dht/src/content-fetching/index.ts
-@@ -129,10 +129,10 @@ export class ContentFetching {
-         yield event
-       }
- 
-       if (!sentCorrection) {
--        throw new QueryError('Could not send correction')
--
--      this.log.error('Failed error correcting entry')
-+        // Do not fail read path if correction cannot be sent; the best value is still usable.
-+        this.log.error('Failed error correcting entry')
-+        continue
-       }
-     }
-   }

@@ -127,7 +127,7 @@ export const SidebarFooter: FC<SidebarFooterProps> = ({ collapsed = false }) => 
                   {user.username}
                 </p>
                 <div className="flex items-center gap-1">
-                  <p className="text-xs text-success font-mono text-left truncate cursor-pointer" onClick={handleCopyPeerId}>{user.peerId}</p>
+                  <p title={user.peerId} className="text-xs text-success font-mono text-left truncate cursor-pointer" onClick={handleCopyPeerId}>{user.peerId}</p>
                   <button
                     type="button"
                     className="text-xs cursor-pointer text-muted-foreground hover:text-foreground"
