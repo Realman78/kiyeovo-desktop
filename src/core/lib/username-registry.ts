@@ -49,12 +49,10 @@ export class UsernameRegistry {
     const lastUsername = this.database.getLastUsername(this.node.peerId.toString());
 
     if (lastUsername && userDb && autoRegister === 'true') {
-      console.log(`Auto-registering as '${lastUsername}'...`);
-      try {
-        await this.tryRestoreLastUsername(userDb, onRestoreUsername);
-      } catch (error: unknown) {
+      console.log(`Auto-registering as '${lastUsername}' in background...`);
+      void this.tryRestoreLastUsername(userDb, onRestoreUsername).catch((error: unknown) => {
         generalErrorHandler(error);
-      }
+      });
     }
   }
 

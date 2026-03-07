@@ -7,6 +7,8 @@ export interface User {
   registered: boolean;
   username?: string;
   torEnabled: boolean;
+  registrationInProgress: boolean;
+  pendingRegisterUsername?: string;
 }
 
 const initialState: User = {
@@ -15,6 +17,8 @@ const initialState: User = {
   registered: false,
   username: '',
   torEnabled: false,
+  registrationInProgress: false,
+  pendingRegisterUsername: '',
 };
 
 const userSlice = createSlice({
@@ -32,9 +36,20 @@ const userSlice = createSlice({
     },
     setRegistered: (state, action: PayloadAction<boolean>) => {
       state.registered = action.payload;
+      if (action.payload) {
+        state.registrationInProgress = false;
+        state.pendingRegisterUsername = '';
+      }
     },
     setTorEnabled: (state, action: PayloadAction<boolean>) => {
       state.torEnabled = action.payload;
+    },
+    setRegistrationInProgress: (
+      state,
+      action: PayloadAction<{ inProgress: boolean; pendingUsername?: string }>
+    ) => {
+      state.registrationInProgress = action.payload.inProgress;
+      state.pendingRegisterUsername = action.payload.pendingUsername || '';
     },
   },
 });
@@ -45,6 +60,7 @@ export const {
   setConnected,
   setRegistered,
   setTorEnabled,
+  setRegistrationInProgress,
 } = userSlice.actions;
 
 export default userSlice.reducer;

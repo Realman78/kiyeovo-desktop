@@ -5,7 +5,7 @@ import { useDispatch, useSelector } from "react-redux";
 import { Check, Copy, Settings, User } from "lucide-react";
 import { Button } from "../../ui/Button";
 import UserDialog from "./UserDialog";
-import { setRegistered, setUsername } from "../../../state/slices/userSlice";
+import { setRegistered, setRegistrationInProgress, setUsername } from "../../../state/slices/userSlice";
 import { SettingsDialog } from "./SettingsDialog";
 import RegisterDialog from "./RegisterDialog";
 
@@ -15,6 +15,8 @@ type SidebarFooterProps = {
 
 export const SidebarFooter: FC<SidebarFooterProps> = ({ collapsed = false }) => {
   const user = useSelector((state: RootState) => state.user);
+  const registrationInProgress = useSelector((state: RootState) => state.user.registrationInProgress);
+  const pendingRegistrationUsername = useSelector((state: RootState) => state.user.pendingRegisterUsername || "");
   const [isCopied, setIsCopied] = useState(false);
   const [userDialogOpen, setUserDialogOpen] = useState(false);
   const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
@@ -25,6 +27,8 @@ export const SidebarFooter: FC<SidebarFooterProps> = ({ collapsed = false }) => 
   const [registerIdentityError, setRegisterIdentityError] = useState<string | undefined>(undefined);
   const [pendingRegisterUsername, setPendingRegisterUsername] = useState("");
   const dispatch = useDispatch();
+  const effectiveIsRegistering = isRegisteringIdentity || registrationInProgress;
+  const effectivePendingUsername = pendingRegisterUsername || pendingRegistrationUsername;
 
   const handleSettings = () => {
     setSettingsDialogOpen(true);
@@ -41,6 +45,7 @@ export const SidebarFooter: FC<SidebarFooterProps> = ({ collapsed = false }) => 
   const handleUsernameChange = async (username: string) => {
     setIsUpdatingUsername(true);
     setUpdateUsernameError(undefined);
+    dispatch(setRegistrationInProgress({ inProgress: true, pendingUsername: username }));
 
     try {
         const result = await window.kiyeovoAPI.register(username, false);
@@ -58,6 +63,7 @@ export const SidebarFooter: FC<SidebarFooterProps> = ({ collapsed = false }) => 
         setUpdateUsernameError(err instanceof Error ? err.message : 'Unexpected error occurred');
     } finally {
         setIsUpdatingUsername(false);
+        dispatch(setRegistrationInProgress({ inProgress: false, pendingUsername: '' }));
     }
   };
 
@@ -65,6 +71,7 @@ export const SidebarFooter: FC<SidebarFooterProps> = ({ collapsed = false }) => 
     setIsRegisteringIdentity(true);
     setRegisterIdentityError(undefined);
     setPendingRegisterUsername(username);
+    dispatch(setRegistrationInProgress({ inProgress: true, pendingUsername: username }));
 
     try {
       const result = await window.kiyeovoAPI.register(username, rememberMe);
@@ -80,7 +87,8 @@ export const SidebarFooter: FC<SidebarFooterProps> = ({ collapsed = false }) => 
       console.error('Registration error:', err);
       setRegisterIdentityError(err instanceof Error ? err.message : 'Unexpected error occurred');
     } finally {
-      setIsRegisteringIdentity(false);
+        setIsRegisteringIdentity(false);
+        dispatch(setRegistrationInProgress({ inProgress: false, pendingUsername: '' }));
     }
   };
 
@@ -98,8 +106,8 @@ export const SidebarFooter: FC<SidebarFooterProps> = ({ collapsed = false }) => 
           ) : (
             <RegisterButton
               onClick={() => setRegisterDialogOpen(true)}
-              isRegistering={isRegisteringIdentity}
-              pendingUsername={pendingRegisterUsername}
+              isRegistering={effectiveIsRegistering}
+              pendingUsername={effectivePendingUsername}
               collapsed
             />
           )}
@@ -141,8 +149,8 @@ export const SidebarFooter: FC<SidebarFooterProps> = ({ collapsed = false }) => 
           ) : (
             <RegisterButton
               onClick={() => setRegisterDialogOpen(true)}
-              isRegistering={isRegisteringIdentity}
-              pendingUsername={pendingRegisterUsername}
+              isRegistering={effectiveIsRegistering}
+              pendingUsername={effectivePendingUsername}
             />
           )}
           <Button
@@ -168,8 +176,8 @@ export const SidebarFooter: FC<SidebarFooterProps> = ({ collapsed = false }) => 
       onOpenChange={setRegisterDialogOpen}
       onRegister={handleRegisterIdentity}
       backendError={registerIdentityError}
-      isRegistering={isRegisteringIdentity}
-      initialUsername={pendingRegisterUsername}
+      isRegistering={effectiveIsRegistering}
+      initialUsername={effectivePendingUsername}
     />
     <SettingsDialog open={settingsDialogOpen} onOpenChange={setSettingsDialogOpen} />
   </div>

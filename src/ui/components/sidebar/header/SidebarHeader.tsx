@@ -5,7 +5,7 @@ import { Button } from "../../ui/Button";
 import ConnectionStatusDialog from "./ConnectionStatusDialog";
 import { KiyeovoDialog } from "./KiyeovoDialog";
 import { useDispatch, useSelector } from "react-redux";
-import { setConnected, setRegistered, setUsername } from "../../../state/slices/userSlice";
+import { setConnected, setRegistered, setRegistrationInProgress, setUsername } from "../../../state/slices/userSlice";
 import NewConversationDialog from "./NewConversationDialog";
 import ImportTrustedUserDialog from "./ImportTrustedUserDialog";
 import NewGroupDialog, { type GroupInviteDeliveryView } from "./NewGroupDialog";
@@ -65,6 +65,39 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
     useEffect(() => {
         console.log('[DHT-STATUS][UI][SUBSCRIBE] SidebarHeader subscribing to DHT status events');
         let isDisposed = false;
+        const triggerAutoRegisterIfNeeded = () => {
+            if (attemptedAutoRegisterRef.current || isRegistered) {
+                return;
+            }
+
+            attemptedAutoRegisterRef.current = true;
+            dispatch(setRegistrationInProgress({ inProgress: true, pendingUsername: '' }));
+
+            const lastUsernamePromise = window.kiyeovoAPI.getLastUsername()
+                .then((last) => {
+                    if (!isDisposed && last.username) {
+                        dispatch(setRegistrationInProgress({ inProgress: true, pendingUsername: last.username }));
+                    }
+                })
+                .catch(() => {
+                    // Best effort; pending username can remain empty.
+                });
+
+            void (async () => {
+                try {
+                    await lastUsernamePromise;
+                    const result = await window.kiyeovoAPI.attemptAutoRegister();
+                    if (result.success && result.username) {
+                        dispatch(setUsername(result.username));
+                        dispatch(setRegistered(true));
+                    }
+                } finally {
+                    if (!isDisposed) {
+                        dispatch(setRegistrationInProgress({ inProgress: false, pendingUsername: '' }));
+                    }
+                }
+            })();
+        };
 
         void window.kiyeovoAPI.getDHTConnectionStatus().then((result) => {
             console.log("getDHTConnectionStatus result")
@@ -77,6 +110,9 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
             console.log(`[DHT-STATUS][UI][SNAPSHOT] connected=${result.connected}`);
             setIsDHTConnected(result.connected);
             dispatch(setConnected(result.connected));
+            if (result.connected) {
+                triggerAutoRegisterIfNeeded();
+            }
         }).catch((error) => {
             console.error('[DHT-STATUS][UI][SNAPSHOT] failed:', error);
         });
@@ -87,17 +123,10 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
             dispatch(setConnected(status.connected));
             if (!status.connected) {
                 attemptedAutoRegisterRef.current = false;
+                dispatch(setRegistrationInProgress({ inProgress: false, pendingUsername: '' }));
                 return;
             }
-            if (status.connected && !isRegistered && !attemptedAutoRegisterRef.current) {
-                attemptedAutoRegisterRef.current = true;
-                void window.kiyeovoAPI.attemptAutoRegister().then((result) => {
-                    if (result.success && result.username) {
-                        dispatch(setUsername(result.username));
-                        dispatch(setRegistered(true));
-                    }
-                });
-            }
+            triggerAutoRegisterIfNeeded();
         });
 
         // Listen for key exchange sent event (to close dialog immediately)

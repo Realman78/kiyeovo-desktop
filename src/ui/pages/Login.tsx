@@ -23,6 +23,9 @@ export const Login = ({ initStatus }: LoginProps) => {
     const [isSwitchingMode, setIsSwitchingMode] = useState(false);
     const [requiresNetworkModeSelection, setRequiresNetworkModeSelection] = useState(false);
     const previousPasswordRequestRef = useRef<PasswordRequest | null>(null);
+    const isTorStartupFailure =
+        initStatus.includes('Tor failed to start') &&
+        initStatus.includes('Anonymous mode cannot continue');
 
     useEffect(() => {
         let isMounted = true;
@@ -195,6 +198,22 @@ export const Login = ({ initStatus }: LoginProps) => {
             isSwitchingNetworkMode={isSwitchingMode}
             modeSwitchError={modeError}
         />
-            : <div>{initStatus}</div>}
+            : isTorStartupFailure ? (
+                <div className="w-96 rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-center">
+                    <p className="text-sm font-semibold text-destructive">{initStatus}</p>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                        Install Tor dependencies with <div className="font-mono">npm run setup</div> if you want Anonymous mode.
+                    </p>
+                    <button
+                        type="button"
+                        disabled={isSwitchingMode}
+                        onClick={() => { void handleSwitchNetworkMode(NETWORK_MODES.FAST); }}
+                        className="mt-4 cursor-pointer rounded-md border border-primary/40 bg-primary/15 px-3 py-2 text-sm text-primary transition-colors hover:bg-primary/25 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                        {isSwitchingMode ? 'Switching to Fast Mode...' : 'Switch to Fast Mode'}
+                    </button>
+                    {modeError ? <p className="mt-2 text-xs text-destructive">{modeError}</p> : null}
+                </div>
+            ) : <div>{initStatus}</div>}
     </div>
 }
