@@ -162,6 +162,7 @@ function sendInitStatus(message: string, stage: InitStatus['stage']) {
 function sendDHTConnectionStatus(status: { connected: boolean }) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     console.log(`[Electron] Sending DHT connection status: ${status.connected}`);
+    console.log(`[DHT-STATUS][ELECTRON][EMIT] connected=${status.connected}`);
     mainWindow.webContents.send(IPC_CHANNELS.DHT_CONNECTION_STATUS, status);
   }
 }

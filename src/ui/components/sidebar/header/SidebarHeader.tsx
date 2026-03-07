@@ -63,8 +63,9 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
 
 
     useEffect(() => {
+        console.log('[DHT-STATUS][UI][SUBSCRIBE] SidebarHeader subscribing to DHT status events');
         const unsubStatus = window.kiyeovoAPI.onDHTConnectionStatus((status: { connected: boolean }) => {
-            console.log('DHT connection status:', status.connected);
+            console.log(`[DHT-STATUS][UI][EVENT] connected=${status.connected}`);
             setIsDHTConnected(status.connected);
             dispatch(setConnected(status.connected));
             if (!status.connected) {
@@ -94,16 +95,22 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
         });
 
         return () => {
+            console.log('[DHT-STATUS][UI][UNSUBSCRIBE] SidebarHeader unsubscribing from DHT status events');
             unsubStatus();
             unsubSent();
         };
     }, [dispatch, isRegistered]);
 
     useEffect(() => {
+        console.log(`[DHT-STATUS][UI][REDUX] user.connected changed -> ${String(isConnected)}`);
         if (isConnected) {
             setIsDHTConnected(true);
         }
     }, [isConnected]);
+
+    useEffect(() => {
+        console.log(`[DHT-STATUS][UI][LOCAL] isDHTConnected -> ${String(isDHTConnected)}`);
+    }, [isDHTConnected]);
 
     useEffect(() => {
         // Load Tor settings to display connection mode

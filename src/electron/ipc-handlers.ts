@@ -402,6 +402,7 @@ function setupBootstrapHandlers(
 
       console.log('[IPC] Retrying bootstrap connection...');
       await p2pCore.retryBootstrap();
+      console.log(`[DHT-STATUS][IPC][RETRY_BOOTSTRAP] complete peerCount=${p2pCore.node.getConnections().length}`);
       console.log('[IPC] Bootstrap retry complete');
 
       return { success: true, error: null };
