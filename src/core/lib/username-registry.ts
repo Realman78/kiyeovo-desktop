@@ -95,12 +95,34 @@ export class UsernameRegistry {
     const precheckStartMs = Date.now();
     const precheckEventCounts: Record<string, number> = {};
     let precheckValueEvents = 0;
+    let precheckSawAnyEvent = false;
+    const dhtService = this.node.services.dht as unknown as {
+      protocol?: string;
+      getMode?: () => 'client' | 'server';
+      routingTable?: { size?: number };
+    };
+    const precheckWatchdog = setInterval(() => {
+      console.warn(
+        `[USERNAME-REG][PRECHECK][WAIT] username=${username} key=${usernameKeyLabel} elapsedMs=${Date.now() - precheckStartMs} sawEvent=${precheckSawAnyEvent} peerCount=${this.node.getConnections().length} routingSize=${dhtService.routingTable?.size ?? 'unknown'}`,
+      );
+    }, 5000);
+
     console.log(
-      `[USERNAME-REG][PRECHECK][START] username=${username} key=${usernameKeyLabel} peerCount=${this.node.getConnections().length}`,
+      `[USERNAME-REG][PRECHECK][START] username=${username} key=${usernameKeyLabel} peerCount=${this.node.getConnections().length} dhtProtocol=${dhtService.protocol ?? 'unknown'} dhtMode=${dhtService.getMode?.() ?? 'unknown'} routingSize=${dhtService.routingTable?.size ?? 'unknown'}`,
     );
     try {
       for await (const event of this.node.services.dht.get(usernameKey) as AsyncIterable<QueryEvent>) {
+        precheckSawAnyEvent = true;
         precheckEventCounts[event.name] = (precheckEventCounts[event.name] ?? 0) + 1;
+        const fromPeer = 'from' in event && event.from != null
+          ? event.from.toString()
+          : '';
+        const toPeer = 'to' in event && event.to != null
+          ? event.to.toString()
+          : '';
+        console.log(
+          `[USERNAME-REG][PRECHECK][EVENT] username=${username} key=${usernameKeyLabel} name=${event.name}${fromPeer ? ` from=${fromPeer}` : ''}${toPeer ? ` to=${toPeer}` : ''}`,
+        );
         if (event.name === 'VALUE' && event.value) {
           precheckValueEvents++;
           const rawData = UsernameRegistry.TEXT_DECODER.decode(event.value).trim();
@@ -156,6 +178,8 @@ export class UsernameRegistry {
         generalErrorHandler(err, 'Failed to register username');
         throw err;
       }
+    } finally {
+      clearInterval(precheckWatchdog);
     }
 
     // If changing username, stop re-registration first to prevent race conditions
