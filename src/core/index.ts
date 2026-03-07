@@ -237,8 +237,10 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
             const peerInfo = await node.peerStore.get(conn.remotePeer);
             const advertised = peerInfo.protocols ?? [];
             const supportsDht = activeDhtProtocol !== 'unknown' && advertised.includes(activeDhtProtocol);
+            const addrs = (peerInfo.addresses ?? []).map((entry) => entry.multiaddr.toString());
+            const firstAddr = addrs.length > 0 ? addrs[0] : 'none';
             console.log(
-              `[DHT-STATUS][CORE][PEER-CAPS] id=${checkId} source=${source} peer=${conn.remotePeer.toString()} protocols=${advertised.length} supportsActiveDht=${supportsDht}`,
+              `[DHT-STATUS][CORE][PEER-CAPS] id=${checkId} source=${source} peer=${conn.remotePeer.toString()} protocols=${advertised.length} supportsActiveDht=${supportsDht} addrs=${addrs.length} firstAddr=${firstAddr}`,
             );
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
