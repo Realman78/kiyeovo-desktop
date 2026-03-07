@@ -467,6 +467,7 @@ export const IPC_CHANNELS = {
   INIT_COMPLETE: 'init:complete',
   INIT_ERROR: 'init:error',
   INIT_STATE: 'init:state',
+  INIT_START: 'init:start',
 
   // DHT connection status
   DHT_CONNECTION_STATUS: 'dht:connectionStatus',
@@ -554,6 +555,8 @@ export const IPC_CHANNELS = {
   // App settings
   GET_NOTIFICATIONS_ENABLED: 'settings:getNotificationsEnabled',
   SET_NOTIFICATIONS_ENABLED: 'settings:setNotificationsEnabled',
+  GET_NETWORK_MODE: 'settings:getNetworkMode',
+  SET_NETWORK_MODE: 'settings:setNetworkMode',
   NOTIFICATIONS_ENABLED_CHANGED: 'settings:notificationsEnabledChanged',
   GET_DOWNLOADS_DIR: 'settings:getDownloadsDir',
   SET_DOWNLOADS_DIR: 'settings:setDownloadsDir',

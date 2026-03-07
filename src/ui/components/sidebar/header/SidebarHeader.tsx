@@ -254,14 +254,14 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
     return <>
         <div className={collapsed ? "w-full p-3 flex flex-col items-center gap-3" : "w-full p-4 flex"}>
             <div className={collapsed ? "flex flex-col items-center gap-3" : "w-full flex items-center justify-between"}>
-                <div className="w-10 h-10 cursor-pointer rounded-full border border-primary/50 flex items-center justify-center glow-border" onClick={handleShowKiyeovoDialog}>
+                <div className={`w-10 h-10 cursor-pointer rounded-full border ${isTorEnabled ? "border-[#5a3184]" : "border-primary/50"} flex items-center justify-center glow-border`} onClick={handleShowKiyeovoDialog}>
                     <Logo version="2" />
                 </div>
                 {collapsed ? (
                     <button
                         onClick={handleShowDhtDialog}
                         className="flex cursor-pointer items-center justify-center w-8 h-8 rounded-md transition-colors hover:bg-sidebar-accent"
-                        title={isDHTConnected === null ? "Connecting..." : isDHTConnected ? `Connected (${isTorEnabled ? 'tor' : 'local'})` : "Offline"}
+                        title={isDHTConnected === null ? "Connecting..." : isDHTConnected ? `Connected${isTorEnabled ? ' (tor)' : ''}` : "Offline"}
                         aria-label="DHT status"
                     >
                         <span className={`w-2.5 h-2.5 rounded-full ${isDHTConnected === null ? "bg-muted-foreground" : isDHTConnected ? "bg-success pulse-online" : "bg-destructive"}`} />

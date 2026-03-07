@@ -3,7 +3,7 @@ import './App.css'
 import { Login } from './pages/Login';
 import { Main } from './pages/Main';
 import { useDispatch } from 'react-redux';
-import { setPeerId } from './state/slices/userSlice';
+import { setPeerId, setTorEnabled } from './state/slices/userSlice';
 
 function App() {
   const [initStatus, setInitStatus] = useState('Initializing...');
@@ -13,6 +13,15 @@ function App() {
 
   useEffect(() => {
     let isMounted = true;
+    const loadTorSettings = async () => {
+      try {
+        const result = await window.kiyeovoAPI.getTorSettings();
+        if (!isMounted || !result.success || !result.settings) return;
+        dispatch(setTorEnabled(result.settings.enabled === 'true'));
+      } catch {
+        // ignore; defaults to false
+      }
+    };
 
     const loadInitState = async () => {
       try {
@@ -37,6 +46,8 @@ function App() {
     };
 
     void loadInitState();
+    // May fail before core init; retried on init complete below.
+    void loadTorSettings();
 
     const unsubStatus = window.kiyeovoAPI.onInitStatus((status) => {
       if (status.stage === 'peerId') {
@@ -49,6 +60,7 @@ function App() {
     const unsubComplete = window.kiyeovoAPI.onInitComplete(() => {
       setIsInitialized(true);
       setInitStatus('Initialized successfully!');
+      void loadTorSettings();
     });
 
     const unsubError = window.kiyeovoAPI.onInitError(() => {

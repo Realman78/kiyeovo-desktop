@@ -8,6 +8,7 @@ import type { EncryptedUserIdentity } from '../encrypted-user-identity.js';
 import { OfflineMessageManager } from '../offline-message-manager.js';
 import { toBase64Url } from '../base64url.js';
 import {
+  OFFLINE_BUCKET_PREFIX,
   GROUP_INVITE_LIFETIME,
   GROUP_MAX_MEMBERS,
   GROUP_INFO_LATEST_PREFIX,
@@ -1357,7 +1358,7 @@ export class GroupCreator {
     }
 
     const ourPubKeyBase64url = toBase64Url(userIdentity.signingPublicKey);
-    const writeBucketKey = `/kiyeovo-offline/${bucketSecret}/${ourPubKeyBase64url}`;
+    const writeBucketKey = `${OFFLINE_BUCKET_PREFIX}/${bucketSecret}/${ourPubKeyBase64url}`;
     const bucketTag = writeBucketKey.slice(-12);
 
     // Wrap the group control message as an offline message

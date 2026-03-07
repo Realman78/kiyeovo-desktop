@@ -1,13 +1,14 @@
 import type { IpcMain, BrowserWindow } from 'electron';
 import { app, dialog, Notification, shell } from 'electron';
-import { IPC_CHANNELS, OFFLINE_CHECK_CACHE_TTL, PENDING_KEY_EXCHANGE_EXPIRATION, type P2PCore, type AppConfig } from '../core/index.js';
-import { DOWNLOADS_DIR, getTorConfig, CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES, KEY_EXCHANGE_RATE_LIMIT_DEFAULT, OFFLINE_MESSAGE_LIMIT, MAX_FILE_SIZE, FILE_OFFER_RATE_LIMIT, MAX_PENDING_FILES_PER_PEER, MAX_PENDING_FILES_TOTAL, SILENT_REJECTION_THRESHOLD_GLOBAL, SILENT_REJECTION_THRESHOLD_PER_PEER } from '../core/constants.js';
+import { IPC_CHANNELS, OFFLINE_CHECK_CACHE_TTL, PENDING_KEY_EXCHANGE_EXPIRATION, type P2PCore, type AppConfig, type NetworkMode } from '../core/index.js';
+import { CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES, DEFAULT_NETWORK_MODE, DOWNLOADS_DIR, FILE_OFFER_RATE_LIMIT, KEY_EXCHANGE_RATE_LIMIT_DEFAULT, MAX_FILE_SIZE, MAX_PENDING_FILES_PER_PEER, MAX_PENDING_FILES_TOTAL, NETWORK_MODE_ONBOARDED_SETTING_KEY, OFFLINE_MESSAGE_LIMIT, SILENT_REJECTION_THRESHOLD_GLOBAL, SILENT_REJECTION_THRESHOLD_PER_PEER, NETWORK_MODES, getTorConfig, isNetworkMode } from '../core/constants.js';
 import { validateMessageLength, validateUsername } from '../core/utils/validators.js';
 import { peerIdFromString } from '@libp2p/peer-id';
 import { OfflineMessageManager } from '../core/lib/offline-message-manager.js';
 import { ProfileManager } from '../core/lib/profile-manager.js';
 import { GroupCreator } from '../core/lib/group/group-creator.js';
 import { GroupResponder } from '../core/lib/group/group-responder.js';
+import { ChatDatabase } from '../core/lib/db/database.js';
 import { ensureAppDataDir } from '../core/utils/miscellaneous.js';
 import { homedir } from 'os';
 import { basename, join } from 'path';
@@ -16,6 +17,21 @@ import { copyFile, stat } from 'fs/promises';
 function requestAppRestart(): void {
   (app as typeof app & { __kiyeovoRestartRequested?: boolean }).__kiyeovoRestartRequested = true;
   app.quit();
+}
+
+function withSettingsDatabase<T>(getP2PCore: () => P2PCore | null, run: (db: ChatDatabase) => T): T {
+  const p2pCore = getP2PCore();
+  if (p2pCore) {
+    return run(p2pCore.database);
+  }
+
+  const dbPath = join(ensureAppDataDir(), 'chat.db');
+  const tempDb = new ChatDatabase(dbPath);
+  try {
+    return run(tempDb);
+  } finally {
+    tempDb.close();
+  }
 }
 
 /**
@@ -1179,6 +1195,32 @@ function setupChatSettingsHandlers(
   });
 
   // App-level settings
+  ipcMain.handle(IPC_CHANNELS.GET_NETWORK_MODE, async () => {
+    try {
+      const mode = withSettingsDatabase(getP2PCore, (db) => db.getNetworkMode());
+      return { success: true, mode, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to get network mode:', error);
+      return { success: false, mode: DEFAULT_NETWORK_MODE as NetworkMode, error: error instanceof Error ? error.message : 'Failed to get network mode' };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.SET_NETWORK_MODE, async (_event, mode: NetworkMode) => {
+    try {
+      if (!isNetworkMode(mode)) {
+        return { success: false, error: 'Invalid network mode' };
+      }
+      withSettingsDatabase(getP2PCore, (db) => {
+        db.setNetworkMode(mode);
+        db.setSetting(NETWORK_MODE_ONBOARDED_SETTING_KEY, 'true');
+      });
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to set network mode:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to set network mode' };
+    }
+  });
+
   ipcMain.handle(IPC_CHANNELS.GET_NOTIFICATIONS_ENABLED, async (_event) => {
     try {
       const p2pCore = getP2PCore();
@@ -1262,34 +1304,30 @@ function setupChatSettingsHandlers(
   // Tor settings
   ipcMain.handle(IPC_CHANNELS.GET_TOR_SETTINGS, async () => {
     try {
-      const p2pCore = getP2PCore();
-      if (!p2pCore) {
-        return { success: false, settings: null, error: 'P2P core not initialized' };
-      }
+      const settings = withSettingsDatabase(getP2PCore, (db) => {
+        const get = (key: string) => db.getSetting(key);
+        const base = getTorConfig();
+        const mode = db.getNetworkMode();
+        const enabled = mode === NETWORK_MODES.ANONYMOUS;
+        const socksHost = get('tor_socks_host');
+        const socksPort = get('tor_socks_port');
+        const connectionTimeout = get('tor_connection_timeout');
+        const circuitTimeout = get('tor_circuit_timeout');
+        const maxRetries = get('tor_max_retries');
+        const healthCheckInterval = get('tor_health_check_interval');
+        const dnsResolution = get('tor_dns_resolution');
 
-      const db = p2pCore.database;
-      const get = (key: string) => db.getSetting(key);
-      const base = getTorConfig();
-
-      const enabled = get('tor_enabled');
-      const socksHost = get('tor_socks_host');
-      const socksPort = get('tor_socks_port');
-      const connectionTimeout = get('tor_connection_timeout');
-      const circuitTimeout = get('tor_circuit_timeout');
-      const maxRetries = get('tor_max_retries');
-      const healthCheckInterval = get('tor_health_check_interval');
-      const dnsResolution = get('tor_dns_resolution');
-
-      const settings = {
-        enabled: enabled ?? String(base.enabled),
-        socksHost: socksHost ?? base.socksHost,
-        socksPort: socksPort ?? String(base.socksPort),
-        connectionTimeout: connectionTimeout ?? String(base.connectionTimeout),
-        circuitTimeout: circuitTimeout ?? String(base.circuitTimeout),
-        maxRetries: maxRetries ?? String(base.maxRetries),
-        healthCheckInterval: healthCheckInterval ?? String(base.healthCheckInterval),
-        dnsResolution: dnsResolution ?? base.dnsResolution
-      };
+        return {
+          enabled: String(enabled),
+          socksHost: socksHost ?? base.socksHost,
+          socksPort: socksPort ?? String(base.socksPort),
+          connectionTimeout: connectionTimeout ?? String(base.connectionTimeout),
+          circuitTimeout: circuitTimeout ?? String(base.circuitTimeout),
+          maxRetries: maxRetries ?? String(base.maxRetries),
+          healthCheckInterval: healthCheckInterval ?? String(base.healthCheckInterval),
+          dnsResolution: dnsResolution ?? base.dnsResolution
+        };
+      });
 
       return { success: true, settings, error: null };
     } catch (error) {
@@ -1299,7 +1337,7 @@ function setupChatSettingsHandlers(
   });
 
   ipcMain.handle(IPC_CHANNELS.SET_TOR_SETTINGS, async (_event, settings: {
-    enabled: boolean;
+    enabled?: boolean;
     socksHost: string;
     socksPort: number;
     connectionTimeout: number;
@@ -1309,20 +1347,15 @@ function setupChatSettingsHandlers(
     dnsResolution: 'tor' | 'system';
   }) => {
     try {
-      const p2pCore = getP2PCore();
-      if (!p2pCore) {
-        return { success: false, error: 'P2P core not initialized' };
-      }
-
-      const db = p2pCore.database;
-      db.setSetting('tor_enabled', String(settings.enabled));
-      db.setSetting('tor_socks_host', settings.socksHost);
-      db.setSetting('tor_socks_port', String(settings.socksPort));
-      db.setSetting('tor_connection_timeout', String(settings.connectionTimeout));
-      db.setSetting('tor_circuit_timeout', String(settings.circuitTimeout));
-      db.setSetting('tor_max_retries', String(settings.maxRetries));
-      db.setSetting('tor_health_check_interval', String(settings.healthCheckInterval));
-      db.setSetting('tor_dns_resolution', settings.dnsResolution);
+      withSettingsDatabase(getP2PCore, (db) => {
+        db.setSetting('tor_socks_host', settings.socksHost);
+        db.setSetting('tor_socks_port', String(settings.socksPort));
+        db.setSetting('tor_connection_timeout', String(settings.connectionTimeout));
+        db.setSetting('tor_circuit_timeout', String(settings.circuitTimeout));
+        db.setSetting('tor_max_retries', String(settings.maxRetries));
+        db.setSetting('tor_health_check_interval', String(settings.healthCheckInterval));
+        db.setSetting('tor_dns_resolution', settings.dnsResolution);
+      });
 
       return { success: true, error: null };
     } catch (error) {

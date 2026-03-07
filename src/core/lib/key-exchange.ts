@@ -7,13 +7,12 @@ import { sha256 } from '@noble/hashes/sha2';
 import type { ChatNode, ConversationSession, AuthenticatedEncryptedMessage, MessageToVerify, PendingAcceptance, UserRegistration, KeyExchangeEvent, ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent } from '../types.js';
 import { EncryptedUserIdentity } from './encrypted-user-identity.js';
 import { SessionManager } from './session-manager.js';
-import { CHAT_PROTOCOL, KEY_EXCHANGE_RATE_LIMIT_DEFAULT, KEY_ROTATION_TIMEOUT, MAX_KEY_EXCHANGE_AGE, PENDING_KEY_EXCHANGE_EXPIRATION, RECENT_KEY_EXCHANGE_ATTEMPTS_WINDOW, ROTATION_COOLDOWN } from '../constants.js';
+import { CHAT_PROTOCOL, KEY_EXCHANGE_RATE_LIMIT_DEFAULT, KEY_ROTATION_TIMEOUT, MAX_KEY_EXCHANGE_AGE, OFFLINE_BUCKET_PREFIX, PENDING_KEY_EXCHANGE_EXPIRATION, RECENT_KEY_EXCHANGE_ATTEMPTS_WINDOW, ROTATION_COOLDOWN } from '../constants.js';
 import { Chat, ChatDatabase, User } from './db/database.js';
 import { toBase64Url } from './base64url.js';
 import { UsernameRegistry } from './username-registry.js';
 import { StreamHandler } from './stream-handler.js';
 import { generalErrorHandler } from '../utils/general-error.js';
-import { OFFLINE_BUCKET_PREFIX } from './offline-message-validator.js';
 
 /**
  * Handles authenticated key exchange protocol

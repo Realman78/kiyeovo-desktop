@@ -103,7 +103,6 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
   // Store Tor configuration in database for node-setup to read
   if (config.torConfig) {
     console.log('[P2P Core] Storing Tor configuration in database...');
-    database.setSetting('tor_enabled', config.torConfig.enabled ? 'true' : 'false');
     database.setSetting('tor_socks_port', config.torConfig.socksPort.toString());
     if (config.torConfig.onionAddress) {
       // Store onion host; node-setup constructs full announce multiaddr later.

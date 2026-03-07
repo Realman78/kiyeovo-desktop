@@ -30,6 +30,7 @@ export const ChatInput: FC = () => {
     const activeChat = useSelector((state: RootState) => state.chat.activeChat);
     const myPeerId = useSelector((state: RootState) => state.user.peerId);
     const myUsername = useSelector((state: RootState) => state.user.username);
+    const isTorActive = useSelector((state: RootState) => state.user.torEnabled);
     const isBlocked = activeChat?.blocked || false;
     const [groupHasOtherMembers, setGroupHasOtherMembers] = useState(true);
 
@@ -395,6 +396,7 @@ export const ChatInput: FC = () => {
                 type="submit"
                 disabled={!inputQuery.trim() || isDisabled}
                 size="icon"
+                className={isTorActive ? 'bg-[#5a3184] hover:bg-[#4d2a72] text-white' : ''}
             >
                 <Send className="w-4 h-4" />
             </Button>

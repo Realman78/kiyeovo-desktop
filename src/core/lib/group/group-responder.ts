@@ -6,7 +6,7 @@ import type { ChatDatabase } from '../db/database.js';
 import type { EncryptedUserIdentity } from '../encrypted-user-identity.js';
 import { OfflineMessageManager } from '../offline-message-manager.js';
 import { toBase64Url } from '../base64url.js';
-import { GROUP_INFO_LATEST_PREFIX, GROUP_INFO_VERSION_PREFIX, GROUP_OFFLINE_BUCKET_PREFIX } from '../../constants.js';
+import { GROUP_INFO_LATEST_PREFIX, GROUP_INFO_VERSION_PREFIX, GROUP_OFFLINE_BUCKET_PREFIX, OFFLINE_BUCKET_PREFIX } from '../../constants.js';
 import {
   GroupMessageType,
   type GroupInvite,
@@ -814,7 +814,7 @@ export class GroupResponder {
     }
 
     const ourPubKeyBase64url = toBase64Url(userIdentity.signingPublicKey);
-    const writeBucketKey = `/kiyeovo-offline/${bucketSecret}/${ourPubKeyBase64url}`;
+    const writeBucketKey = `${OFFLINE_BUCKET_PREFIX}/${bucketSecret}/${ourPubKeyBase64url}`;
     const bucketTag = writeBucketKey.slice(-12);
 
     const recipientPubKeyPem = Buffer.from(user.offline_public_key, 'base64').toString();

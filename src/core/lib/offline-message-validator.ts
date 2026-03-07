@@ -4,11 +4,9 @@ import { gunzipSync, gunzip } from 'zlib';
 import { promisify } from 'util';
 import { fromBase64Url } from './base64url.js';
 import { generalErrorHandler } from '../utils/general-error.js';
-import { MAX_MESSAGES_PER_STORE, MESSAGE_TTL } from '../constants.js';
+import { MAX_MESSAGES_PER_STORE, MESSAGE_TTL, OFFLINE_BUCKET_PREFIX } from '../constants.js';
 
 const gunzipAsync = promisify(gunzip);
-
-export const OFFLINE_BUCKET_PREFIX = '/kiyeovo-offline';
 
 /**
  * The signed payload structure included in each offline message

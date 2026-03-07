@@ -4,10 +4,12 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { isDev } from './util.js';
 import { initializeP2PCore, InitStatus, IPC_CHANNELS, KeyExchangeEvent, type P2PCore, type ContactRequestEvent, type ChatCreatedEvent, type KeyExchangeFailedEvent, type MessageReceivedEvent, type FileTransferProgressEvent, type FileTransferCompleteEvent, type FileTransferFailedEvent, type PendingFileReceivedEvent, type GroupChatActivatedEvent, type GroupMembersUpdatedEvent, type TorConfig, type PasswordRequest } from '../core/index.js';
+import { NETWORK_MODE_ONBOARDED_SETTING_KEY } from '../core/constants.js';
 import { ensureAppDataDir } from '../core/utils/miscellaneous.js';
 import { requestPasswordFromUI } from './password-prompt.js';
 import { setupIPCHandlers } from './ipc-handlers.js';
 import { TorManager, getTorBinaryPath, BUNDLED_TOR_SOCKS_PORT } from '../core/lib/tor-manager.js';
+import { ChatDatabase } from '../core/lib/db/database.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -18,6 +20,8 @@ let torManager: TorManager | null = null;
 let lastInitStatus: InitStatus | null = null;
 let initError: string | null = null;
 let isCoreInitialized = false;
+let hasStartedInitialization = false;
+let requiresNetworkModeSelection = false;
 let pendingPasswordRequest: PasswordRequest | null = null;
 
 // Enforce single instance
@@ -264,6 +268,34 @@ function sendOfflineMessagesFetchComplete(chatIds: number[]) {
   }
 }
 
+function detectRequiresNetworkModeSelection(): boolean {
+  try {
+    const dbPath = path.join(ensureAppDataDir(), 'chat.db');
+    const db = new ChatDatabase(dbPath);
+    try {
+      // Ensure mode exists (self-heals invalid/missing).
+      db.getNetworkMode();
+      const onboarded = db.getSetting(NETWORK_MODE_ONBOARDED_SETTING_KEY) === 'true';
+      return !onboarded;
+    } finally {
+      db.close();
+    }
+  } catch (error) {
+    console.error('[Electron] Failed to check network mode onboarding state:', error);
+    // Fail-open to avoid blocking users if settings check fails.
+    return false;
+  }
+}
+
+function startP2PInitialization(): void {
+  if (hasStartedInitialization || isCoreInitialized) {
+    return;
+  }
+  hasStartedInitialization = true;
+  requiresNetworkModeSelection = false;
+  void initializeP2PAfterWindow();
+}
+
 async function initializeP2PAfterWindow() {
   try {
     if (!mainWindow) {
@@ -415,6 +447,7 @@ async function initializeP2PAfterWindow() {
     console.error('[Electron] Failed to initialize P2P core:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     initError = errorMessage;
+    hasStartedInitialization = false;
 
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(IPC_CHANNELS.INIT_ERROR, errorMessage);
@@ -435,10 +468,26 @@ async function initializeApp() {
     ipcMain.handle(IPC_CHANNELS.INIT_STATE, () => {
       return {
         initialized: isCoreInitialized,
+        initStarted: hasStartedInitialization,
+        requiresNetworkModeSelection,
         status: lastInitStatus,
         error: initError,
         pendingPasswordRequest,
       };
+    });
+    ipcMain.handle(IPC_CHANNELS.INIT_START, async () => {
+      try {
+        if (isCoreInitialized) {
+          return { success: true, error: null };
+        }
+        if (!mainWindow || mainWindow.isDestroyed()) {
+          return { success: false, error: 'Main window not ready' };
+        }
+        startP2PInitialization();
+        return { success: true, error: null };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : 'Failed to start initialization' };
+      }
     });
 
     // Create window first
@@ -447,9 +496,14 @@ async function initializeApp() {
 
     // Wait for the window to be ready
     mainWindow.webContents.once('did-finish-load', () => {
+      requiresNetworkModeSelection = detectRequiresNetworkModeSelection();
+      if (requiresNetworkModeSelection) {
+        console.log('[Electron] Window loaded, waiting for network mode selection before initialization...');
+        sendInitStatus('Select Fast or Anonymous mode to continue', 'database');
+        return;
+      }
       console.log('[Electron] Window loaded, starting P2P initialization...');
-      // Start P2P initialization after window is ready
-      void initializeP2PAfterWindow();
+      startP2PInitialization();
     });
     mainWindow.webContents.on('did-finish-load', () => {
       if (pendingPasswordRequest && mainWindow && !mainWindow.isDestroyed()) {

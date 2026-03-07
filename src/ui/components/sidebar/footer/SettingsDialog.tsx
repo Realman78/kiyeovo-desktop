@@ -16,6 +16,7 @@ import { ConfigurationDialog } from "./ConfigurationDialog";
 import { TOR_CONFIG } from "../../../constants";
 import { handleDeleteAccount } from "../../../utils/handlers";
 import { useToast } from "../../ui/use-toast";
+import type { NetworkMode } from "../../../../core/types";
 
 
 type SettingsDialogProps = {
@@ -33,7 +34,6 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
   const [loading, setLoading] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [torSettings, setTorSettings] = useState({
-    enabled: false,
     socksHost: TOR_CONFIG.DEFAULT_SOCKS_HOST,
     socksPort: TOR_CONFIG.DEFAULT_SOCKS_PORT,
     connectionTimeout: TOR_CONFIG.DEFAULT_CONNECTION_TIMEOUT,
@@ -47,6 +47,7 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
   const [pendingTorSettings, setPendingTorSettings] = useState(torSettings);
   const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
   const [configDialogOpen, setConfigDialogOpen] = useState(false);
+  const [networkMode, setNetworkMode] = useState<NetworkMode>('fast');
 
   useEffect(() => {
     if (open) {
@@ -69,10 +70,11 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
   const loadSettings = async () => {
     setLoading(true);
     try {
-      const [notifResult, downloadsDirResult, torResult] = await Promise.all([
+      const [notifResult, downloadsDirResult, torResult, networkModeResult] = await Promise.all([
         window.kiyeovoAPI.getNotificationsEnabled(),
         window.kiyeovoAPI.getDownloadsDir(),
-        window.kiyeovoAPI.getTorSettings()
+        window.kiyeovoAPI.getTorSettings(),
+        window.kiyeovoAPI.getNetworkMode(),
       ]);
 
       if (notifResult.success) {
@@ -85,7 +87,6 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
       if (torResult.success && torResult.settings) {
         const s = torResult.settings;
         const loadedSettings = {
-          enabled: s.enabled === 'true',
           socksHost: s.socksHost || TOR_CONFIG.DEFAULT_SOCKS_HOST,
           socksPort: s.socksPort ? parseInt(s.socksPort, 10) : TOR_CONFIG.DEFAULT_SOCKS_PORT,
           connectionTimeout: s.connectionTimeout ? parseInt(s.connectionTimeout, 10) : TOR_CONFIG.DEFAULT_CONNECTION_TIMEOUT,
@@ -96,6 +97,10 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
         };
         setTorSettings(loadedSettings);
         setOriginalTorSettings(loadedSettings);
+      }
+
+      if (networkModeResult.success) {
+        setNetworkMode(networkModeResult.mode);
       }
     } catch (error) {
       console.error("Failed to load settings:", error);
@@ -278,6 +283,7 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
                   setTorSettings={setTorSettings}
                   originalTorSettings={originalTorSettings}
                   onConfirmRestart={handleConfirmTorRestart}
+                  isAnonymousMode={networkMode === 'anonymous'}
                 />
 
                 <div className="flex items-center justify-between p-3 border border-border rounded-lg transition-colors">
@@ -353,8 +359,6 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
       <TorRestartDialog
         open={torConfirmOpen}
         onOpenChange={setTorConfirmOpen}
-        pendingSettings={pendingTorSettings}
-        originalSettings={originalTorSettings}
         onCancel={handleCancelTorRestart}
         onConfirm={handleApplyTorSettings}
       />

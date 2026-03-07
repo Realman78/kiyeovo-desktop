@@ -1,4 +1,4 @@
-import type { ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, InitStatus, PasswordRequest, MessageReceivedEvent, KeyExchangeEvent, SendMessageResponse, GroupChatActivatedEvent, GroupMembersUpdatedEvent, GroupOfflineGapWarning } from './src/core/types';
+import type { ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, InitStatus, PasswordRequest, MessageReceivedEvent, KeyExchangeEvent, NetworkMode, SendMessageResponse, GroupChatActivatedEvent, GroupMembersUpdatedEvent, GroupOfflineGapWarning } from './src/core/types';
 import type { Chat, Message } from './src/core/lib/db/database';
 
 declare global {
@@ -25,11 +25,14 @@ declare global {
             onInitStatus: (callback: (status: InitStatus) => void) => () => void;
             onInitComplete: (callback: () => void) => () => void;
             onInitError: (callback: (error: string) => void) => () => void;
-            getInitState: () => Promise<{ initialized: boolean; status: InitStatus | null; error: string | null; pendingPasswordRequest?: PasswordRequest | null }>;
+            getInitState: () => Promise<{ initialized: boolean; initStarted: boolean; requiresNetworkModeSelection: boolean; status: InitStatus | null; error: string | null; pendingPasswordRequest?: PasswordRequest | null }>;
+            startInitialization: () => Promise<{ success: boolean; error: string | null }>;
 
             // DHT connection status
             onDHTConnectionStatus: (callback: (status: { connected: boolean }) => void) => () => void;
             getDHTConnectionStatus: () => Promise<{ success: boolean; connected: boolean | null; error: string | null }>;
+            getNetworkMode: () => Promise<{ success: boolean; mode: NetworkMode; error: string | null }>;
+            setNetworkMode: (mode: NetworkMode) => Promise<{ success: boolean; error: string | null }>;
 
             // Register
             register: (username: string, rememberMe: boolean) => Promise<{ success: boolean; error?: string }>;
@@ -152,7 +155,6 @@ declare global {
                 error: string | null;
             }>;
             setTorSettings: (settings: {
-                enabled: boolean;
                 socksHost: string;
                 socksPort: number;
                 connectionTimeout: number;

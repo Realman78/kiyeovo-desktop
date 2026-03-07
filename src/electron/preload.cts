@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { InitStatus, IPC_CHANNELS, KeyExchangeEvent, MessageSentStatus, PasswordRequest, ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent, GroupChatActivatedEvent, GroupMembersUpdatedEvent, SendMessageResponse, GroupOfflineGapWarning } from '../core';
+import type { NetworkMode } from '../core';
 import { ContactAttempt, Message } from '../core/lib/db/database';
 
 contextBridge.exposeInMainWorld('kiyeovoAPI', {
@@ -29,8 +30,11 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
         ipcRenderer.on(IPC_CHANNELS.INIT_ERROR, listener);
         return () => ipcRenderer.removeListener(IPC_CHANNELS.INIT_ERROR, listener);
     },
-    getInitState: async (): Promise<{ initialized: boolean; status: InitStatus | null; error: string | null; pendingPasswordRequest?: PasswordRequest | null }> => {
+    getInitState: async (): Promise<{ initialized: boolean; initStarted: boolean; requiresNetworkModeSelection: boolean; status: InitStatus | null; error: string | null; pendingPasswordRequest?: PasswordRequest | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.INIT_STATE);
+    },
+    startInitialization: async (): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.INIT_START);
     },
 
     // DHT connection status
@@ -41,6 +45,12 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     },
     getDHTConnectionStatus: async (): Promise<{ success: boolean; connected: boolean | null; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.GET_DHT_CONNECTION_STATUS);
+    },
+    getNetworkMode: async (): Promise<{ success: boolean; mode: NetworkMode; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.GET_NETWORK_MODE);
+    },
+    setNetworkMode: async (mode: NetworkMode): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.SET_NETWORK_MODE, mode);
     },
 
     // Register
@@ -191,7 +201,6 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     },
 
     setTorSettings: async (settings: {
-        enabled: boolean;
         socksHost: string;
         socksPort: number;
         connectionTimeout: number;

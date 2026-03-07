@@ -1,6 +1,8 @@
 import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from "../../ui/Dialog";
 import type { FC } from "react";
 import { Logo } from "../../icons/Logo";
+import { useSelector } from "react-redux";
+import type { RootState } from "../../../state/store";
 
 type KiyeovoDialogProps = {
     open: boolean;
@@ -8,12 +10,14 @@ type KiyeovoDialogProps = {
 }
 
 export const KiyeovoDialog: FC<KiyeovoDialogProps> = ({ open, onOpenChange }) => {
+    const isTorActive = useSelector((state: RootState) => state.user.torEnabled);
+
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent className="max-w-2xl">
                 <DialogHeader>
                     <DialogTitle className="flex items-center justify-center gap-2 mb-6 text-2xl! cursor-default">
-                        <div className="w-12 h-12 rounded-full border border-primary/50 flex items-center justify-center glow-border">
+                        <div className={`w-12 h-12 rounded-full border ${isTorActive ? "border-[#5a3184]" : "border-primary/50"} flex items-center justify-center glow-border`}>
                             <Logo version="2" />
                         </div>
                         Kiyeovo

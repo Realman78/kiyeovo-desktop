@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import type { PasswordRequest } from '../../types';
 import { Input } from '../ui/Input';
-import { Eye, EyeOff, Lock, Shield, AlertCircle, CheckCircle, FileKey, Loader2, Database, ChevronDown, ChevronUp } from 'lucide-react'
+import { Eye, EyeOff, Lock, Shield, AlertCircle, CheckCircle, FileKey, Loader2, Database, ChevronDown, ChevronUp, ArrowLeftRight } from 'lucide-react'
 import { Button } from '../ui/Button';
+import { NETWORK_MODES } from '../../../core/constants';
+import type { NetworkMode } from '../../../core/types';
 import {
   Dialog,
   DialogContent,
@@ -55,6 +57,10 @@ type PasswordPromptProps = {
   setRememberMe: React.Dispatch<React.SetStateAction<boolean>>;
   isSubmitting: boolean;
   initStatus: string;
+  networkMode?: NetworkMode;
+  onSwitchNetworkMode?: (nextMode: NetworkMode) => Promise<void>;
+  isSwitchingNetworkMode?: boolean;
+  modeSwitchError?: string | null;
 }
 
 export function PasswordPrompt({
@@ -67,7 +73,11 @@ export function PasswordPrompt({
   rememberMe,
   setRememberMe,
   isSubmitting,
-  initStatus
+  initStatus,
+  networkMode,
+  onSwitchNetworkMode,
+  isSwitchingNetworkMode = false,
+  modeSwitchError
 }: PasswordPromptProps) {
   const [showPassword, setShowPassword] = useState(false);
   const [validationError, setValidationError] = useState<string>('');
@@ -79,6 +89,7 @@ export function PasswordPrompt({
   const [showRecoveryPhraseDialog, setShowRecoveryPhraseDialog] = useState(false);
   const [recoveryPhraseInput, setRecoveryPhraseInput] = useState('');
   const [isProcessingRecovery, setIsProcessingRecovery] = useState(false);
+  const [showModeSwitchDialog, setShowModeSwitchDialog] = useState(false);
 
   const passwordInputRef = useRef<HTMLInputElement>(null);
 
@@ -167,6 +178,9 @@ export function PasswordPrompt({
   };
 
   const isLocked = cooldownRemaining > 0;
+  const canSwitchMode = Boolean(networkMode && onSwitchNetworkMode);
+  const targetMode = networkMode === NETWORK_MODES.ANONYMOUS ? NETWORK_MODES.FAST : NETWORK_MODES.ANONYMOUS;
+  const targetModeLabel = targetMode === NETWORK_MODES.ANONYMOUS ? 'Anonymous (Tor)' : 'Fast (not anonymous)';
 
   const handleImportBackup = async () => {
     try {
@@ -345,7 +359,7 @@ export function PasswordPrompt({
           )}
         </Button>
 
-        <div className="mt-4 pt-4 border-t border-border">
+        <div className="mt-4 pt-4 border-t border-b border-border">
           <button
             type="button"
             disabled={isSubmitting}
@@ -388,6 +402,21 @@ export function PasswordPrompt({
             </div>
           </div>
         </div>
+        {canSwitchMode && (
+          <div className='w-full flex justify-start'>
+                <button
+                  type="button"
+                  className="text-sm text-muted-foreground underline hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:no-underline cursor-pointer"
+                  onClick={() => setShowModeSwitchDialog(true)}
+                  disabled={isSubmitting || isLocked || isSwitchingNetworkMode}
+                  >
+                  Switch to {targetModeLabel} Mode
+                </button>
+              </div>
+              )}
+              {modeSwitchError && (
+                <p className="text-xs text-destructive text-left">{modeSwitchError}</p>
+              )}
       </form>
 
       <RecoveryPhraseDisplayDialog
@@ -463,6 +492,51 @@ export function PasswordPrompt({
                   <Shield className="w-4 h-4" />
                   Unlock Identity
                 </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Network Mode Switch Confirm Dialog */}
+      <Dialog open={showModeSwitchDialog} onOpenChange={setShowModeSwitchDialog}>
+        <DialogContent className="w-xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ArrowLeftRight className="w-5 h-5" />
+              Switch Network Mode
+            </DialogTitle>
+            <DialogDescription>
+              Are you sure you want to switch to {targetModeLabel} mode?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogBody className="space-y-2 text-sm text-muted-foreground">
+            <p>The app will restart to apply the new network mode.</p>
+          </DialogBody>
+          <DialogFooter className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setShowModeSwitchDialog(false)}
+              className="flex-1"
+              disabled={isSwitchingNetworkMode}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={async () => {
+                if (!onSwitchNetworkMode) return;
+                await onSwitchNetworkMode(targetMode);
+              }}
+              className="flex-1"
+              disabled={isSwitchingNetworkMode}
+            >
+              {isSwitchingNetworkMode ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Restarting...
+                </>
+              ) : (
+                'Confirm & Restart'
               )}
             </Button>
           </DialogFooter>

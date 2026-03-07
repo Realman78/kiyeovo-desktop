@@ -6,6 +6,7 @@ export interface User {
   connected: boolean | null;
   registered: boolean;
   username?: string;
+  torEnabled: boolean;
 }
 
 const initialState: User = {
@@ -13,6 +14,7 @@ const initialState: User = {
   connected: null,
   registered: false,
   username: '',
+  torEnabled: false,
 };
 
 const userSlice = createSlice({
@@ -31,6 +33,9 @@ const userSlice = createSlice({
     setRegistered: (state, action: PayloadAction<boolean>) => {
       state.registered = action.payload;
     },
+    setTorEnabled: (state, action: PayloadAction<boolean>) => {
+      state.torEnabled = action.payload;
+    },
   },
 });
 
@@ -39,6 +44,7 @@ export const {
   setUsername,
   setConnected,
   setRegistered,
+  setTorEnabled,
 } = userSlice.actions;
 
 export default userSlice.reducer;

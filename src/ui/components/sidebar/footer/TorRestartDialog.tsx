@@ -8,22 +8,9 @@ import {
 } from "../../ui/Dialog";
 import { Button } from "../../ui/Button";
 
-type TorSettings = {
-  enabled: boolean;
-  socksHost: string;
-  socksPort: number;
-  connectionTimeout: number;
-  circuitTimeout: number;
-  maxRetries: number;
-  healthCheckInterval: number;
-  dnsResolution: 'tor' | 'system';
-};
-
 type TorRestartDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  pendingSettings: TorSettings;
-  originalSettings: TorSettings;
   onCancel: () => void;
   onConfirm: () => void;
 };
@@ -31,8 +18,6 @@ type TorRestartDialogProps = {
 export const TorRestartDialog: FC<TorRestartDialogProps> = ({
   open,
   onOpenChange,
-  pendingSettings,
-  originalSettings,
   onCancel,
   onConfirm
 }) => {
@@ -43,12 +28,7 @@ export const TorRestartDialog: FC<TorRestartDialogProps> = ({
     onOpenChange(newOpen);
   };
 
-  const getMessage = () => {
-    if (pendingSettings.enabled !== originalSettings.enabled) {
-      return `${pendingSettings.enabled ? 'Enabling' : 'Disabling'} Tor requires a full app restart. Continue?`;
-    }
-    return 'Changing Tor settings requires a full app restart. Apply changes now?';
-  };
+  const message = 'Changing Tor transport settings requires a full app restart. Apply changes now?';
 
   const handleConfirm = () => {
     onOpenChange(false);
@@ -63,7 +43,7 @@ export const TorRestartDialog: FC<TorRestartDialogProps> = ({
         </DialogHeader>
         <DialogBody>
           <p className="text-sm text-muted-foreground">
-            {getMessage()}
+            {message}
           </p>
           <div className="flex justify-end gap-2 mt-4">
             <Button variant="outline" size="sm" onClick={onCancel}>

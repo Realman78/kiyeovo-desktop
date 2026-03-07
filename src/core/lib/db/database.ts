@@ -8,7 +8,13 @@ import type { ContactMode, NetworkMode, OfflineMessage } from '../../types.js';
 import type { AckMessageType, GroupOfflineMessage, GroupStatus } from '../group/types.js';
 import { assertGroupTransition, isGroupStatus } from '../group/group-state-machine.js';
 import { DEFAULT_BOOTSTRAP_NODES } from '../../default-bootstrap-nodes.js';
-import { GROUP_OFFLINE_BUCKET_PREFIX, PENDING_KEY_EXCHANGE_EXPIRATION } from '../../constants.js';
+import {
+    DEFAULT_NETWORK_MODE,
+    GROUP_OFFLINE_BUCKET_PREFIX,
+    NETWORK_MODE_SETTING_KEY,
+    PENDING_KEY_EXCHANGE_EXPIRATION,
+    isNetworkMode,
+} from '../../constants.js';
 
 export interface User {
     peer_id: string
@@ -395,11 +401,10 @@ export class ChatDatabase {
             this.db.prepare(`INSERT INTO settings (key, value) VALUES ('contact_mode', 'active')`).run();
         }
 
-        // Initialize default network mode setting if not exists.
-        // U1 default is "fast" on first launch.
-        const networkModeSetting = this.db.prepare('SELECT value FROM settings WHERE key = ?').get('network_mode');
+        // Initialize default network mode setting if not exists (U1).
+        const networkModeSetting = this.db.prepare('SELECT value FROM settings WHERE key = ?').get(NETWORK_MODE_SETTING_KEY);
         if (!networkModeSetting) {
-            this.db.prepare(`INSERT INTO settings (key, value) VALUES ('network_mode', 'fast')`).run();
+            this.db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run(NETWORK_MODE_SETTING_KEY, DEFAULT_NETWORK_MODE);
         }
 
         // Offline sent messages table (local cache of messages we've sent to DHT)
@@ -842,20 +847,19 @@ export class ChatDatabase {
     }
 
     setNetworkMode(mode: NetworkMode): void {
-        if (mode !== 'fast' && mode !== 'anonymous') {
+        if (!isNetworkMode(mode)) {
             throw new Error(`Invalid network mode: ${mode}`);
         }
-        this.setSetting('network_mode', mode);
+        this.setSetting(NETWORK_MODE_SETTING_KEY, mode);
     }
 
     getNetworkMode(): NetworkMode {
-        const value = this.getSetting('network_mode');
-        if (value === 'anonymous') return 'anonymous';
-        if (value === 'fast') return 'fast';
+        const value = this.getSetting(NETWORK_MODE_SETTING_KEY);
+        if (isNetworkMode(value)) return value;
 
         // Self-heal invalid/missing value to default.
-        this.setSetting('network_mode', 'fast');
-        return 'fast';
+        this.setSetting(NETWORK_MODE_SETTING_KEY, DEFAULT_NETWORK_MODE);
+        return DEFAULT_NETWORK_MODE;
     }
 
     // Contact attempt operations (silent mode logging)

@@ -24,8 +24,11 @@ import {
 } from './group/group-dht-validator.js';
 import dotenv from 'dotenv';
 import {
+  DHT_KEY_PREFIXES,
+  DHT_NAMESPACE_NAMES,
   DHT_PROTOCOL,
   K_BUCKET_SIZE,
+  NETWORK_MODES,
   PREFIX_LENGTH,
   getTorConfig,
 } from '../constants.js';
@@ -63,7 +66,7 @@ function getTorConfigFromSettings(database: ChatDatabase): ReturnType<typeof get
   const base = getTorConfig();
   const get = (key: string) => database.getSetting(key);
 
-  const enabled = get('tor_enabled');
+  const networkMode = database.getNetworkMode();
   const socksHost = get('tor_socks_host');
   const socksPort = get('tor_socks_port');
   const connectionTimeout = get('tor_connection_timeout');
@@ -73,7 +76,7 @@ function getTorConfigFromSettings(database: ChatDatabase): ReturnType<typeof get
   const dnsResolution = get('tor_dns_resolution');
 
   return {
-    enabled: enabled === null ? base.enabled : enabled === 'true',
+    enabled: networkMode === NETWORK_MODES.ANONYMOUS,
     socksHost: socksHost ?? base.socksHost,
     socksPort: socksPort ? parseInt(socksPort, 10) : base.socksPort,
     connectionTimeout: connectionTimeout ? parseInt(connectionTimeout, 10) : base.connectionTimeout,
@@ -211,33 +214,33 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
           kBucketSize: K_BUCKET_SIZE,
           prefixLength: PREFIX_LENGTH,
           validators: {
-            'kiyeovo-offline': offlineMessageValidator,
-            'kiyeovo-username': usernameRegistrationValidator,
-            'kiyeovo-group-offline': groupOfflineMessageValidator,
-            'kiyeovo-group-info-latest': groupInfoLatestValidator,
-            'kiyeovo-group-info-v': groupInfoVersionedValidator,
+            [DHT_NAMESPACE_NAMES.offline]: offlineMessageValidator,
+            [DHT_NAMESPACE_NAMES.username]: usernameRegistrationValidator,
+            [DHT_NAMESPACE_NAMES.groupOffline]: groupOfflineMessageValidator,
+            [DHT_NAMESPACE_NAMES.groupInfoLatest]: groupInfoLatestValidator,
+            [DHT_NAMESPACE_NAMES.groupInfoVersion]: groupInfoVersionedValidator,
           },
           selectors: {
-            'kiyeovo-offline': offlineMessageSelector,
-            'kiyeovo-username': usernameRegistrationSelector,
-            'kiyeovo-group-offline': groupOfflineMessageSelector,
-            'kiyeovo-group-info-latest': groupInfoLatestSelector,
+            [DHT_NAMESPACE_NAMES.offline]: offlineMessageSelector,
+            [DHT_NAMESPACE_NAMES.username]: usernameRegistrationSelector,
+            [DHT_NAMESPACE_NAMES.groupOffline]: groupOfflineMessageSelector,
+            [DHT_NAMESPACE_NAMES.groupInfoLatest]: groupInfoLatestSelector,
           },
           validateUpdate: async (key, existing, incoming) => {
             const keyStr = new TextDecoder().decode(key);
-            if (keyStr.startsWith('/kiyeovo-offline/')) {
+            if (keyStr.startsWith(DHT_KEY_PREFIXES.offline)) {
               return offlineMessageValidateUpdate(key, existing, incoming);
             }
-            if (keyStr.startsWith('/kiyeovo-username/')) {
+            if (keyStr.startsWith(DHT_KEY_PREFIXES.username)) {
               return usernameRegistrationValidateUpdate(key, existing, incoming);
             }
-            if (keyStr.startsWith('/kiyeovo-group-offline/')) {
+            if (keyStr.startsWith(DHT_KEY_PREFIXES.groupOffline)) {
               return groupOfflineValidateUpdate(key, existing, incoming);
             }
-            if (keyStr.startsWith('/kiyeovo-group-info-latest/')) {
+            if (keyStr.startsWith(DHT_KEY_PREFIXES.groupInfoLatest)) {
               return groupInfoLatestValidateUpdate(key, existing, incoming);
             }
-            if (keyStr.startsWith('/kiyeovo-group-info-v/')) {
+            if (keyStr.startsWith(DHT_KEY_PREFIXES.groupInfoVersion)) {
               return groupInfoVersionedValidateUpdate(key, existing, incoming);
             }
           }

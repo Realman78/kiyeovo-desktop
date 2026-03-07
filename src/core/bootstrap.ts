@@ -15,6 +15,8 @@ import type { ChatNode } from './types.js';
 import { PeerIdManager } from './lib/peer-id-manager.js';
 import {
   BOOTSTRAP_LISTEN_ADDRESS,
+  DHT_KEY_PREFIXES,
+  DHT_NAMESPACE_NAMES,
   DHT_PROTOCOL,
   K_BUCKET_SIZE,
   PREFIX_LENGTH,
@@ -121,33 +123,33 @@ async function createBootstrapNode(): Promise<ChatNode> {
         kBucketSize: K_BUCKET_SIZE,
         prefixLength: PREFIX_LENGTH,
         validators: {
-          'kiyeovo-offline': offlineMessageValidator,
-          'kiyeovo-username': usernameRegistrationValidator,
-          'kiyeovo-group-offline': groupOfflineMessageValidator,
-          'kiyeovo-group-info-latest': groupInfoLatestValidator,
-          'kiyeovo-group-info-v': groupInfoVersionedValidator,
+          [DHT_NAMESPACE_NAMES.offline]: offlineMessageValidator,
+          [DHT_NAMESPACE_NAMES.username]: usernameRegistrationValidator,
+          [DHT_NAMESPACE_NAMES.groupOffline]: groupOfflineMessageValidator,
+          [DHT_NAMESPACE_NAMES.groupInfoLatest]: groupInfoLatestValidator,
+          [DHT_NAMESPACE_NAMES.groupInfoVersion]: groupInfoVersionedValidator,
         },
         selectors: {
-          'kiyeovo-offline': offlineMessageSelector,
-          'kiyeovo-username': usernameRegistrationSelector,
-          'kiyeovo-group-offline': groupOfflineMessageSelector,
-          'kiyeovo-group-info-latest': groupInfoLatestSelector,
+          [DHT_NAMESPACE_NAMES.offline]: offlineMessageSelector,
+          [DHT_NAMESPACE_NAMES.username]: usernameRegistrationSelector,
+          [DHT_NAMESPACE_NAMES.groupOffline]: groupOfflineMessageSelector,
+          [DHT_NAMESPACE_NAMES.groupInfoLatest]: groupInfoLatestSelector,
         },
         validateUpdate: async (key, existing, incoming) => {
           const keyStr = new TextDecoder().decode(key);
-          if (keyStr.startsWith('/kiyeovo-offline/')) {
+          if (keyStr.startsWith(DHT_KEY_PREFIXES.offline)) {
             return offlineMessageValidateUpdate(key, existing, incoming);
           }
-          if (keyStr.startsWith('/kiyeovo-username/')) {
+          if (keyStr.startsWith(DHT_KEY_PREFIXES.username)) {
             return usernameRegistrationValidateUpdate(key, existing, incoming);
           }
-          if (keyStr.startsWith('/kiyeovo-group-offline/')) {
+          if (keyStr.startsWith(DHT_KEY_PREFIXES.groupOffline)) {
             return groupOfflineValidateUpdate(key, existing, incoming);
           }
-          if (keyStr.startsWith('/kiyeovo-group-info-latest/')) {
+          if (keyStr.startsWith(DHT_KEY_PREFIXES.groupInfoLatest)) {
             return groupInfoLatestValidateUpdate(key, existing, incoming);
           }
-          if (keyStr.startsWith('/kiyeovo-group-info-v/')) {
+          if (keyStr.startsWith(DHT_KEY_PREFIXES.groupInfoVersion)) {
             return groupInfoVersionedValidateUpdate(key, existing, incoming);
           }
         }
