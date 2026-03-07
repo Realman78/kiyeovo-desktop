@@ -67,6 +67,8 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
         let isDisposed = false;
 
         void window.kiyeovoAPI.getDHTConnectionStatus().then((result) => {
+            console.log("getDHTConnectionStatus result")
+            console.log('result :>> ', result);
             if (isDisposed) return;
             if (!result.success || result.connected === null) {
                 console.log('[DHT-STATUS][UI][SNAPSHOT] unavailable');
