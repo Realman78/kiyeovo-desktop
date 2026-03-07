@@ -220,6 +220,33 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
         const connections = node.getConnections();
         console.log(`[DHT-STATUS][CORE][CHECK][START] id=${checkId} source=${source} peerCount=${connections.length}`);
         console.log(`[P2P Core] Peers: ${connections.map(p => p.remotePeer.toString())}`);
+        // Diagnostic: connected peers can be alive but still unusable for Kademlia queries
+        // if they do not advertise the active DHT protocol.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const dhtService = (node.services as any).dht as {
+          protocol?: string;
+          routingTable?: { size?: number };
+        } | undefined;
+        const activeDhtProtocol = dhtService?.protocol ?? 'unknown';
+        const routingSize = dhtService?.routingTable?.size ?? 'unknown';
+        console.log(
+          `[DHT-STATUS][CORE][ROUTING] id=${checkId} source=${source} dhtProtocol=${activeDhtProtocol} routingSize=${routingSize}`,
+        );
+        for (const conn of connections) {
+          try {
+            const peerInfo = await node.peerStore.get(conn.remotePeer);
+            const advertised = peerInfo.protocols ?? [];
+            const supportsDht = activeDhtProtocol !== 'unknown' && advertised.includes(activeDhtProtocol);
+            console.log(
+              `[DHT-STATUS][CORE][PEER-CAPS] id=${checkId} source=${source} peer=${conn.remotePeer.toString()} protocols=${advertised.length} supportsActiveDht=${supportsDht}`,
+            );
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.log(
+              `[DHT-STATUS][CORE][PEER-CAPS] id=${checkId} source=${source} peer=${conn.remotePeer.toString()} readFailed=${message}`,
+            );
+          }
+        }
 
         if (connections.length === 0) {
           emitDhtStatus(false, 'no_connections');
