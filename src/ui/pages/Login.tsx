@@ -176,7 +176,7 @@ export const Login = ({ initStatus }: LoginProps) => {
     }
 
     return <div className="w-full h-full flex justify-center items-center flex-col bg-background cyber-grid">
-        <div className={`w-16 h-16 mb-6 rounded-full border ${networkMode === NETWORK_MODES.ANONYMOUS ? "border-[#5a3184]" : "border-primary/50"} flex items-center justify-center glow-border`}>
+        <div className={`w-16 h-16 mb-6 rounded-full border border-primary/50 flex items-center justify-center glow-border`}>
             <Logo version="2" />
         </div>
         {!!passwordRequest ? <PasswordPrompt

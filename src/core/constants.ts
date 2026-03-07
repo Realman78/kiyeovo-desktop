@@ -21,6 +21,11 @@ export const NETWORK_MODE_BOOTSTRAP_ENV_KEYS: Record<NetworkMode, string> = {
   anonymous: 'KNOWN_BOOTSTRAP_NODES',
 };
 
+export const NETWORK_MODE_RELAY_ENV_KEYS: Record<NetworkMode, string | null> = {
+  fast: 'FAST_RELAY_MULTIADDRS',
+  anonymous: null,
+};
+
 export type ModeNamespaceKind =
   | 'offline'
   | 'username'

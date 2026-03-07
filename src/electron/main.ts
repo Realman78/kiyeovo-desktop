@@ -4,12 +4,13 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { isDev } from './util.js';
 import { initializeP2PCore, InitStatus, IPC_CHANNELS, KeyExchangeEvent, type P2PCore, type ContactRequestEvent, type ChatCreatedEvent, type KeyExchangeFailedEvent, type MessageReceivedEvent, type FileTransferProgressEvent, type FileTransferCompleteEvent, type FileTransferFailedEvent, type PendingFileReceivedEvent, type GroupChatActivatedEvent, type GroupMembersUpdatedEvent, type TorConfig, type PasswordRequest } from '../core/index.js';
-import { NETWORK_MODE_ONBOARDED_SETTING_KEY } from '../core/constants.js';
+import { DEFAULT_NETWORK_MODE, NETWORK_MODE_ONBOARDED_SETTING_KEY } from '../core/constants.js';
 import { ensureAppDataDir } from '../core/utils/miscellaneous.js';
 import { requestPasswordFromUI } from './password-prompt.js';
 import { setupIPCHandlers } from './ipc-handlers.js';
 import { TorManager, getTorBinaryPath, BUNDLED_TOR_SOCKS_PORT } from '../core/lib/tor-manager.js';
 import { ChatDatabase } from '../core/lib/db/database.js';
+import type { NetworkMode } from '../core/types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -287,6 +288,21 @@ function detectRequiresNetworkModeSelection(): boolean {
   }
 }
 
+function readPersistedNetworkMode(): NetworkMode {
+  try {
+    const dbPath = path.join(ensureAppDataDir(), 'chat.db');
+    const db = new ChatDatabase(dbPath);
+    try {
+      return db.getNetworkMode();
+    } finally {
+      db.close();
+    }
+  } catch (error) {
+    console.error('[Electron] Failed to read persisted network mode, using default:', error);
+    return DEFAULT_NETWORK_MODE;
+  }
+}
+
 function startP2PInitialization(): void {
   if (hasStartedInitialization || isCoreInitialized) {
     return;
@@ -306,65 +322,69 @@ async function initializeP2PAfterWindow() {
 
     const dataDir = ensureAppDataDir();
     console.log(`[Electron] Data directory: ${dataDir}`);
+    const startupNetworkMode = readPersistedNetworkMode();
+    console.log(`[STACK][ELECTRON] startup_mode=${startupNetworkMode}`);
+    console.log(`[STACK][ELECTRON] tor_bootstrap=${startupNetworkMode === 'anonymous' ? 'enabled' : 'disabled'}`);
 
     const libp2pPort = 9001; // TODO: Make this configurable
     let torConfig: TorConfig | undefined;
 
-    // Start bundled Tor
-    sendInitStatus('Starting Tor daemon...', 'tor');
-    try {
-      const torBinaryPath = getTorBinaryPath(
-        process.resourcesPath,
-        app.getAppPath(),
-        app.isPackaged
-      );
+    if (startupNetworkMode === 'anonymous') {
+      // Start bundled Tor for anonymous mode only.
+      sendInitStatus('Starting Tor daemon...', 'tor');
+      try {
+        const torBinaryPath = getTorBinaryPath(
+          process.resourcesPath,
+          app.getAppPath(),
+          app.isPackaged
+        );
 
-      torManager = new TorManager({
-        dataDir,
-        libp2pPort,
-        torBinaryPath,
-        onStatus: (message, stage) => {
-          console.log(`[TorManager] ${message}`);
-          sendInitStatus(message, 'tor');
-        },
-      });
+        torManager = new TorManager({
+          dataDir,
+          libp2pPort,
+          torBinaryPath,
+          onStatus: (message, stage) => {
+            console.log(`[TorManager] ${message}`);
+            sendInitStatus(message, 'tor');
+          },
+        });
 
-      const onionAddress = await torManager.start();
-      console.log(`[Electron] Tor started with onion address: ${onionAddress}`);
-
-      torConfig = {
-        enabled: true,
-        socksPort: BUNDLED_TOR_SOCKS_PORT,
-        onionAddress,
-      };
-    } catch (torError) {
-      console.error('[Electron] Failed to start Tor:', torError);
-      sendInitStatus('Warning: Tor failed to start. Running in local mode.', 'tor');
-      if (torManager) {
-        try {
-          await torManager.stop();
-        } catch (stopError) {
-          console.error('[Electron] Failed to stop Tor after startup error:', stopError);
-        } finally {
-          torManager = null;
+        const onionAddress = await torManager.start();
+        if (!onionAddress) {
+          throw new Error('Tor started without onion address');
         }
-      }
+        console.log(`[Electron] Tor started with onion address: ${onionAddress}`);
 
-      // Continue without Tor (local mode)
-      torConfig = {
-        enabled: false,
-        socksPort: BUNDLED_TOR_SOCKS_PORT,
-        onionAddress: null,
-      };
+        torConfig = {
+          enabled: true,
+          socksPort: BUNDLED_TOR_SOCKS_PORT,
+          onionAddress,
+        };
+      } catch (torError) {
+        console.error('[Electron] Failed to start Tor:', torError);
+        sendInitStatus('Tor failed to start. Anonymous mode cannot continue.', 'tor');
+        if (torManager) {
+          try {
+            await torManager.stop();
+          } catch (stopError) {
+            console.error('[Electron] Failed to stop Tor after startup error:', stopError);
+          } finally {
+            torManager = null;
+          }
+        }
+        throw new Error('Anonymous mode requires Tor startup. Initialization aborted.');
+      }
+    } else {
+      sendInitStatus('Fast mode selected: skipping Tor daemon startup.', 'tor');
     }
 
     sendInitStatus('Getting data directory...', 'database');
 
     // Initialize P2P core with custom password prompt
-    p2pCore = await initializeP2PCore({
+    const p2pCoreConfig = {
       dataDir,
       port: libp2pPort,
-      torConfig,
+      ...(torConfig ? { torConfig } : {}),
       passwordPrompt: async (prompt: string, isNew: boolean, recoveryPhrase?: string, prefilledPassword?: string, errorMessage?: string, cooldownSeconds?: number, showRecoveryOption?: boolean, keychainAvailable?: boolean) => {
         console.log('[Electron] Requesting password from UI...');
         const response = await requestPasswordFromUI(
@@ -433,7 +453,8 @@ async function initializeP2PAfterWindow() {
       onOfflineMessagesFetchComplete: (chatIds: number[]) => {
         sendOfflineMessagesFetchComplete(chatIds);
       },
-    });
+    };
+    p2pCore = await initializeP2PCore(p2pCoreConfig);
 
     console.log('[Electron] P2P core initialized successfully');
     sendInitStatus('P2P node ready!', 'complete');

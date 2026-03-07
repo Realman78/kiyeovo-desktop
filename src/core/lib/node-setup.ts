@@ -5,10 +5,12 @@ import { kadDHT, removePublicAddressesMapper } from '@libp2p/kad-dht';
 import { identify } from '@libp2p/identify';
 import { ping } from '@libp2p/ping';
 import { gossipsub } from '@chainsafe/libp2p-gossipsub';
+import { circuitRelayTransport } from '@libp2p/circuit-relay-v2';
+import { dcutr } from '@libp2p/dcutr';
 import { multiaddr } from '@multiformats/multiaddr';
 import type { Transport } from '@libp2p/interface';
 
-import type { ChatNode } from '../types.js';
+import type { ChatNode, NetworkMode } from '../types.js';
 
 import { EncryptedUserIdentity } from './encrypted-user-identity.js';
 import { offlineMessageValidator, offlineMessageSelector, offlineMessageValidateUpdate } from './offline-message-validator.js';
@@ -28,8 +30,11 @@ import {
   DHT_NAMESPACE_NAMES,
   DHT_PROTOCOL,
   K_BUCKET_SIZE,
+  NETWORK_MODE_BOOTSTRAP_ENV_KEYS,
+  NETWORK_MODE_RELAY_ENV_KEYS,
   NETWORK_MODES,
   PREFIX_LENGTH,
+  getNetworkModeConfig,
   getTorConfig,
 } from '../constants.js';
 import { filterOnionAddressesMapper } from '../utils/miscellaneous.js';
@@ -41,9 +46,30 @@ import { torTransport, validateTorConnection, type TorTransportComponents } from
 
 dotenv.config();
 
-export function createTransportArray(torConfig: ReturnType<typeof getTorConfig>):
-  Array<(components: TCPComponents & TorTransportComponents) => Transport> {
-  if (torConfig.enabled) {
+type RelayRuntime = {
+  relayTransportFactory: ReturnType<typeof circuitRelayTransport> | null;
+  dcutrFactory: ((components: unknown) => unknown) | null;
+};
+
+function parseCommaSeparatedEnv(key: string): string[] {
+  return (process.env[key] ?? '')
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
+}
+
+function isOnionMultiaddr(addr: string): boolean {
+  return addr.includes('/onion3/');
+}
+
+export function createTransportArray(params: {
+  networkMode: NetworkMode;
+  torConfig: ReturnType<typeof getTorConfig>;
+  relayTransportFactory: ReturnType<typeof circuitRelayTransport> | null;
+}): Array<(components: TCPComponents & TorTransportComponents) => Transport> {
+  const { networkMode, torConfig, relayTransportFactory } = params;
+
+  if (networkMode === NETWORK_MODES.ANONYMOUS) {
     // When Tor is enabled, we need both TCP (for listening) and Tor (for dialing)
     return [
       tcp(),
@@ -56,10 +82,15 @@ export function createTransportArray(torConfig: ReturnType<typeof getTorConfig>)
         maxRetries: torConfig.maxRetries,
       })
     ];
-  } else {
-    console.log('WARNING: Tor is disabled, using direct TCP transport');
-    return [tcp()];
   }
+
+  const transports: Array<(components: TCPComponents & TorTransportComponents) => Transport> = [tcp()];
+  if (relayTransportFactory !== null) {
+    transports.push(relayTransportFactory as (components: TCPComponents & TorTransportComponents) => Transport);
+  }
+
+  console.log(`[STACK][FAST] Tor disabled. relayTransport=${relayTransportFactory !== null ? 'enabled' : 'disabled'}`);
+  return transports;
 }
 
 function getTorConfigFromSettings(database: ChatDatabase): ReturnType<typeof getTorConfig> {
@@ -97,9 +128,31 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
     const privateKey = userIdentity.getLibp2pPrivateKey();
 
     const listenAddress = `/ip4/0.0.0.0/tcp/${port}`;
+    const networkMode = database.getNetworkMode();
+    const modeConfig = getNetworkModeConfig(networkMode);
+    const bootstrapEnvKey = NETWORK_MODE_BOOTSTRAP_ENV_KEYS[networkMode];
+    const relayEnvKey = NETWORK_MODE_RELAY_ENV_KEYS[networkMode];
+    const relayAddresses = relayEnvKey ? parseCommaSeparatedEnv(relayEnvKey) : [];
+
+    const relayRuntime: RelayRuntime = networkMode === NETWORK_MODES.FAST
+      ? {
+          relayTransportFactory: circuitRelayTransport(),
+          dcutrFactory: dcutr() as unknown as (components: unknown) => unknown,
+        }
+      : { relayTransportFactory: null, dcutrFactory: null };
+
     const torConfig = getTorConfigFromSettings(database);
 
-    if (torConfig.enabled) {
+    console.log(`[STACK] mode=${networkMode}`);
+    console.log(`[STACK] protocol=${modeConfig.protocolName} dhtProtocol=${modeConfig.dhtProtocol}`);
+    console.log(`[STACK] bootstrapEnv=${bootstrapEnvKey}`);
+    console.log(`[STACK] transport=${networkMode === NETWORK_MODES.ANONYMOUS ? 'tcp+tor-socks' : 'tcp+relay(+dcutr)'}`);
+    console.log(`[STACK] relayEnv=${relayEnvKey ?? 'n/a'} relayConfigured=${relayAddresses.length}`);
+    if (networkMode === NETWORK_MODES.FAST) {
+      console.log('[STACK][FAST] relay runtime loaded');
+    }
+
+    if (networkMode === NETWORK_MODES.ANONYMOUS) {
       console.log('Tor transport enabled - routing through SOCKS5 proxy');
       console.log(`  Initial Proxy: ${torConfig.socksHost}:${torConfig.socksPort}`);
 
@@ -142,10 +195,14 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
         console.log('✓ Tor connectivity validated');
       }
     } else {
-      console.log('Using direct TCP transport');
+      console.log('Fast mode selected: using direct TCP + relay/DCUtR path');
     }
 
-    const transports = createTransportArray(torConfig);
+    const transports = createTransportArray({
+      networkMode,
+      torConfig,
+      relayTransportFactory: relayRuntime.relayTransportFactory,
+    });
 
     const announceAddrs: string[] = [];
 
@@ -251,7 +308,12 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
         ping: ping({
           // Longer timeout for Tor (default is too aggressive)
           timeout: torConfig.enabled ? 60000 : 10000,
-        })
+        }),
+        ...(networkMode === NETWORK_MODES.FAST && relayRuntime.dcutrFactory
+          ? {
+              dcutr: relayRuntime.dcutrFactory
+            }
+          : {})
       }
     });
 
@@ -266,25 +328,78 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
 export async function connectToBootstrap(node: ChatNode, database: ChatDatabase): Promise<void> {
   database.clearAllBootstrapNodeStatus();
 
-  let addressesToTry = database.getBootstrapNodes()
+  const networkMode = database.getNetworkMode();
+  const bootstrapEnvKey = NETWORK_MODE_BOOTSTRAP_ENV_KEYS[networkMode];
+  const relayEnvKey = NETWORK_MODE_RELAY_ENV_KEYS[networkMode];
+
+  const dedupe = (values: string[]) => Array.from(new Set(values));
+  const filterByMode = (values: string[]) => {
+    if (networkMode === NETWORK_MODES.ANONYMOUS) {
+      console.log('TOR enabled: ignoring non-onion bootstrap addresses');
+      return values.filter(isOnionMultiaddr);
+    }
+    const filtered = values.filter(addr => !isOnionMultiaddr(addr));
+    const ignored = values.length - filtered.length;
+    if (ignored > 0) {
+      console.log(`[STACK][FAST] ignoring ${ignored} onion bootstrap addresses`);
+    }
+    return filtered;
+  };
+
+  const dbAddresses = database.getBootstrapNodes()
     .map(bootstrapNode => bootstrapNode.address)
     .filter(addr => addr !== node.peerId.toString());
+  const envAddresses = parseCommaSeparatedEnv(bootstrapEnvKey)
+    .filter(addr => addr !== node.peerId.toString());
 
-  // In Tor mode, only use onion bootstrap addresses to avoid Tor exit failures
-  const torCfg = getTorConfigFromSettings(database);
-  if (torCfg.enabled) {
-    const onionAddrs = addressesToTry.filter(a => a.includes('/onion3/'));
-    console.log('TOR enabled: ignoring non-onion bootstrap addresses');
-    addressesToTry = onionAddrs;
+  let addressesToTry = filterByMode(dedupe([
+    ...dbAddresses,
+    ...envAddresses,
+  ]));
+
+  const fastRelayAddrs = relayEnvKey ? parseCommaSeparatedEnv(relayEnvKey) : [];
+
+  const dialFastRelays = async (): Promise<void> => {
+    if (networkMode !== NETWORK_MODES.FAST || fastRelayAddrs.length === 0) {
+      return;
+    }
+
+    const concurrency = Math.min(5, fastRelayAddrs.length);
+    console.log(`[STACK][FAST] attempting deterministic relay dials count=${fastRelayAddrs.length} concurrency=${concurrency}`);
+    let connected = 0;
+    let cursor = 0;
+
+    const runWorker = async (): Promise<void> => {
+      while (cursor < fastRelayAddrs.length) {
+        const relayAddr = fastRelayAddrs[cursor++];
+        try {
+          await node.dial(multiaddr(relayAddr));
+          connected++;
+          console.log(`[STACK][FAST][RELAY] connected ${relayAddr}`);
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : 'unknown';
+          console.warn(`[STACK][FAST][RELAY] failed ${relayAddr} reason=${reason}`);
+        }
+      }
+    };
+
+    await Promise.all(Array.from({ length: concurrency }, () => runWorker()));
+    console.log(`[STACK][FAST][RELAY] connected=${connected}/${fastRelayAddrs.length}`);
+  };
+
+  if (addressesToTry.length === 0 && envAddresses.length > 0) {
+    // Defensive fallback in case DB entries are stale for current mode.
+    addressesToTry = filterByMode(envAddresses);
   }
 
   if (addressesToTry.length === 0) {
-    console.log('No bootstrap addresses configured. YOU ARE ALONE IN THE DARK!');
+    console.log(`[STACK] No bootstrap addresses configured for mode=${networkMode}.`);
+    await dialFastRelays();
     // Status will be sent by periodic peer count checker
     return;
   }
 
-  console.log('Attempting to connect to bootstrap nodes...');
+  console.log(`Attempting to connect to bootstrap nodes... mode=${networkMode} envKey=${bootstrapEnvKey}`);
 
   for (const addr of addressesToTry) {
     try {
@@ -294,6 +409,7 @@ export async function connectToBootstrap(node: ChatNode, database: ChatDatabase)
       await node.dial(ma);
       console.log(`Connected to bootstrap peer: ${addr}`);
       database.updateBootstrapNodeStatus(addr, true);
+      await dialFastRelays();
 
       return;
 
@@ -304,5 +420,6 @@ export async function connectToBootstrap(node: ChatNode, database: ChatDatabase)
   }
 
   console.log('No hardcoded bootstrap nodes available.');
+  await dialFastRelays();
   // Status will be sent by periodic peer count checker
 } 
