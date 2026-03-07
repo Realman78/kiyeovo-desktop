@@ -254,7 +254,7 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
     return <>
         <div className={collapsed ? "w-full p-3 flex flex-col items-center gap-3" : "w-full p-4 flex"}>
             <div className={collapsed ? "flex flex-col items-center gap-3" : "w-full flex items-center justify-between"}>
-                <div className={`w-10 h-10 cursor-pointer rounded-full border ${isTorEnabled ? "border-[#5a3184]" : "border-primary/50"} flex items-center justify-center glow-border`} onClick={handleShowKiyeovoDialog}>
+                <div className={`w-10 h-10 cursor-pointer rounded-full border ${isTorEnabled ? "border-[#5a3184] glow-border-tor" : "border-primary/50 glow-border"} flex items-center justify-center`} onClick={handleShowKiyeovoDialog}>
                     <Logo version="2" />
                 </div>
                 {collapsed ? (

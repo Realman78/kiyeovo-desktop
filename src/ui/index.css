@@ -112,6 +112,8 @@
     /* Custom glow effects */
     --glow-primary: 0 0 20px hsl(185 80% 50% / 0.3);
     --glow-primary-intense: 0 0 30px hsl(185 80% 50% / 0.5);
+    --glow-tor: 0 0 20px hsl(270 40% 40% / 0.3);
+    --glow-tor-intense: 0 0 30px hsl(270 40% 40% / 0.5);
     --glow-success: 0 0 15px hsl(150 70% 45% / 0.4);
 
     /* Sidebar */
@@ -226,6 +228,15 @@
   .glow-border:hover {
     transition: box-shadow 0.3s ease-in-out;
     box-shadow: var(--glow-primary-intense);
+  }
+
+  .glow-border-tor {
+    box-shadow: var(--glow-tor);
+    transition: box-shadow 0.3s ease-in-out;
+  }
+  .glow-border-tor:hover {
+    transition: box-shadow 0.3s ease-in-out;
+    box-shadow: var(--glow-tor-intense);
   }
 
   .glow-border-intense {
