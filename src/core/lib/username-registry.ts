@@ -17,6 +17,7 @@ export class UsernameRegistry {
   private static readonly TEXT_ENCODER = new TextEncoder();
   private static readonly TEXT_DECODER = new TextDecoder();
   private static readonly MAX_REGISTRATION_AGE = REREGISTRATION_INTERVAL * 2;
+  private static readonly AUTO_REGISTER_WARMUP_DELAY_MS = 5_000;
   private static readonly LOOKUP_RETRYABLE_ERRORS = [
     'Could not send correction',
     'No peers found',
@@ -447,6 +448,18 @@ export class UsernameRegistry {
       console.log(`Registration will be available once connected to the network`);
       return;
     }
+
+    // Startup race probe: allow identify + kad routing to settle before auto-register.
+    // If this removes hangs, the root cause is precheck running before routing is populated.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const dhtService = (this.node.services as any).dht as { routingTable?: { size?: number } } | undefined;
+    console.log(
+      `[USERNAME-REG][AUTO-RESTORE][WARMUP] username=${username} delayMs=${UsernameRegistry.AUTO_REGISTER_WARMUP_DELAY_MS} routingSizeBefore=${dhtService?.routingTable?.size ?? 'unknown'}`,
+    );
+    await new Promise<void>((resolve) => setTimeout(resolve, UsernameRegistry.AUTO_REGISTER_WARMUP_DELAY_MS));
+    console.log(
+      `[USERNAME-REG][AUTO-RESTORE][WARMUP-DONE] username=${username} routingSizeAfter=${dhtService?.routingTable?.size ?? 'unknown'}`,
+    );
 
     try {
       await this.register(username, true);
