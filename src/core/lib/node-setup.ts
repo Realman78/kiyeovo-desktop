@@ -422,29 +422,20 @@ export async function connectToBootstrap(node: ChatNode, database: ChatDatabase)
   const probeDhtAdmission = async (remotePeer: PeerId | undefined): Promise<void> => {
     try {
       const dhtAdmission = getDhtAdmissionApi(node);
-      const before = dhtAdmission?.routingTable.size ?? 'unknown';
-      console.log(`[DHT-ADMISSION] start peer=${String(remotePeer)} routingBefore=${before}`);
-
       if (!dhtAdmission || !remotePeer) {
-        console.log('[DHT-ADMISSION] skip reason=missing_dht_api_or_peer');
         return;
       }
 
       const peerInfo = await node.peerStore.get(remotePeer);
       const multiaddrs = (peerInfo.addresses ?? []).map((entry) => entry.multiaddr);
-      const protocols = peerInfo.protocols ?? [];
-      console.log(`[DHT-ADMISSION] input peer=${String(remotePeer)} addrs=${multiaddrs.length} protocols=${protocols.length}`);
 
       await dhtAdmission.onPeerConnect({
         id: remotePeer,
         multiaddrs,
       });
-
-      const after = dhtAdmission.routingTable.size;
-      console.log(`[DHT-ADMISSION] done peer=${String(remotePeer)} routingAfter=${after}`);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
-      console.warn(`[DHT-ADMISSION] error message=${message}`);
+      console.warn(`[BOOTSTRAP] DHT admission probe failed: ${message}`);
     }
   };
 

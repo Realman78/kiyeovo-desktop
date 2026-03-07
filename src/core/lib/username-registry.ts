@@ -84,47 +84,14 @@ export class UsernameRegistry {
     const myPeerId = this.node.peerId.toString();
     const usernameKey = this.buildUsernameByNameKey(username);
     const peerIdKey = this.buildUsernameByPeerIdKey(myPeerId);
-    const usernameKeyLabel = this.describeDhtKey(usernameKey);
-    const peerIdKeyLabel = this.describeDhtKey(peerIdKey);
-
     const userRegistration = this.#createUserRegistrationObject(username);
     const userRegistrationJson = JSON.stringify(userRegistration);
     const valueBytes = UsernameRegistry.TEXT_ENCODER.encode(userRegistrationJson);
 
     // Check if username is already taken by someone else
-    const precheckStartMs = Date.now();
-    const precheckEventCounts: Record<string, number> = {};
-    let precheckValueEvents = 0;
-    let precheckSawAnyEvent = false;
-    const dhtService = this.node.services.dht as unknown as {
-      protocol?: string;
-      getMode?: () => 'client' | 'server';
-      routingTable?: { size?: number };
-    };
-    const precheckWatchdog = setInterval(() => {
-      console.warn(
-        `[USERNAME-REG][PRECHECK][WAIT] username=${username} key=${usernameKeyLabel} elapsedMs=${Date.now() - precheckStartMs} sawEvent=${precheckSawAnyEvent} peerCount=${this.node.getConnections().length} routingSize=${dhtService.routingTable?.size ?? 'unknown'}`,
-      );
-    }, 5000);
-
-    console.log(
-      `[USERNAME-REG][PRECHECK][START] username=${username} key=${usernameKeyLabel} peerCount=${this.node.getConnections().length} dhtProtocol=${dhtService.protocol ?? 'unknown'} dhtMode=${dhtService.getMode?.() ?? 'unknown'} routingSize=${dhtService.routingTable?.size ?? 'unknown'}`,
-    );
     try {
       for await (const event of this.node.services.dht.get(usernameKey) as AsyncIterable<QueryEvent>) {
-        precheckSawAnyEvent = true;
-        precheckEventCounts[event.name] = (precheckEventCounts[event.name] ?? 0) + 1;
-        const fromPeer = 'from' in event && event.from != null
-          ? event.from.toString()
-          : '';
-        const toPeer = 'to' in event && event.to != null
-          ? event.to.toString()
-          : '';
-        console.log(
-          `[USERNAME-REG][PRECHECK][EVENT] username=${username} key=${usernameKeyLabel} name=${event.name}${fromPeer ? ` from=${fromPeer}` : ''}${toPeer ? ` to=${toPeer}` : ''}`,
-        );
         if (event.name === 'VALUE' && event.value) {
-          precheckValueEvents++;
           const rawData = UsernameRegistry.TEXT_DECODER.decode(event.value).trim();
           
           // If data is empty or invalid, skip it (username is available)
@@ -157,29 +124,17 @@ export class UsernameRegistry {
             throw new Error(ERRORS.USERNAME_TAKEN);
           }
           break;
-        } else if (event.name === 'QUERY_ERROR') {
-          console.warn(
-            `[USERNAME-REG][PRECHECK][QUERY_ERROR] username=${username} key=${usernameKeyLabel} from=${event.from.toString()} error=${event.error.message}`,
-          );
         }
       }
-      console.log(
-        `[USERNAME-REG][PRECHECK][DONE] username=${username} key=${usernameKeyLabel} durationMs=${Date.now() - precheckStartMs} valueEvents=${precheckValueEvents} counts=${JSON.stringify(precheckEventCounts)}`,
-      );
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : '';
       const isExpectedError = errMsg.includes('not found')
         || errMsg.includes('No peers found')
         || errMsg.includes('Could not send correction');
-      console.warn(
-        `[USERNAME-REG][PRECHECK][ERROR] username=${username} key=${usernameKeyLabel} durationMs=${Date.now() - precheckStartMs} expected=${isExpectedError} message=${errMsg || String(err)} counts=${JSON.stringify(precheckEventCounts)}`,
-      );
       if (!isExpectedError) {
         generalErrorHandler(err, 'Failed to register username');
         throw err;
       }
-    } finally {
-      clearInterval(precheckWatchdog);
     }
 
     // If changing username, stop re-registration first to prevent race conditions
@@ -190,11 +145,7 @@ export class UsernameRegistry {
     }
 
     // Store username -> user data record (for username lookups)
-    console.log(`[USERNAME-REG][PUT][START] target=username key=${usernameKeyLabel}`);
     const usernamePublish = await this.publishRecord(usernameKey, valueBytes);
-    console.log(
-      `[USERNAME-REG][PUT][SUMMARY] target=username key=${usernameKeyLabel} accepted=${usernamePublish.acceptedCount} rejected=${usernamePublish.rejectedCount} queryErrors=${usernamePublish.errorCount}`,
-    );
     if (usernamePublish.acceptedCount === 0 && usernamePublish.rejectedCount > 0) {
       if (oldUsername) {
         this.currentUsername = oldUsername;
@@ -223,11 +174,7 @@ export class UsernameRegistry {
     };
 
     // Store peerID -> user data record (contains all info)
-    console.log(`[USERNAME-REG][PUT][START] target=peer key=${peerIdKeyLabel}`);
     const peerPublish = await this.publishRecord(peerIdKey, valueBytes);
-    console.log(
-      `[USERNAME-REG][PUT][SUMMARY] target=peer key=${peerIdKeyLabel} accepted=${peerPublish.acceptedCount} rejected=${peerPublish.rejectedCount} queryErrors=${peerPublish.errorCount}`,
-    );
     if (peerPublish.acceptedCount === 0 && peerPublish.rejectedCount > 0) {
       await rollbackUsernameOnPeerWriteFailure();
       if (oldUsername) {
@@ -637,36 +584,17 @@ export class UsernameRegistry {
     let errorCount = 0;
     let acceptedCount = 0;
     let rejectedCount = 0;
-    const keyLabel = this.describeDhtKey(key);
-    const startMs = Date.now();
-    const eventCounts: Record<string, number> = {};
-
-    try {
-      for await (const event of this.node.services.dht.put(key, valueBytes) as AsyncIterable<QueryEvent>) {
-        eventCounts[event.name] = (eventCounts[event.name] ?? 0) + 1;
-        if (event.name === 'QUERY_ERROR') {
-          errorCount++;
-          console.warn(
-            `[USERNAME-REG][PUT][QUERY_ERROR] key=${keyLabel} from=${event.from.toString()} error=${event.error.message}`,
-          );
-        } else if (event.name === 'PEER_RESPONSE') {
-          const accepted = event.record != null
-            && Buffer.from(event.record.value).equals(Buffer.from(valueBytes));
-          if (accepted) acceptedCount++;
-          else rejectedCount++;
-        }
+    for await (const event of this.node.services.dht.put(key, valueBytes) as AsyncIterable<QueryEvent>) {
+      if (event.name === 'QUERY_ERROR') {
+        errorCount++;
+      } else if (event.name === 'PEER_RESPONSE') {
+        const accepted = event.record != null
+          && Buffer.from(event.record.value).equals(Buffer.from(valueBytes));
+        if (accepted) acceptedCount++;
+        else rejectedCount++;
       }
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.warn(
-        `[USERNAME-REG][PUT][THROW] key=${keyLabel} durationMs=${Date.now() - startMs} message=${message} counts=${JSON.stringify(eventCounts)}`,
-      );
-      throw err;
     }
 
-    console.log(
-      `[USERNAME-REG][PUT][DONE] key=${keyLabel} durationMs=${Date.now() - startMs} accepted=${acceptedCount} rejected=${rejectedCount} queryErrors=${errorCount} counts=${JSON.stringify(eventCounts)}`,
-    );
     return { errorCount, acceptedCount, rejectedCount };
   }
 
@@ -687,14 +615,6 @@ export class UsernameRegistry {
   private buildUsernameByPeerIdKey(peerId: string): Uint8Array {
     const hashed = hashUsingSha256(peerId);
     return UsernameRegistry.TEXT_ENCODER.encode(`${USERNAME_DHT_PREFIX}/by-peer/${hashed}`);
-  }
-
-  private describeDhtKey(key: Uint8Array): string {
-    const keyStr = UsernameRegistry.TEXT_DECODER.decode(key);
-    if (keyStr.length <= 80) {
-      return keyStr;
-    }
-    return `${keyStr.slice(0, 40)}...${keyStr.slice(-24)}`;
   }
 
 }
