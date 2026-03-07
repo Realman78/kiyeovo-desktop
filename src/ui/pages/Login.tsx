@@ -152,7 +152,7 @@ export const Login = ({ initStatus }: LoginProps) => {
     if (requiresNetworkModeSelection) {
         return <div className="w-full h-full flex justify-center items-center flex-col bg-background cyber-grid">
             <div className={`w-16 h-16 mb-6 rounded-full border ${networkMode === NETWORK_MODES.ANONYMOUS ? "border-[#5a3184] glow-border-tor" : "border-primary/50 glow-border"} flex items-center justify-center`}>
-                <Logo version="2" />
+                <Logo version="2" _isTorActive={networkMode === NETWORK_MODES.ANONYMOUS} />
             </div>
             <div className="text-center w-3/4">
                 <h1 className="text-xl font-mono font-semibold tracking-wide text-foreground">Choose Network Mode</h1>

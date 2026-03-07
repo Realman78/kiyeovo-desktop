@@ -3,12 +3,13 @@ import type { RootState } from "../../state/store";
 
 type LogoProps = {
     version: "1" | "2";
+    _isTorActive?: boolean
 }
 
-export const Logo = ({ version }: LogoProps) => {
+export const Logo = ({ version, _isTorActive }: LogoProps) => {
     const isTorActive = useSelector((state: RootState) => state.user.torEnabled);
 
-    const fgColor = isTorActive ? '#5a3184' : '#19d5e6';
+    const fgColor = isTorActive || _isTorActive ? '#5a3184' : '#19d5e6';
     const bgColor = '#0b0e13';
 
     return <svg
