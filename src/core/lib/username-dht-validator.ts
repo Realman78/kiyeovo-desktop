@@ -59,11 +59,13 @@ export async function usernameRegistrationValidator(
   key: Uint8Array,
   value: Uint8Array,
 ): Promise<void> {
+  console.log("username validator")
   const { kind, hash } = parseUsernameKey(key);
   const registration = parseRegistration(value);
   if (!verifyKeyBinding(kind, hash, registration)) {
     throw new Error('Username registration key binding mismatch');
   }
+  console.log("validator passed")
 }
 
 export function usernameRegistrationSelector(
@@ -105,6 +107,7 @@ export async function usernameRegistrationValidateUpdate(
   existing: Uint8Array,
   incoming: Uint8Array,
 ): Promise<void> {
+  console.log("Started")
   const keyStr = new TextDecoder().decode(key);
   const { kind, hash } = parseUsernameKey(key);
   let existingRegistration: UserRegistration;
