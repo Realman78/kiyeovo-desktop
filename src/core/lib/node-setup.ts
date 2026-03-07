@@ -400,14 +400,55 @@ export async function connectToBootstrap(node: ChatNode, database: ChatDatabase)
 
   console.log(`Attempting to connect to bootstrap nodes... mode=${networkMode} envKey=${bootstrapEnvKey}`);
 
+  const probeDhtAdmission = async (remotePeer: unknown): Promise<void> => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const dhtService = (node.services as any).dht as {
+        routingTable?: { size?: number };
+        onPeerConnect?: (peerData: { id: unknown; multiaddrs: unknown[]; protocols: string[] }) => Promise<void>;
+      } | undefined;
+      const before = dhtService?.routingTable?.size ?? 'unknown';
+      console.log(`[DHT-ADMISSION][PROBE][START] peer=${String(remotePeer)} routingBefore=${before}`);
+
+      if (!dhtService?.onPeerConnect || !remotePeer) {
+        console.log('[DHT-ADMISSION][PROBE][SKIP] reason=missing_dht_or_peer');
+        return;
+      }
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const peerInfo = await (node.peerStore as any).get(remotePeer);
+      const multiaddrs = (peerInfo.addresses ?? []).map((entry: { multiaddr: unknown }) => entry.multiaddr);
+      const protocols = peerInfo.protocols ?? [];
+      console.log(
+        `[DHT-ADMISSION][PROBE][INPUT] peer=${String(remotePeer)} addrs=${multiaddrs.length} protocols=${protocols.length}`,
+      );
+
+      await dhtService.onPeerConnect({
+        id: remotePeer,
+        multiaddrs,
+        protocols,
+      });
+
+      const after = dhtService.routingTable?.size ?? 'unknown';
+      console.log(`[DHT-ADMISSION][PROBE][DONE] peer=${String(remotePeer)} routingAfter=${after}`);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[DHT-ADMISSION][PROBE][ERROR] message=${message}`);
+    }
+  };
+
   for (const addr of addressesToTry) {
     try {
       console.log(`Trying bootstrap: ${addr}`);
       const ma = multiaddr(addr);
       // eslint-disable-next-line no-await-in-loop
-      await node.dial(ma);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const connection = await (node as any).dial(ma);
       console.log(`Connected to bootstrap peer: ${addr}`);
       database.updateBootstrapNodeStatus(addr, true);
+      // Debug probe: connected peers are alive, but may not enter Kad routing table.
+      // This confirms whether explicit DHT admission changes routing size.
+      await probeDhtAdmission(connection?.remotePeer);
       await dialFastRelays();
 
       return;
