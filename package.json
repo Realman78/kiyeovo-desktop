@@ -13,6 +13,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "bootstrap": "tsx src/core/bootstrap.ts",
+    "relay": "tsx src/core/relay.ts",
     "preview": "vite preview",
     "transpile:electron": "tsc -p src/electron/tsconfig.json",
     "dist:linux": "npm run transpile:electron && npm run build && electron-builder --linux --x64",
