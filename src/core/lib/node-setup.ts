@@ -106,7 +106,6 @@ function getTorConfigFromSettings(database: ChatDatabase): ReturnType<typeof get
   const dnsResolution = get('tor_dns_resolution');
 
   return {
-    enabled: networkMode === NETWORK_MODES.ANONYMOUS,
     socksHost: socksHost ?? base.socksHost,
     socksPort: socksPort ? parseInt(socksPort, 10) : base.socksPort,
     connectionTimeout: connectionTimeout ? parseInt(connectionTimeout, 10) : base.connectionTimeout,

@@ -104,15 +104,13 @@ async function createBootstrapNode(): Promise<ChatNode> {
   console.log(`[STACK][BOOTSTRAP] transport=tcp`);
   console.log(`[STACK][BOOTSTRAP] dhtProtocol=${modeConfig.dhtProtocol}`);
   console.log(`[STACK][BOOTSTRAP] announceCount=${announceAddrs.length}`);
-  console.log(`[STACK][BOOTSTRAP] tor_env_enabled=${torConfig.enabled}`);
+  console.log(`[STACK][BOOTSTRAP] tor_defaults_proxy=${torConfig.socksHost}:${torConfig.socksPort}`);
 
   const transports = [tcp()];
 
   if (isAnonymousMode) {
     console.log('Bootstrap: anonymous mode enabled (onion-only announce filtering active)');
-    if (torConfig.enabled) {
-      console.log(`Bootstrap: Tor env detected at ${torConfig.socksHost}:${torConfig.socksPort}`);
-    }
+    console.log(`Bootstrap: Tor proxy defaults ${torConfig.socksHost}:${torConfig.socksPort}`);
   } else {
     console.log('Bootstrap: fast mode enabled (non-onion announce filtering active)');
   }

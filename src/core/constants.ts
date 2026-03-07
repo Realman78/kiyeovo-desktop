@@ -258,7 +258,6 @@ export const TOR_CONFIG = {
  * Environment variable helpers for Tor configuration
  */
 export const getTorConfig = (): {
-  enabled: boolean;
   socksHost: string;
   socksPort: number;
   connectionTimeout: number;
@@ -267,7 +266,6 @@ export const getTorConfig = (): {
   healthCheckInterval: number;
   dnsResolution: 'tor' | 'system';
 } => ({
-  enabled: process.env.TOR_ENABLED === 'true',
   socksHost: process.env.TOR_SOCKS_HOST ?? TOR_CONFIG.DEFAULT_SOCKS_HOST,
   socksPort: parseInt(process.env.TOR_SOCKS_PORT ?? TOR_CONFIG.DEFAULT_SOCKS_PORT.toString(), 10),
   connectionTimeout: parseInt(process.env.TOR_CONNECTION_TIMEOUT ?? TOR_CONFIG.DEFAULT_CONNECTION_TIMEOUT.toString(), 10),
