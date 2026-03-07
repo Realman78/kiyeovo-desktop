@@ -105,26 +105,35 @@ export async function usernameRegistrationValidateUpdate(
   existing: Uint8Array,
   incoming: Uint8Array,
 ): Promise<void> {
-  console.log("started")
+  const keyStr = new TextDecoder().decode(key);
   const { kind, hash } = parseUsernameKey(key);
   let existingRegistration: UserRegistration;
   try {
     existingRegistration = parseRegistration(existing);
     if (!verifyKeyBinding(kind, hash, existingRegistration)) {
       // Existing data is malformed for this key; allow valid incoming replacement.
+      console.warn(`[USERNAME-VALIDATOR][ALLOW_REPLACE] reason=existing_key_binding_mismatch key=${keyStr}`);
       return;
     }
-  } catch {
+  } catch (err: unknown) {
     // Existing data is malformed for this key; allow valid incoming replacement.
+    const errText = err instanceof Error ? err.message : String(err);
+    console.warn(`[USERNAME-VALIDATOR][ALLOW_REPLACE] reason=existing_parse_invalid key=${keyStr} err=${errText}`);
     return;
   }
 
   const incomingRegistration = parseRegistration(incoming);
   if (!verifyKeyBinding(kind, hash, incomingRegistration)) {
+    console.warn(
+      `[USERNAME-VALIDATOR][REJECT] reason=incoming_key_binding_mismatch key=${keyStr} incomingPeer=${incomingRegistration.peerID} incomingUsername=${incomingRegistration.username}`
+    );
     throw new Error('stale record rejected');
   }
 
   if (incomingRegistration.timestamp < existingRegistration.timestamp) {
+    console.warn(
+      `[USERNAME-VALIDATOR][REJECT] reason=timestamp_older key=${keyStr} existingTs=${existingRegistration.timestamp} incomingTs=${incomingRegistration.timestamp} existingPeer=${existingRegistration.peerID} incomingPeer=${incomingRegistration.peerID}`
+    );
     throw new Error('stale record rejected');
   }
 
@@ -132,6 +141,9 @@ export async function usernameRegistrationValidateUpdate(
     const existingRaw = canonicalUsernameRegistrationPayloadJson(existingRegistration);
     const incomingRaw = canonicalUsernameRegistrationPayloadJson(incomingRegistration);
     if (incomingRaw !== existingRaw) {
+      console.warn(
+        `[USERNAME-VALIDATOR][REJECT] reason=same_timestamp_payload_mismatch key=${keyStr} ts=${incomingRegistration.timestamp} existingPeer=${existingRegistration.peerID} incomingPeer=${incomingRegistration.peerID}`
+      );
       throw new Error('stale record rejected');
     }
   }
@@ -141,9 +153,13 @@ export async function usernameRegistrationValidateUpdate(
     const sameOwner = incomingRegistration.peerID === existingRegistration.peerID
       && incomingRegistration.signingPublicKey === existingRegistration.signingPublicKey;
     if (!sameOwner) {
+      console.warn(
+        `[USERNAME-VALIDATOR][REJECT] reason=owner_mismatch key=${keyStr} existingPeer=${existingRegistration.peerID} incomingPeer=${incomingRegistration.peerID} existingKind=${existingKind}`
+      );
       throw new Error('stale record rejected');
     }
   }
   console.log(
-    `DHT validator: accepted write to ${new TextDecoder().decode(key)}... with`, incomingRegistration
-  );}
+    `DHT validator: accepted write to ${keyStr}... with`, incomingRegistration
+  );
+}
