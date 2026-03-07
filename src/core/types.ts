@@ -18,6 +18,8 @@ export interface ChatNode extends Libp2p {
   }
 }
 
+export type NetworkMode = 'fast' | 'anonymous';
+
 // Chat message structure
 export interface ChatMessage {
   from: string

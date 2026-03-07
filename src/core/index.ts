@@ -5,7 +5,7 @@ import { MessageHandler } from './lib/message-handler.js';
 import { EncryptedUserIdentity } from './lib/encrypted-user-identity.js';
 import { ChatDatabase } from './lib/db/database.js';
 import { DATABASE_CLEANUP_INTERVAL } from './constants.js';
-import type { ChatNode, ContactRequestEvent, KeyExchangeEvent, PasswordResponse, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent, FileTransferProgressEvent, FileTransferCompleteEvent, FileTransferFailedEvent, PendingFileReceivedEvent, GroupChatActivatedEvent, GroupMembersUpdatedEvent } from './types.js';
+import type { ChatNode, ContactRequestEvent, KeyExchangeEvent, PasswordResponse, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent, FileTransferProgressEvent, FileTransferCompleteEvent, FileTransferFailedEvent, PendingFileReceivedEvent, GroupChatActivatedEvent, GroupMembersUpdatedEvent, NetworkMode } from './types.js';
 
 export interface P2PCore {
   node: ChatNode;
@@ -13,6 +13,7 @@ export interface P2PCore {
   userIdentity: EncryptedUserIdentity;
   usernameRegistry: UsernameRegistry;
   messageHandler: MessageHandler;
+  networkMode: NetworkMode;
   getCurrentDhtStatus: () => boolean | null;
   retryBootstrap: () => Promise<void>;
   cleanup: () => Promise<void>;
@@ -94,6 +95,10 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
   const dbPath = path.join(config.dataDir, 'chat.db');
   const database = new ChatDatabase(dbPath);
   sendStatus(`Database initialized at: ${dbPath}`, 'database');
+
+  // U1: load persisted network mode before node initialization.
+  const networkMode = database.getNetworkMode();
+  sendStatus(`Loaded network mode: ${networkMode}`, 'database');
 
   // Store Tor configuration in database for node-setup to read
   if (config.torConfig) {
@@ -375,6 +380,7 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
     userIdentity,
     usernameRegistry,
     messageHandler,
+    networkMode,
     getCurrentDhtStatus: () => {
       if (currentDhtConnected !== null) {
         return currentDhtConnected;

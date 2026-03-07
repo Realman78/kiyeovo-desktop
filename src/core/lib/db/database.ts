@@ -4,7 +4,7 @@ import Database from 'better-sqlite3';
 import * as fs from 'fs';
 import * as path from 'path';
 import { generalErrorHandler } from '../../utils/general-error.js';
-import type { ContactMode, OfflineMessage } from '../../types.js';
+import type { ContactMode, NetworkMode, OfflineMessage } from '../../types.js';
 import type { AckMessageType, GroupOfflineMessage, GroupStatus } from '../group/types.js';
 import { assertGroupTransition, isGroupStatus } from '../group/group-state-machine.js';
 import { DEFAULT_BOOTSTRAP_NODES } from '../../default-bootstrap-nodes.js';
@@ -393,6 +393,13 @@ export class ChatDatabase {
         const contactModeSetting = this.db.prepare('SELECT value FROM settings WHERE key = ?').get('contact_mode');
         if (!contactModeSetting) {
             this.db.prepare(`INSERT INTO settings (key, value) VALUES ('contact_mode', 'active')`).run();
+        }
+
+        // Initialize default network mode setting if not exists.
+        // U1 default is "fast" on first launch.
+        const networkModeSetting = this.db.prepare('SELECT value FROM settings WHERE key = ?').get('network_mode');
+        if (!networkModeSetting) {
+            this.db.prepare(`INSERT INTO settings (key, value) VALUES ('network_mode', 'fast')`).run();
         }
 
         // Offline sent messages table (local cache of messages we've sent to DHT)
@@ -832,6 +839,23 @@ export class ChatDatabase {
     getContactMode(): 'active' | 'silent' | 'block' {
         const value = this.getSetting('contact_mode');
         return (value as 'active' | 'silent' | 'block') || 'active';
+    }
+
+    setNetworkMode(mode: NetworkMode): void {
+        if (mode !== 'fast' && mode !== 'anonymous') {
+            throw new Error(`Invalid network mode: ${mode}`);
+        }
+        this.setSetting('network_mode', mode);
+    }
+
+    getNetworkMode(): NetworkMode {
+        const value = this.getSetting('network_mode');
+        if (value === 'anonymous') return 'anonymous';
+        if (value === 'fast') return 'fast';
+
+        // Self-heal invalid/missing value to default.
+        this.setSetting('network_mode', 'fast');
+        return 'fast';
     }
 
     // Contact attempt operations (silent mode logging)
