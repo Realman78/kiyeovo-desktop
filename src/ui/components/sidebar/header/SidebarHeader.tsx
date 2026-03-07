@@ -64,6 +64,21 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
 
     useEffect(() => {
         console.log('[DHT-STATUS][UI][SUBSCRIBE] SidebarHeader subscribing to DHT status events');
+        let isDisposed = false;
+
+        void window.kiyeovoAPI.getDHTConnectionStatus().then((result) => {
+            if (isDisposed) return;
+            if (!result.success || result.connected === null) {
+                console.log('[DHT-STATUS][UI][SNAPSHOT] unavailable');
+                return;
+            }
+            console.log(`[DHT-STATUS][UI][SNAPSHOT] connected=${result.connected}`);
+            setIsDHTConnected(result.connected);
+            dispatch(setConnected(result.connected));
+        }).catch((error) => {
+            console.error('[DHT-STATUS][UI][SNAPSHOT] failed:', error);
+        });
+
         const unsubStatus = window.kiyeovoAPI.onDHTConnectionStatus((status: { connected: boolean }) => {
             console.log(`[DHT-STATUS][UI][EVENT] connected=${status.connected}`);
             setIsDHTConnected(status.connected);
@@ -95,6 +110,7 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
         });
 
         return () => {
+            isDisposed = true;
             console.log('[DHT-STATUS][UI][UNSUBSCRIBE] SidebarHeader unsubscribing from DHT status events');
             unsubStatus();
             unsubSent();

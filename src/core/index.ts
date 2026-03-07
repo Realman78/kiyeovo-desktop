@@ -13,6 +13,7 @@ export interface P2PCore {
   userIdentity: EncryptedUserIdentity;
   usernameRegistry: UsernameRegistry;
   messageHandler: MessageHandler;
+  getCurrentDhtStatus: () => boolean | null;
   retryBootstrap: () => Promise<void>;
   cleanup: () => Promise<void>;
 }
@@ -144,11 +145,13 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
   let dhtStatusActiveStartedAt = 0;
   let dhtStatusCheckSeq = 0;
   let reconnectInProgress = false;
+  let currentDhtConnected: boolean | null = null;
   const emitDhtStatus = (connected: boolean, reason: string) => {
     const peers = node.getConnections().map((p) => p.remotePeer.toString());
     console.log(
       `[DHT-STATUS][CORE][EMIT] connected=${connected} reason=${reason} peerCount=${peers.length} peers=${peers.join(',') || 'none'}`,
     );
+    currentDhtConnected = connected;
     sendDHTConnectionStatus({ connected });
   };
 
@@ -187,10 +190,20 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
   const checkDHTStatus = async (source: 'startup' | 'timer_5s' | 'timer_30s' | 'manual_retry' | 'post_retry_verify' = 'timer_30s') => {
     if (dhtStatusCheckInFlight) {
       const ageMs = dhtStatusActiveStartedAt > 0 ? Date.now() - dhtStatusActiveStartedAt : -1;
-      console.log(
-        `[DHT-STATUS][CORE][CHECK][SKIP] reason=in_flight source=${source} activeId=${String(dhtStatusActiveCheckId)} ageMs=${ageMs}`,
-      );
-      return dhtStatusCheckInFlight;
+      const staleInFlight = dhtStatusActiveCheckId === null || ageMs < 0 || ageMs > 90_000;
+      if (staleInFlight) {
+        console.warn(
+          `[DHT-STATUS][CORE][CHECK][RESET] reason=stale_in_flight source=${source} activeId=${String(dhtStatusActiveCheckId)} ageMs=${ageMs}`,
+        );
+        dhtStatusCheckInFlight = null;
+        dhtStatusActiveCheckId = null;
+        dhtStatusActiveStartedAt = 0;
+      } else {
+        console.log(
+          `[DHT-STATUS][CORE][CHECK][SKIP] reason=in_flight source=${source} activeId=${String(dhtStatusActiveCheckId)} ageMs=${ageMs}`,
+        );
+        return dhtStatusCheckInFlight;
+      }
     }
 
     const checkId = ++dhtStatusCheckSeq;
@@ -362,6 +375,12 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
     userIdentity,
     usernameRegistry,
     messageHandler,
+    getCurrentDhtStatus: () => {
+      if (currentDhtConnected !== null) {
+        return currentDhtConnected;
+      }
+      return node.getConnections().length > 0;
+    },
     retryBootstrap: async () => {
       if (reconnectInProgress) {
         console.log('[P2P Core] Reconnect already in progress, ignoring manual retry');

@@ -468,6 +468,7 @@ export const IPC_CHANNELS = {
 
   // DHT connection status
   DHT_CONNECTION_STATUS: 'dht:connectionStatus',
+  GET_DHT_CONNECTION_STATUS: 'dht:getConnectionStatus',
 
   // Register
   REGISTER_REQUEST: 'register:request',

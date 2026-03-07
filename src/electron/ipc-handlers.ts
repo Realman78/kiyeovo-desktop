@@ -373,6 +373,26 @@ function setupBootstrapHandlers(
   ipcMain: IpcMain,
   getP2PCore: () => P2PCore | null
 ): void {
+  // Get current DHT connection status snapshot
+  ipcMain.handle(IPC_CHANNELS.GET_DHT_CONNECTION_STATUS, async () => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, connected: null as boolean | null, error: 'P2P core not initialized' };
+      }
+
+      const connected = p2pCore.getCurrentDhtStatus();
+      return { success: true, connected, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to get DHT connection status:', error);
+      return {
+        success: false,
+        connected: null as boolean | null,
+        error: error instanceof Error ? error.message : 'Failed to get DHT connection status',
+      };
+    }
+  });
+
   // Get bootstrap nodes from database
   ipcMain.handle(IPC_CHANNELS.GET_BOOTSTRAP_NODES, async () => {
     try {

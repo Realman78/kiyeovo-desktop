@@ -29,6 +29,7 @@ declare global {
 
             // DHT connection status
             onDHTConnectionStatus: (callback: (status: { connected: boolean }) => void) => () => void;
+            getDHTConnectionStatus: () => Promise<{ success: boolean; connected: boolean | null; error: string | null }>;
 
             // Register
             register: (username: string, rememberMe: boolean) => Promise<{ success: boolean; error?: string }>;
