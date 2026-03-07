@@ -1,7 +1,7 @@
 import { createLibp2p } from 'libp2p';
 import { noise } from '@chainsafe/libp2p-noise';
 import { yamux } from '@chainsafe/libp2p-yamux';
-import { kadDHT, removePublicAddressesMapper } from '@libp2p/kad-dht';
+import { kadDHT, passthroughMapper } from '@libp2p/kad-dht';
 import { identify } from '@libp2p/identify';
 import { ping } from '@libp2p/ping';
 import { gossipsub } from '@chainsafe/libp2p-gossipsub';
@@ -28,7 +28,6 @@ import dotenv from 'dotenv';
 import {
   DHT_KEY_PREFIXES,
   DHT_NAMESPACE_NAMES,
-  DHT_PROTOCOL,
   K_BUCKET_SIZE,
   NETWORK_MODE_BOOTSTRAP_ENV_KEYS,
   NETWORK_MODE_RELAY_ENV_KEYS,
@@ -129,6 +128,7 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
 
     const listenAddress = `/ip4/0.0.0.0/tcp/${port}`;
     const networkMode = database.getNetworkMode();
+    const isAnonymousMode = networkMode === NETWORK_MODES.ANONYMOUS;
     const modeConfig = getNetworkModeConfig(networkMode);
     const bootstrapEnvKey = NETWORK_MODE_BOOTSTRAP_ENV_KEYS[networkMode];
     const relayEnvKey = NETWORK_MODE_RELAY_ENV_KEYS[networkMode];
@@ -146,23 +146,23 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
     console.log(`[STACK] mode=${networkMode}`);
     console.log(`[STACK] protocol=${modeConfig.protocolName} dhtProtocol=${modeConfig.dhtProtocol}`);
     console.log(`[STACK] bootstrapEnv=${bootstrapEnvKey}`);
-    console.log(`[STACK] transport=${networkMode === NETWORK_MODES.ANONYMOUS ? 'tcp+tor-socks' : 'tcp+relay(+dcutr)'}`);
+    console.log(`[STACK] transport=${isAnonymousMode ? 'tcp+tor-socks' : 'tcp+relay(+dcutr)'}`);
     console.log(`[STACK] relayEnv=${relayEnvKey ?? 'n/a'} relayConfigured=${relayAddresses.length}`);
-    if (networkMode === NETWORK_MODES.FAST) {
+    if (!isAnonymousMode) {
       console.log('[STACK][FAST] relay runtime loaded');
     }
 
-    if (networkMode === NETWORK_MODES.ANONYMOUS) {
+    if (isAnonymousMode) {
       console.log('Tor transport enabled - routing through SOCKS5 proxy');
       console.log(`  Initial Proxy: ${torConfig.socksHost}:${torConfig.socksPort}`);
 
       // Extract first bootstrap node for health check if available
-      const KNOWN_BOOTSTRAP_NODES = process.env.KNOWN_BOOTSTRAP_NODES ? process.env.KNOWN_BOOTSTRAP_NODES.split(',').map(addr => addr.trim()).filter(Boolean) : [];
+      const configuredBootstrapNodes = parseCommaSeparatedEnv(bootstrapEnvKey);
       const bootstrapTargets: Array<{ host: string, port: number }> = [];
 
-      if (KNOWN_BOOTSTRAP_NODES.length > 0) {
+      if (configuredBootstrapNodes.length > 0) {
         try {
-          for (const nodeAddr of KNOWN_BOOTSTRAP_NODES) {
+          for (const nodeAddr of configuredBootstrapNodes) {
             if (!nodeAddr) continue;
             const ma = multiaddr(nodeAddr);
             const onionTuple = ma.getComponents().find(c => c.code === 445);
@@ -208,7 +208,7 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
 
     // Check for onion address in database (set by TorManager)
     const onionAddress = database.getSetting('tor_onion_address');
-    if (torConfig.enabled && onionAddress) {
+    if (isAnonymousMode && onionAddress) {
       // Construct announce address from stored onion address
       // Format: /onion3/<address-without-.onion>:<port>
       const onionHost = onionAddress.replace('.onion', '');
@@ -241,7 +241,7 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
       privateKey: privateKey,
       addresses: {
         listen: [listenAddress],
-        announce: torConfig.enabled ? announceAddrs : []
+        announce: isAnonymousMode ? announceAddrs : []
       },
       transports: transports,
       connectionEncrypters: [noise()],
@@ -251,12 +251,12 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
       },
       connectionMonitor: {
         enabled: true,
-        pingInterval: torConfig.enabled ? 120000 : 30000,  // 2 minutes for Tor, 30s for local
+        pingInterval: isAnonymousMode ? 120000 : 30000,  // 2 minutes for Tor, 30s for local
         pingTimeout: {
-          minTimeout: torConfig.enabled ? 30000 : 5000,    // 30s for Tor, 5s for local
-          maxTimeout: torConfig.enabled ? 120000 : 30000,  // 2 min for Tor, 30s for local
+          minTimeout: isAnonymousMode ? 30000 : 5000,    // 30s for Tor, 5s for local
+          maxTimeout: isAnonymousMode ? 120000 : 30000,  // 2 min for Tor, 30s for local
         },
-        abortConnectionOnPingFailure: !torConfig.enabled,  // Don't abort on Tor, do on local
+        abortConnectionOnPingFailure: !isAnonymousMode,  // Don't abort on Tor, do on local
       },
       connectionGater: createConnectionGater(database),
       services: {
@@ -265,8 +265,8 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
           { emitSelf: false }
         ),
         dht: kadDHT({
-          protocol: DHT_PROTOCOL,
-          peerInfoMapper: torConfig.enabled ? filterOnionAddressesMapper : removePublicAddressesMapper,
+          protocol: modeConfig.dhtProtocol,
+          peerInfoMapper: isAnonymousMode ? filterOnionAddressesMapper : passthroughMapper,
           clientMode: false,
           kBucketSize: K_BUCKET_SIZE,
           prefixLength: PREFIX_LENGTH,
@@ -307,7 +307,7 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
         }),
         ping: ping({
           // Longer timeout for Tor (default is too aggressive)
-          timeout: torConfig.enabled ? 60000 : 10000,
+          timeout: isAnonymousMode ? 60000 : 10000,
         }),
         ...(networkMode === NETWORK_MODES.FAST && relayRuntime.dcutrFactory
           ? {

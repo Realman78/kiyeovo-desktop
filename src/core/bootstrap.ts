@@ -2,7 +2,7 @@ import { createLibp2p } from 'libp2p';
 import { tcp } from '@libp2p/tcp';
 import { noise } from '@chainsafe/libp2p-noise';
 import { yamux } from '@chainsafe/libp2p-yamux';
-import { kadDHT, removePublicAddressesMapper } from '@libp2p/kad-dht';
+import { kadDHT, passthroughMapper } from '@libp2p/kad-dht';
 import { identify } from '@libp2p/identify';
 import { ping } from '@libp2p/ping';
 import { gossipsub } from '@chainsafe/libp2p-gossipsub';
@@ -15,13 +15,16 @@ import type { ChatNode } from './types.js';
 import { PeerIdManager } from './lib/peer-id-manager.js';
 import {
   BOOTSTRAP_LISTEN_ADDRESS,
+  DEFAULT_NETWORK_MODE,
   DHT_KEY_PREFIXES,
   DHT_NAMESPACE_NAMES,
-  DHT_PROTOCOL,
   K_BUCKET_SIZE,
+  NETWORK_MODES,
   PREFIX_LENGTH,
   BOOTSTRAP_PEER_ID_FILE,
-  getTorConfig
+  getTorConfig,
+  getNetworkModeConfig,
+  isNetworkMode,
 } from './constants.js';
 import { filterOnionAddressesMapper } from './utils/miscellaneous.js';
 import { offlineMessageSelector, offlineMessageValidateUpdate, offlineMessageValidator } from './lib/offline-message-validator.js';
@@ -34,15 +37,29 @@ import {
 
 dotenv.config();
 
+function readBootstrapNetworkMode(): 'fast' | 'anonymous' {
+  const raw = process.env.BOOTSTRAP_NETWORK_MODE?.trim().toLowerCase();
+  if (isNetworkMode(raw)) {
+    return raw;
+  }
+
+  if (raw) {
+    console.warn(`[STACK][BOOTSTRAP] invalid BOOTSTRAP_NETWORK_MODE="${raw}", defaulting to ${DEFAULT_NETWORK_MODE}`);
+  }
+
+  return DEFAULT_NETWORK_MODE;
+}
+
 async function createBootstrapNode(): Promise<ChatNode> {
   const { privateKey } = await PeerIdManager.loadOrCreate(BOOTSTRAP_PEER_ID_FILE);
+  const networkMode = readBootstrapNetworkMode();
+  const modeConfig = getNetworkModeConfig(networkMode);
+  const torConfig = getTorConfig();
+  const isAnonymousMode = networkMode === NETWORK_MODES.ANONYMOUS;
 
   const announceAddrs: string[] = [];
   if (process.env.BOOTSTRAP_ANNOUNCE_ADDRS) {
     const rawAddrs = process.env.BOOTSTRAP_ANNOUNCE_ADDRS.split(',').map(addr => addr.trim()).filter(Boolean);
-    const validAddrs: string[] = [];
-    let hasOnion = false;
-    let hasNonOnion = false;
 
     for (const addr of rawAddrs) {
       try {
@@ -51,7 +68,6 @@ async function createBootstrapNode(): Promise<ChatNode> {
         const isOnion = protocols.includes(445);
 
         if (isOnion) {
-          hasOnion = true;
           // Validate onion address format
           const onionTuple = ma.getComponents().find(c => c.code === 445);
           if (onionTuple?.value) {
@@ -61,40 +77,51 @@ async function createBootstrapNode(): Promise<ChatNode> {
               continue;
             }
           }
-        } else {
-          hasNonOnion = true;
         }
 
-        validAddrs.push(addr);
+        if (isAnonymousMode && !isOnion) {
+          console.warn(`[STACK][BOOTSTRAP] ignoring non-onion announce address in anonymous mode: ${addr}`);
+          continue;
+        }
+
+        if (!isAnonymousMode && isOnion) {
+          console.warn(`[STACK][BOOTSTRAP] ignoring onion announce address in fast mode: ${addr}`);
+          continue;
+        }
+
+        announceAddrs.push(addr);
       } catch {
         console.warn(`[BOOTSTRAP] Invalid announce address ignored: ${addr}`);
       }
     }
-
-    // Warn if mixing onion and non-onion addresses
-    if (hasOnion && hasNonOnion) {
-      console.warn('[BOOTSTRAP] WARNING: Mixing onion and non-onion announce addresses!');
-      console.warn('[BOOTSTRAP]   Onion peers may not be able to reach non-onion addresses');
-      console.warn('[BOOTSTRAP]   Consider using only onion addresses for Tor compatibility');
-    }
-
-    announceAddrs.push(...validAddrs);
   }
 
-  const torConfig = getTorConfig();
+  if (isAnonymousMode && announceAddrs.length === 0) {
+    console.warn('[STACK][BOOTSTRAP] anonymous mode configured without onion announce addresses');
+  }
+
+  console.log(`[STACK][BOOTSTRAP] mode=${networkMode}`);
+  console.log(`[STACK][BOOTSTRAP] transport=tcp`);
+  console.log(`[STACK][BOOTSTRAP] dhtProtocol=${modeConfig.dhtProtocol}`);
+  console.log(`[STACK][BOOTSTRAP] announceCount=${announceAddrs.length}`);
+  console.log(`[STACK][BOOTSTRAP] tor_env_enabled=${torConfig.enabled}`);
+
   const transports = [tcp()];
 
-  if (torConfig.enabled) {
-    console.log(`Bootstrap: TCP listening enabled, Tor proxy configured at ${torConfig.socksHost}:${torConfig.socksPort}`);
+  if (isAnonymousMode) {
+    console.log('Bootstrap: anonymous mode enabled (onion-only announce filtering active)');
+    if (torConfig.enabled) {
+      console.log(`Bootstrap: Tor env detected at ${torConfig.socksHost}:${torConfig.socksPort}`);
+    }
   } else {
-    console.log('Bootstrap: Using direct TCP transport only');
+    console.log('Bootstrap: fast mode enabled (non-onion announce filtering active)');
   }
 
   const bootstrap = await createLibp2p({
     privateKey: privateKey,
     addresses: {
       listen: [BOOTSTRAP_LISTEN_ADDRESS],
-      announce: torConfig.enabled ? announceAddrs : []
+      announce: announceAddrs
     },
     transports: transports,
     connectionEncrypters: [noise()],
@@ -105,20 +132,20 @@ async function createBootstrapNode(): Promise<ChatNode> {
     },
     connectionMonitor: {
       enabled: true,
-      pingInterval: torConfig.enabled ? 120000 : 30000,
+      pingInterval: isAnonymousMode ? 120000 : 30000,
       pingTimeout: {
-        minTimeout: torConfig.enabled ? 30000 : 5000,
-        maxTimeout: torConfig.enabled ? 120000 : 30000,
+        minTimeout: isAnonymousMode ? 30000 : 5000,
+        maxTimeout: isAnonymousMode ? 120000 : 30000,
       },
-      abortConnectionOnPingFailure: !torConfig.enabled,
+      abortConnectionOnPingFailure: !isAnonymousMode,
     },
     services: {
       pubsub: gossipsub({
         doPX: true
       }),
       dht: kadDHT({
-        protocol: DHT_PROTOCOL,
-        peerInfoMapper: torConfig.enabled ? filterOnionAddressesMapper : removePublicAddressesMapper,
+        protocol: modeConfig.dhtProtocol,
+        peerInfoMapper: isAnonymousMode ? filterOnionAddressesMapper : passthroughMapper,
         clientMode: false,
         kBucketSize: K_BUCKET_SIZE,
         prefixLength: PREFIX_LENGTH,
@@ -158,7 +185,7 @@ async function createBootstrapNode(): Promise<ChatNode> {
         runOnConnectionOpen: true
       }),
       ping: ping({
-        timeout: torConfig.enabled ? 60000 : 10000,
+        timeout: isAnonymousMode ? 60000 : 10000,
       })
     }
   });
