@@ -8,7 +8,7 @@ import { gossipsub } from '@chainsafe/libp2p-gossipsub';
 import { circuitRelayTransport } from '@libp2p/circuit-relay-v2';
 import { dcutr } from '@libp2p/dcutr';
 import { multiaddr } from '@multiformats/multiaddr';
-import type { Transport } from '@libp2p/interface';
+import type { PeerId, PeerInfo, Transport } from '@libp2p/interface';
 
 import type { ChatNode, NetworkMode } from '../types.js';
 
@@ -50,6 +50,11 @@ type RelayRuntime = {
   dcutrFactory: ((components: unknown) => unknown) | null;
 };
 
+type DhtAdmissionApi = {
+  routingTable: { size: number };
+  onPeerConnect: (peerData: PeerInfo) => Promise<void>;
+};
+
 function parseCommaSeparatedEnv(key: string): string[] {
   return (process.env[key] ?? '')
     .split(',')
@@ -59,6 +64,20 @@ function parseCommaSeparatedEnv(key: string): string[] {
 
 function isOnionMultiaddr(addr: string): boolean {
   return addr.includes('/onion3/');
+}
+
+function getDhtAdmissionApi(node: ChatNode): DhtAdmissionApi | null {
+  const dhtCandidate = node.services.dht as unknown as Partial<DhtAdmissionApi>;
+  if (
+    dhtCandidate == null
+    || typeof dhtCandidate.onPeerConnect !== 'function'
+    || dhtCandidate.routingTable == null
+    || typeof dhtCandidate.routingTable.size !== 'number'
+  ) {
+    return null;
+  }
+
+  return dhtCandidate as DhtAdmissionApi;
 }
 
 export function createTransportArray(params: {
@@ -400,40 +419,32 @@ export async function connectToBootstrap(node: ChatNode, database: ChatDatabase)
 
   console.log(`Attempting to connect to bootstrap nodes... mode=${networkMode} envKey=${bootstrapEnvKey}`);
 
-  const probeDhtAdmission = async (remotePeer: unknown): Promise<void> => {
+  const probeDhtAdmission = async (remotePeer: PeerId | undefined): Promise<void> => {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const dhtService = (node.services as any).dht as {
-        routingTable?: { size?: number };
-        onPeerConnect?: (peerData: { id: unknown; multiaddrs: unknown[]; protocols: string[] }) => Promise<void>;
-      } | undefined;
-      const before = dhtService?.routingTable?.size ?? 'unknown';
-      console.log(`[DHT-ADMISSION][PROBE][START] peer=${String(remotePeer)} routingBefore=${before}`);
+      const dhtAdmission = getDhtAdmissionApi(node);
+      const before = dhtAdmission?.routingTable.size ?? 'unknown';
+      console.log(`[DHT-ADMISSION] start peer=${String(remotePeer)} routingBefore=${before}`);
 
-      if (!dhtService?.onPeerConnect || !remotePeer) {
-        console.log('[DHT-ADMISSION][PROBE][SKIP] reason=missing_dht_or_peer');
+      if (!dhtAdmission || !remotePeer) {
+        console.log('[DHT-ADMISSION] skip reason=missing_dht_api_or_peer');
         return;
       }
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const peerInfo = await (node.peerStore as any).get(remotePeer);
-      const multiaddrs = (peerInfo.addresses ?? []).map((entry: { multiaddr: unknown }) => entry.multiaddr);
+      const peerInfo = await node.peerStore.get(remotePeer);
+      const multiaddrs = (peerInfo.addresses ?? []).map((entry) => entry.multiaddr);
       const protocols = peerInfo.protocols ?? [];
-      console.log(
-        `[DHT-ADMISSION][PROBE][INPUT] peer=${String(remotePeer)} addrs=${multiaddrs.length} protocols=${protocols.length}`,
-      );
+      console.log(`[DHT-ADMISSION] input peer=${String(remotePeer)} addrs=${multiaddrs.length} protocols=${protocols.length}`);
 
-      await dhtService.onPeerConnect({
+      await dhtAdmission.onPeerConnect({
         id: remotePeer,
         multiaddrs,
-        protocols,
       });
 
-      const after = dhtService.routingTable?.size ?? 'unknown';
-      console.log(`[DHT-ADMISSION][PROBE][DONE] peer=${String(remotePeer)} routingAfter=${after}`);
+      const after = dhtAdmission.routingTable.size;
+      console.log(`[DHT-ADMISSION] done peer=${String(remotePeer)} routingAfter=${after}`);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
-      console.warn(`[DHT-ADMISSION][PROBE][ERROR] message=${message}`);
+      console.warn(`[DHT-ADMISSION] error message=${message}`);
     }
   };
 
@@ -442,12 +453,9 @@ export async function connectToBootstrap(node: ChatNode, database: ChatDatabase)
       console.log(`Trying bootstrap: ${addr}`);
       const ma = multiaddr(addr);
       // eslint-disable-next-line no-await-in-loop
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const connection = await (node as any).dial(ma);
+      const connection = await node.dial(ma);
       console.log(`Connected to bootstrap peer: ${addr}`);
       database.updateBootstrapNodeStatus(addr, true);
-      // Debug probe: connected peers are alive, but may not enter Kad routing table.
-      // This confirms whether explicit DHT admission changes routing size.
       await probeDhtAdmission(connection?.remotePeer);
       await dialFastRelays();
 
