@@ -140,6 +140,9 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
 
   // Start periodic DHT connection status checker (every 30 seconds)
   let dhtStatusCheckInFlight: Promise<void> | null = null;
+  let dhtStatusActiveCheckId: number | null = null;
+  let dhtStatusActiveStartedAt = 0;
+  let dhtStatusCheckSeq = 0;
   let reconnectInProgress = false;
   const emitDhtStatus = (connected: boolean, reason: string) => {
     const peers = node.getConnections().map((p) => p.remotePeer.toString());
@@ -181,16 +184,24 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
     }
   };
 
-  const checkDHTStatus = async () => {
+  const checkDHTStatus = async (source: 'startup' | 'timer_5s' | 'timer_30s' | 'manual_retry' | 'post_retry_verify' = 'timer_30s') => {
     if (dhtStatusCheckInFlight) {
-      console.log('[DHT-STATUS][CORE][CHECK][SKIP] reason=in_flight');
+      const ageMs = dhtStatusActiveStartedAt > 0 ? Date.now() - dhtStatusActiveStartedAt : -1;
+      console.log(
+        `[DHT-STATUS][CORE][CHECK][SKIP] reason=in_flight source=${source} activeId=${String(dhtStatusActiveCheckId)} ageMs=${ageMs}`,
+      );
       return dhtStatusCheckInFlight;
     }
+
+    const checkId = ++dhtStatusCheckSeq;
+    dhtStatusActiveCheckId = checkId;
+    dhtStatusActiveStartedAt = Date.now();
+    console.log(`[DHT-STATUS][CORE][CHECK][ACQUIRE] id=${checkId} source=${source}`);
 
     dhtStatusCheckInFlight = (async () => {
       try {
         const connections = node.getConnections();
-        console.log(`[DHT-STATUS][CORE][CHECK][START] peerCount=${connections.length}`);
+        console.log(`[DHT-STATUS][CORE][CHECK][START] id=${checkId} source=${source} peerCount=${connections.length}`);
         console.log(`[P2P Core] Peers: ${connections.map(p => p.remotePeer.toString())}`);
 
         if (connections.length === 0) {
@@ -240,8 +251,13 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
         console.error('[P2P Core] Failed to check peer count:', error);
         emitDhtStatus(false, 'check_exception');
       } finally {
-        console.log('[DHT-STATUS][CORE][CHECK][DONE]');
+        const durationMs = dhtStatusActiveStartedAt > 0 ? Date.now() - dhtStatusActiveStartedAt : -1;
+        console.log(
+          `[DHT-STATUS][CORE][CHECK][DONE] id=${checkId} source=${source} durationMs=${durationMs}`,
+        );
         dhtStatusCheckInFlight = null;
+        dhtStatusActiveCheckId = null;
+        dhtStatusActiveStartedAt = 0;
       }
     })();
 
@@ -249,17 +265,17 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
   };
 
   // Send initial status immediately
-  await checkDHTStatus();
+  await checkDHTStatus('startup');
 
   setTimeout(() => {
     console.log('[DHT-STATUS][CORE][TIMER] one_shot_5s fired');
-    void checkDHTStatus();
+    void checkDHTStatus('timer_5s');
   }, 5000);
 
   // Then check periodically
   const dhtStatusInterval = setInterval(() => {
     console.log('[DHT-STATUS][CORE][TIMER] periodic_30s fired');
-    void checkDHTStatus();
+    void checkDHTStatus('timer_30s');
   }, 30000); // 30 seconds
 
   // Initialize username registry
@@ -365,7 +381,7 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
       const postDialConnections = node.getConnections().length;
       emitDhtStatus(postDialConnections > 0, 'manual_retry_post_dial');
       // Verify the new connection is actually alive
-      await checkDHTStatus();
+      await checkDHTStatus('post_retry_verify');
     },
     cleanup: async () => {
       console.log('[P2P Core] Shutting down...');
