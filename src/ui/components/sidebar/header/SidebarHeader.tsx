@@ -272,7 +272,7 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
                         className={`flex cursor-pointer items-center gap-2 px-2 py-1 rounded-md transition-colors hover:bg-sidebar-accent group ${isDHTConnected === null ? "text-muted-foreground" : isDHTConnected ? "text-success" : "text-destructive"}`}
                     >
                         <span className="font-mono text-xs uppercase tracking-wider">
-                            {isDHTConnected === null ? "Connecting..." : isDHTConnected ? `Connected (${isTorEnabled ? 'tor' : 'local'})` : "Offline"}
+                            {isDHTConnected === null ? "Connecting..." : isDHTConnected ? `Connected${isTorEnabled ? ' (tor)' : ''}` : "Offline"}
                         </span>
                         <span className={`w-2 h-2 rounded-full mb-0.5 ${isDHTConnected === null ? "bg-muted-foreground" : isDHTConnected ? "bg-success pulse-online" : "bg-destructive"}`} />
                     </button>
