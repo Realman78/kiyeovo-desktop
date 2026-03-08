@@ -53,6 +53,28 @@ export class KeyExchange {
     this.onKeyExchangeFailed = onKeyExchangeFailed;
   }
 
+  private async logPeerDialDiagnostics(targetPeerId: PeerId, context: string): Promise<void> {
+    const targetPeerIdStr = targetPeerId.toString();
+    const activeConnections = this.node
+      .getConnections()
+      .filter((conn) => conn.remotePeer.toString() === targetPeerIdStr)
+      .map((conn) => conn.remoteAddr.toString());
+
+    let knownAddrs: string[] = [];
+    try {
+      const peerData = await this.node.peerStore.get(targetPeerId);
+      knownAddrs = (peerData.addresses ?? []).map((entry) => entry.multiaddr.toString());
+    } catch {
+      // Peer may not exist in peer store yet.
+    }
+
+    console.log(
+      `[DIAL][${context}] target=${targetPeerIdStr} ` +
+      `knownAddrs=${knownAddrs.length > 0 ? knownAddrs.join(',') : 'none'} ` +
+      `activeConns=${activeConnections.length > 0 ? activeConnections.join(',') : 'none'}`
+    );
+  }
+
   acceptPendingContact(senderPeerId: string): void {
     const promise = this.pendingAcceptances.get(senderPeerId);
     if (promise) {
@@ -302,6 +324,7 @@ export class KeyExchange {
       ...signFields
     };
 
+    await this.logPeerDialDiagnostics(targetPeerId, 'key_exchange_init');
     const stream = await this.node.dialProtocol(targetPeerId, CHAT_PROTOCOL);
     const messageJson = JSON.stringify(keyExchangeMessage);
 
@@ -1161,6 +1184,7 @@ export class KeyExchange {
 
     try {
       const targetPeerId = peerIdFromString(remoteId);
+      await this.logPeerDialDiagnostics(targetPeerId, 'key_rotation_response');
       const responseStream = await this.node.dialProtocol(targetPeerId, CHAT_PROTOCOL);
       const responseJson = JSON.stringify(rotationResponse);
       const encoder = new TextEncoder();
@@ -1333,6 +1357,7 @@ export class KeyExchange {
     };
 
     try {
+      await this.logPeerDialDiagnostics(targetPeerId, 'key_rotation');
       const stream = await this.node.dialProtocol(targetPeerId, CHAT_PROTOCOL);
       const messageJson = JSON.stringify(rotationMessage);
       const encoder = new TextEncoder();

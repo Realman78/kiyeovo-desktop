@@ -612,6 +612,28 @@ export class MessageHandler {
     await this.groupInfoRepublisher.runCycle();
   }
 
+  private async logPeerDialDiagnostics(targetPeerId: PeerId, context: string): Promise<void> {
+    const targetPeerIdStr = targetPeerId.toString();
+    const activeConnections = this.node
+      .getConnections()
+      .filter((conn) => conn.remotePeer.toString() === targetPeerIdStr)
+      .map((conn) => conn.remoteAddr.toString());
+
+    let knownAddrs: string[] = [];
+    try {
+      const peerData = await this.node.peerStore.get(targetPeerId);
+      knownAddrs = (peerData.addresses ?? []).map((entry) => entry.multiaddr.toString());
+    } catch {
+      // Peer may not exist in peer store yet.
+    }
+
+    console.log(
+      `[DIAL][${context}] target=${targetPeerIdStr} ` +
+      `knownAddrs=${knownAddrs.length > 0 ? knownAddrs.join(',') : 'none'} ` +
+      `activeConns=${activeConnections.length > 0 ? activeConnections.join(',') : 'none'}`
+    );
+  }
+
   /**
    * Ensures a user exists and has an active session with key rotation handling.
    */
@@ -758,6 +780,7 @@ export class MessageHandler {
       const shouldSendAck = lastReadTimestamp > lastAckSent;
 
       const sendWithTimeout = async (): Promise<boolean> => {
+        await this.logPeerDialDiagnostics(targetPeerId, 'send_message_online');
         const stream = await this.node.dialProtocol(targetPeerId, CHAT_PROTOCOL);
 
         // Get my own username from database (last registered username) or generate fallback
