@@ -1,7 +1,6 @@
 import { peerIdFromString } from '@libp2p/peer-id';
 import type { PeerId } from '@libp2p/interface';
 import type { Stream } from '@libp2p/interface';
-import { multiaddr } from '@multiformats/multiaddr';
 import { x25519 } from '@noble/curves/ed25519';
 import { hkdf } from '@noble/hashes/hkdf';
 import { sha256 } from '@noble/hashes/sha2';
@@ -10,11 +9,9 @@ import { EncryptedUserIdentity } from './encrypted-user-identity.js';
 import { SessionManager } from './session-manager.js';
 import {
   CHAT_PROTOCOL,
-  FAST_RELAY_MULTIADDRS_SETTING_KEY,
   KEY_EXCHANGE_RATE_LIMIT_DEFAULT,
   KEY_ROTATION_TIMEOUT,
   MAX_KEY_EXCHANGE_AGE,
-  NETWORK_MODES,
   OFFLINE_BUCKET_PREFIX,
   PENDING_KEY_EXCHANGE_EXPIRATION,
   RECENT_KEY_EXCHANGE_ATTEMPTS_WINDOW,
@@ -25,7 +22,7 @@ import { toBase64Url } from './base64url.js';
 import { UsernameRegistry } from './username-registry.js';
 import { StreamHandler } from './stream-handler.js';
 import { generalErrorHandler } from '../utils/general-error.js';
-import { DEFAULT_FAST_RELAY_MULTIADDRS } from '../default-relay-nodes.js';
+import { dialProtocolWithRelayFallback } from './protocol-dialer.js';
 
 /**
  * Handles authenticated key exchange protocol
@@ -86,68 +83,6 @@ export class KeyExchange {
       `knownAddrs=${knownAddrs.length > 0 ? knownAddrs.join(',') : 'none'} ` +
       `activeConns=${activeConnections.length > 0 ? activeConnections.join(',') : 'none'}`
     );
-  }
-
-  private getFastRelayMultiaddrs(): string[] {
-    const configured = this.database.getSetting(FAST_RELAY_MULTIADDRS_SETTING_KEY);
-    const source = configured ?? DEFAULT_FAST_RELAY_MULTIADDRS.join(',');
-    const parsed = source
-      .split(/[\n,]/)
-      .map((value) => value.trim())
-      .filter(Boolean);
-    return Array.from(new Set(parsed));
-  }
-
-  private async dialChatProtocolWithRelayFallback(targetPeerId: PeerId, context: string): Promise<Stream> {
-    try {
-      return await this.node.dialProtocol(targetPeerId, CHAT_PROTOCOL, {
-        runOnLimitedConnection: true,
-      });
-    } catch (directDialError: unknown) {
-      if (this.database.getNetworkMode() !== NETWORK_MODES.FAST) {
-        throw directDialError;
-      }
-
-      const relayAddrs = this.getFastRelayMultiaddrs();
-      if (relayAddrs.length === 0) {
-        throw directDialError;
-      }
-
-      const targetPeer = targetPeerId.toString();
-      const directReason = directDialError instanceof Error ? directDialError.message : String(directDialError);
-      console.warn(
-        `[DIAL][${context}] direct dial failed target=${targetPeer} reason=${directReason}. trying relay fallback count=${relayAddrs.length}`
-      );
-
-      let lastRelayError: unknown = directDialError;
-      for (const relayAddr of relayAddrs) {
-        try {
-          let relayBase = relayAddr;
-          if (relayBase.includes('/p2p-circuit')) {
-            relayBase = relayBase.split('/p2p-circuit')[0] ?? relayAddr;
-          }
-
-          const relayMa = multiaddr(relayBase);
-          if (!relayMa.getPeerId()) {
-            console.warn(`[DIAL][${context}] skipping relay without /p2p peer id: ${relayAddr}`);
-            continue;
-          }
-
-          const circuitAddr = `${relayBase}/p2p-circuit/p2p/${targetPeer}`;
-          const stream = await this.node.dialProtocol(multiaddr(circuitAddr), CHAT_PROTOCOL, {
-            runOnLimitedConnection: true,
-          });
-          console.log(`[DIAL][${context}] relay fallback succeeded target=${targetPeer} via=${relayBase}`);
-          return stream;
-        } catch (relayError: unknown) {
-          lastRelayError = relayError;
-          const reason = relayError instanceof Error ? relayError.message : String(relayError);
-          console.warn(`[DIAL][${context}] relay fallback failed via=${relayAddr} reason=${reason}`);
-        }
-      }
-
-      throw lastRelayError;
-    }
   }
 
   acceptPendingContact(senderPeerId: string): void {
@@ -400,7 +335,14 @@ export class KeyExchange {
     };
 
     await this.logPeerDialDiagnostics(targetPeerId, 'key_exchange_init');
-    const stream = await this.dialChatProtocolWithRelayFallback(targetPeerId, 'key_exchange_init');
+    const stream = await dialProtocolWithRelayFallback({
+      node: this.node,
+      database: this.database,
+      targetPeerId,
+      protocol: CHAT_PROTOCOL,
+      context: 'key_exchange_init',
+      runOnLimitedConnection: true,
+    });
     const messageJson = JSON.stringify(keyExchangeMessage);
 
     const encoder = new TextEncoder();
@@ -1260,7 +1202,14 @@ export class KeyExchange {
     try {
       const targetPeerId = peerIdFromString(remoteId);
       await this.logPeerDialDiagnostics(targetPeerId, 'key_rotation_response');
-      const responseStream = await this.dialChatProtocolWithRelayFallback(targetPeerId, 'key_rotation_response');
+      const responseStream = await dialProtocolWithRelayFallback({
+        node: this.node,
+        database: this.database,
+        targetPeerId,
+        protocol: CHAT_PROTOCOL,
+        context: 'key_rotation_response',
+        runOnLimitedConnection: true,
+      });
       const responseJson = JSON.stringify(rotationResponse);
       const encoder = new TextEncoder();
       await responseStream.sink([encoder.encode(responseJson)]);
@@ -1433,7 +1382,14 @@ export class KeyExchange {
 
     try {
       await this.logPeerDialDiagnostics(targetPeerId, 'key_rotation');
-      const stream = await this.dialChatProtocolWithRelayFallback(targetPeerId, 'key_rotation');
+      const stream = await dialProtocolWithRelayFallback({
+        node: this.node,
+        database: this.database,
+        targetPeerId,
+        protocol: CHAT_PROTOCOL,
+        context: 'key_rotation',
+        runOnLimitedConnection: true,
+      });
       const messageJson = JSON.stringify(rotationMessage);
       const encoder = new TextEncoder();
       await stream.sink([encoder.encode(messageJson)]);

@@ -14,6 +14,7 @@ import { CHUNK_SIZE, DOWNLOADS_DIR, FILE_ACCEPTANCE_TIMEOUT, FILE_OFFER, FILE_OF
 import { MessageHandler } from "./message-handler.js";
 import { generalErrorHandler } from "../utils/general-error.js";
 import { EncryptedUserIdentity } from "./encrypted-user-identity.js";
+import { dialProtocolWithRelayFallback } from "./protocol-dialer.js";
 
 interface FileMetadata {
   buffer: Buffer
@@ -818,7 +819,14 @@ export class FileHandler {
 
       console.log(`Sending ${metadata.filename} (${metadata.size} bytes, ${metadata.totalChunks} chunks)`);
 
-      const stream = await this.node.dialProtocol(targetPeerId, FILE_TRANSFER_PROTOCOL);
+      const stream = await dialProtocolWithRelayFallback({
+        node: this.node,
+        database: this.database,
+        targetPeerId,
+        protocol: FILE_TRANSFER_PROTOCOL,
+        context: 'file_transfer_send',
+        runOnLimitedConnection: true,
+      });
 
       const writable = pushable();
       const sinkPromise = pipe(writable, stream.sink);
