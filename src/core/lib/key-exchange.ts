@@ -100,7 +100,9 @@ export class KeyExchange {
 
   private async dialChatProtocolWithRelayFallback(targetPeerId: PeerId, context: string): Promise<Stream> {
     try {
-      return await this.node.dialProtocol(targetPeerId, CHAT_PROTOCOL);
+      return await this.node.dialProtocol(targetPeerId, CHAT_PROTOCOL, {
+        runOnLimitedConnection: true,
+      });
     } catch (directDialError: unknown) {
       if (this.database.getNetworkMode() !== NETWORK_MODES.FAST) {
         throw directDialError;
@@ -132,7 +134,9 @@ export class KeyExchange {
           }
 
           const circuitAddr = `${relayBase}/p2p-circuit/p2p/${targetPeer}`;
-          const stream = await this.node.dialProtocol(multiaddr(circuitAddr), CHAT_PROTOCOL);
+          const stream = await this.node.dialProtocol(multiaddr(circuitAddr), CHAT_PROTOCOL, {
+            runOnLimitedConnection: true,
+          });
           console.log(`[DIAL][${context}] relay fallback succeeded target=${targetPeer} via=${relayBase}`);
           return stream;
         } catch (relayError: unknown) {

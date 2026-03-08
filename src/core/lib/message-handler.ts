@@ -196,6 +196,7 @@ export class MessageHandler {
         const targetPeerId = peerIdFromString(peerId);
         const stream = await this.node.dialProtocol(targetPeerId, BUCKET_NUDGE_PROTOCOL, {
           signal: AbortSignal.timeout(BUCKET_NUDGE_DIAL_TIMEOUT_MS),
+          runOnLimitedConnection: true,
         });
         if (payload) {
           const payloadBytes = new TextEncoder().encode(JSON.stringify(payload));
@@ -255,6 +256,8 @@ export class MessageHandler {
 
       console.log(`[NUDGE] Received bucket nudge from ${remoteId.slice(-8)}, scheduling check for chat ${chat.id}`);
       this.scheduleNudgeOfflineCheck(remoteId, chat.id);
+    }, {
+      runOnLimitedConnection: true,
     });
 
     void this.node.handle(CHAT_PROTOCOL, async (context: StreamHandlerContext) => {
@@ -336,6 +339,8 @@ export class MessageHandler {
       } catch (error: unknown) {
         generalErrorHandler(error, `Error handling message from ${remoteId}`);
       }
+    }, {
+      runOnLimitedConnection: true,
     });
   }
 
@@ -650,7 +655,9 @@ export class MessageHandler {
 
   private async dialChatProtocolWithRelayFallback(targetPeerId: PeerId, context: string) {
     try {
-      return await this.node.dialProtocol(targetPeerId, CHAT_PROTOCOL);
+      return await this.node.dialProtocol(targetPeerId, CHAT_PROTOCOL, {
+        runOnLimitedConnection: true,
+      });
     } catch (directDialError: unknown) {
       if (this.database.getNetworkMode() !== NETWORK_MODES.FAST) {
         throw directDialError;
@@ -682,7 +689,9 @@ export class MessageHandler {
           }
 
           const circuitAddr = `${relayBase}/p2p-circuit/p2p/${targetPeer}`;
-          const stream = await this.node.dialProtocol(multiaddr(circuitAddr), CHAT_PROTOCOL);
+          const stream = await this.node.dialProtocol(multiaddr(circuitAddr), CHAT_PROTOCOL, {
+            runOnLimitedConnection: true,
+          });
           console.log(`[DIAL][${context}] relay fallback succeeded target=${targetPeer} via=${relayBase}`);
           return stream;
         } catch (relayError: unknown) {
@@ -903,7 +912,7 @@ export class MessageHandler {
       try {
         const errorText = String(err instanceof Error ? err.message : err).toLowerCase();
         console.log("errorText :>> ", errorText);
-        const shouldFallbackOffline = /econnrefused|user is offline|all multiaddr dials failed|message timeout|socks|tor transport|enetunreach|no valid addresses|ehostunreach|etimedout/.test(errorText);
+        const shouldFallbackOffline = /econnrefused|user is offline|all multiaddr dials failed|message timeout|socks|tor transport|enetunreach|no valid addresses|ehostunreach|etimedout|limited connection/.test(errorText);
         if (shouldFallbackOffline) {
           console.log(`Trying to send offline message to ${targetUsernameOrPeerId}`);
           // Use user from key exchange if available, otherwise query database
