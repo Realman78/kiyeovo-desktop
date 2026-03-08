@@ -788,6 +788,13 @@ export class GroupCreator {
 
     const chat = database.getChatByGroupId(groupId);
     if (!chat) throw new Error(`Group ${groupId} not found`);
+    if (chat.group_status === 'rekeying') {
+      console.log(
+        `[GROUP][TRACE][WELCOME][DEFER] group=${groupId} to=${acceptedPeerId.slice(-8)} reason=group_rekeying`,
+      );
+      // Let outer handler retry this response later instead of running concurrent rotations.
+      throw new Error(`Group ${groupId} is already rekeying`);
+    }
 
     // Get accepted user's info for RSA encryption
     const acceptedUser = database.getUserByPeerId(acceptedPeerId);
