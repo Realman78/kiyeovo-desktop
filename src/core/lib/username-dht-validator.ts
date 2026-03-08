@@ -1,4 +1,4 @@
-import { USERNAME_DHT_PREFIX } from '../constants.js';
+import { REREGISTRATION_INTERVAL, USERNAME_DHT_PREFIX } from '../constants.js';
 import type { UserRegistration } from '../types.js';
 import { hashUsingSha256 } from '../utils/crypto.js';
 import {
@@ -8,6 +8,7 @@ import {
 } from './username-record.js';
 
 type UsernameKeyKind = 'by-name' | 'by-peer';
+const MAX_REGISTRATION_AGE = REREGISTRATION_INTERVAL * 2;
 
 function parseUsernameKey(key: Uint8Array): { kind: UsernameKeyKind; hash: string } {
   const keyStr = new TextDecoder().decode(key);
@@ -152,6 +153,14 @@ export async function usernameRegistrationValidateUpdate(
   }
 
   const existingKind = existingRegistration.kind ?? 'active';
+  const existingAgeMs = Date.now() - existingRegistration.timestamp;
+  if (existingKind !== 'released' && existingAgeMs > MAX_REGISTRATION_AGE) {
+    console.warn(
+      `[USERNAME-VALIDATOR][ALLOW_REPLACE] reason=existing_stale key=${keyStr} existingPeer=${existingRegistration.peerID} existingAgeMs=${existingAgeMs}`
+    );
+    return;
+  }
+
   if (existingKind !== 'released') {
     const sameOwner = incomingRegistration.peerID === existingRegistration.peerID
       && incomingRegistration.signingPublicKey === existingRegistration.signingPublicKey;
