@@ -1,4 +1,4 @@
-import { useState, type FC } from "react";
+import { useEffect, useState, type FC } from "react";
 import { RegisterButton } from "./RegisterButton";
 import type { RootState } from "../../../state/store";
 import { useDispatch, useSelector } from "react-redux";
@@ -29,6 +29,14 @@ export const SidebarFooter: FC<SidebarFooterProps> = ({ collapsed = false }) => 
   const dispatch = useDispatch();
   const effectiveIsRegistering = isRegisteringIdentity || registrationInProgress;
   const effectivePendingUsername = pendingRegisterUsername || pendingRegistrationUsername;
+
+  useEffect(() => {
+    if (!registerDialogOpen || !user.registered) {
+      return;
+    }
+    setRegisterDialogOpen(false);
+    setRegisterIdentityError(undefined);
+  }, [registerDialogOpen, user.registered]);
 
   const handleSettings = () => {
     setSettingsDialogOpen(true);
