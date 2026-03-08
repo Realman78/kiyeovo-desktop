@@ -171,7 +171,5 @@ export async function usernameRegistrationValidateUpdate(
       throw new Error('stale record rejected');
     }
   }
-  console.log(
-    `DHT validator: accepted write to ${keyStr}... with`, incomingRegistration
-  );
+  console.log(`DHT validator: accepted write to ${keyStr}`);
 }
