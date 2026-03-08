@@ -239,15 +239,26 @@ export class MessageHandler {
       if (nudgePayload?.kind === 'GROUP_REKEY_REFETCH') {
         const groupChat = this.database.getChatByGroupId(nudgePayload.groupId);
         if (!groupChat) {
+          const directChat = this.database.getChatByPeerId(remoteId);
+          if (directChat) {
+            console.log(
+              `[NUDGE] Received group-refetch nudge from ${remoteId.slice(-8)} for unknown group=${nudgePayload.groupId.slice(0, 8)}, triggering direct offline check for chat ${directChat.id}`,
+            );
+            this.scheduleNudgeOfflineCheck(remoteId, directChat.id);
+            return;
+          }
           console.log(
             `[NUDGE] Received group-refetch nudge from ${remoteId.slice(-8)} for unknown group=${nudgePayload.groupId.slice(0, 8)}, ignoring`,
           );
           return;
         }
         const isParticipant = this.database.getChatParticipants(groupChat.id).some((p) => p.peer_id === remoteId);
-        if (!isParticipant) {
+        const hasPendingInvite = this.database.getPendingAcksForGroup(nudgePayload.groupId).some(
+          (ack) => ack.message_type === 'GROUP_INVITE' && ack.target_peer_id === remoteId,
+        );
+        if (!isParticipant && !hasPendingInvite) {
           console.log(
-            `[NUDGE] Received group-refetch nudge from ${remoteId.slice(-8)} for group=${nudgePayload.groupId.slice(0, 8)} but sender is not participant, ignoring`,
+            `[NUDGE] Received group-refetch nudge from ${remoteId.slice(-8)} for group=${nudgePayload.groupId.slice(0, 8)} but sender is neither participant nor pending_invitee, ignoring`,
           );
           return;
         }
