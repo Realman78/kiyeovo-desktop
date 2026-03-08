@@ -243,7 +243,7 @@ export class FileHandler {
       } catch (error: unknown) {
         generalErrorHandler(error, `Failed to handle incoming file`);
       }
-    });
+    }, {runOnLimitedConnection: true});
   }
 
   async #handleIncomingFile(
@@ -816,6 +816,7 @@ export class FileHandler {
     let stream: Stream | null = null;
     try {
       const { session, peerId: targetPeerId } = await this.messageHandler.ensureUserSession(targetUsername, '', true);
+      console.log("SESSION ESTABLISHED", session, targetPeerId)
       chat = this.database.getChatByPeerId(targetPeerId.toString());
       if (chat?.type !== 'direct' || !chat.id) throw new Error('Chat not found');
 
