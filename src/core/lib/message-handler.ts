@@ -867,7 +867,7 @@ export class MessageHandler {
       try {
         const errorText = String(err instanceof Error ? err.message : err).toLowerCase();
         console.log("errorText :>> ", errorText);
-        const shouldFallbackOffline = /econnrefused|user is offline|all multiaddr dials failed|message timeout|socks|tor transport|enetunreach|no valid addresses|ehostunreach|etimedout|limited connection/.test(errorText);
+        const shouldFallbackOffline = /econnrefused|user is offline|all multiaddr dials failed|message timeout|socks|tor transport|enetunreach|no valid addresses|ehostunreach|etimedout|limited connection|no_reservation|no reservation|failed to connect via relay with status/.test(errorText);
         if (shouldFallbackOffline) {
           console.log(`Trying to send offline message to ${targetUsernameOrPeerId}`);
           // Use user from key exchange if available, otherwise query database
