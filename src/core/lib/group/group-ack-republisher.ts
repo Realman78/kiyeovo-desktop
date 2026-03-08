@@ -12,7 +12,7 @@ interface GroupAckRepublisherDeps {
   usernameRegistry: UsernameRegistry;
   onGroupChatActivated: (data: GroupChatActivatedEvent) => void;
   onGroupMembersUpdated: (data: GroupMembersUpdatedEvent) => void;
-  nudgePeer: (peerId: string) => void;
+  nudgeGroupRefetch: (peerId: string, groupId: string) => void;
 }
 
 type PendingActionResult = { action: 'republish' | 'skip' | 'remove'; reason?: string };
@@ -51,7 +51,7 @@ export class GroupAckRepublisher {
         myUsername,
         onGroupChatActivated: this.deps.onGroupChatActivated,
         onGroupMembersUpdated: this.deps.onGroupMembersUpdated,
-        nudgePeer: this.deps.nudgePeer,
+        nudgeGroupRefetch: this.deps.nudgeGroupRefetch,
       };
 
       const creator = new GroupCreator(sendDeps);

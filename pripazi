@@ -22,6 +22,7 @@ Still “startup blocked” (by design) until the user submits; but at least it 
 
 1.0.1 zac se ponekad password ne auto-filla?
 
+1.0.2 Chad accepts group invitation from Alice. Alice sends welcome and propagates the notification that Chad joined to other group members. however, Chad did not receive the WELCOME message so he never ACK-ed it. Chad is not in the group from his POV, but everyone else sees that he is. of course, when chad restarts the app, this works, so maybe it is not an issue since chad will read the messages from the group offline bucket
 1.1
 I joined with a user and while the joining was happening, Alice (creator) was sending messages, but Chad did not receive them in real time, only when I checked missed messages. Alice error: [GROUP-MSG] Retrying publish for group=c883e511-02a7-4f23-9df9-4f495c094c44 after retryable error: PublishError.NoPeersSubscribedToTopic (attempt1Ms=1)
 we already went thourgh this and have not found the issue, I will have to investigate later. What do you say to the idea that if Chad is online when a new user joins or leaves or is removed, that the check missed messages gets triggered on his end? of course, only if he is online when the actual system message arrives, not when he comes online and the system message is fetched from the bucket. dont implement, let us just think about it

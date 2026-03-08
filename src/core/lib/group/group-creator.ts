@@ -33,6 +33,7 @@ import {
   type AckMessageType,
 } from './types.js';
 import { putJsonToDHT } from './group-dht-publish.js';
+import { nudgeGroupRefetchIfCreator } from './group-refetch-nudge.js';
 
 export interface GroupCreatorDeps {
   node: ChatNode;
@@ -42,7 +43,7 @@ export interface GroupCreatorDeps {
   myUsername: string;
   onGroupMembersUpdated?: (data: GroupMembersUpdatedEvent) => void;
   onMessageReceived?: (data: MessageReceivedEvent) => void;
-  nudgePeer?: (peerId: string) => void;
+  nudgeGroupRefetch?: (peerId: string, groupId: string) => void;
   onRegisterPrevEpochGrace?: (groupId: string, keyVersion: number) => void;
 }
 
@@ -1409,7 +1410,7 @@ export class GroupCreator {
     }
 
     // DHT write succeeded — best-effort nudge so an online recipient checks their bucket immediately
-    this.deps.nudgePeer?.(peerId);
+    nudgeGroupRefetchIfCreator(this.deps, peerId, message);
   }
 
   private describeControlMessage(message: object): string {

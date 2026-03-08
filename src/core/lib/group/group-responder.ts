@@ -22,6 +22,7 @@ import {
   type GroupInfoVersioned,
   type GroupStatus,
 } from './types.js';
+import { nudgeGroupRefetchIfCreator } from './group-refetch-nudge.js';
 
 export interface GroupResponderDeps {
   node: ChatNode;
@@ -32,7 +33,7 @@ export interface GroupResponderDeps {
   onGroupChatActivated?: (data: GroupChatActivatedEvent) => void;
   onGroupMembersUpdated?: (data: GroupMembersUpdatedEvent) => void;
   onMessageReceived?: (data: MessageReceivedEvent) => void;
-  nudgePeer?: (peerId: string) => void;
+  nudgeGroupRefetch?: (peerId: string, groupId: string) => void;
 }
 
 export class GroupResponder {
@@ -871,7 +872,7 @@ export class GroupResponder {
     }
 
     // DHT write succeeded — best-effort nudge so an online recipient checks their bucket immediately
-    this.deps.nudgePeer?.(peerId);
+    nudgeGroupRefetchIfCreator(this.deps, peerId, message);
   }
 
   private describeControlMessage(message: object): string {

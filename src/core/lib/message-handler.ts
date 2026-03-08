@@ -138,7 +138,7 @@ export class MessageHandler {
       usernameRegistry: this.usernameRegistry,
       onGroupChatActivated: this.onGroupChatActivated,
       onGroupMembersUpdated: this.onGroupMembersUpdated,
-      nudgePeer: this.nudgePeer.bind(this),
+      nudgeGroupRefetch: this.nudgePeerGroupRefetch.bind(this),
     });
     this.groupInfoRepublisher = new GroupInfoRepublisher({
       node: this.node,
@@ -164,17 +164,13 @@ export class MessageHandler {
     return setting ? parseInt(setting, 10) : CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES;
   }
 
-  public nudgePeer(peerId: string): void {
-    this.sendBucketNudge(peerId, null, `direct:${peerId}`);
-  }
-
   public nudgePeerGroupRefetch(peerId: string, groupId: string): void {
     this.sendBucketNudge(peerId, { kind: 'GROUP_REKEY_REFETCH', groupId }, `group:${peerId}:${groupId}`);
   }
 
   private sendBucketNudge(
     peerId: string,
-    payload: { kind: 'GROUP_REKEY_REFETCH'; groupId: string } | null,
+    payload: { kind: 'GROUP_REKEY_REFETCH'; groupId: string },
     cooldownKey: string
   ): void {
     // Do not force-dial just to send a nudge.
@@ -182,6 +178,10 @@ export class MessageHandler {
       conn => conn.remotePeer.toString() === peerId
     );
     if (!hasActiveConnection) {
+      console.log(
+        `[NUDGE][SKIP_NO_CONN] peer=${peerId.slice(-8)} group=${payload.groupId.slice(0, 8)} ` +
+        `reason=no_active_connection`,
+      );
       return;
     }
 
@@ -209,17 +209,15 @@ export class MessageHandler {
           signal: AbortSignal.timeout(BUCKET_NUDGE_DIAL_TIMEOUT_MS),
           runOnLimitedConnection: true,
         });
-        if (payload) {
-          const payloadBytes = new TextEncoder().encode(JSON.stringify(payload));
-          await stream.sink([payloadBytes]);
-        }
+        const payloadBytes = new TextEncoder().encode(JSON.stringify(payload));
+        await stream.sink([payloadBytes]);
         await stream.close();
-        if (payload) {
-          console.log(`[NUDGE] Sent group-refetch nudge to ${peerId.slice(-8)} group=${payload.groupId.slice(0, 8)}`);
-        } else {
-          console.log(`[NUDGE] Sent bucket nudge to ${peerId.slice(-8)}`);
-        }
-      } catch {
+        console.log(`[NUDGE] Sent group-refetch nudge to ${peerId.slice(-8)} group=${payload.groupId.slice(0, 8)}`);
+      } catch (error: unknown) {
+        const reason = error instanceof Error ? error.message : String(error);
+        console.log(
+          `[NUDGE][SEND_FAIL] peer=${peerId.slice(-8)} group=${payload.groupId.slice(0, 8)} reason=${reason}`,
+        );
         // Best-effort — peer offline or unreachable, offline bucket still delivers
       }
     })();
@@ -231,11 +229,12 @@ export class MessageHandler {
   private setupProtocolHandler(): void {
     void this.node.handle(this.bucketNudgeProtocol, async (context: StreamHandlerContext) => {
       const { remoteId, stream } = StreamHandler.getRemotePeerInfo(context);
+      // Ignore nudges from blocked peers
+      if (this.database.isBlocked(remoteId)) return;
+      
       const nudgePayload = await this.readBucketNudgePayload(stream);
       await stream.close();
 
-      // Ignore nudges from blocked peers
-      if (this.database.isBlocked(remoteId)) return;
 
       if (nudgePayload?.kind === 'GROUP_REKEY_REFETCH') {
         const groupChat = this.database.getChatByGroupId(nudgePayload.groupId);
@@ -252,21 +251,19 @@ export class MessageHandler {
           );
           return;
         }
+        if (!groupChat.group_creator_peer_id || groupChat.group_creator_peer_id !== remoteId) {
+          console.log(
+            `[NUDGE] Received group-refetch nudge from ${remoteId.slice(-8)} for group=${nudgePayload.groupId.slice(0, 8)} but sender is not creator, ignoring`,
+          );
+          return;
+        }
         console.log(
           `[NUDGE] Received group-refetch nudge from ${remoteId.slice(-8)}, scheduling group check for chat ${groupChat.id}`,
         );
         this.scheduleGroupNudgeOfflineCheck(remoteId, groupChat.id, nudgePayload.groupId);
         return;
       }
-
-      const chat = this.database.getChatByPeerId(remoteId);
-      if (!chat) {
-        console.log(`[NUDGE] Received nudge from ${remoteId.slice(-8)} but no chat found, ignoring`);
-        return;
-      }
-
-      console.log(`[NUDGE] Received bucket nudge from ${remoteId.slice(-8)}, scheduling check for chat ${chat.id}`);
-      this.scheduleNudgeOfflineCheck(remoteId, chat.id);
+      console.log(`[NUDGE] Ignoring non-group nudge from ${remoteId.slice(-8)}`);
     }, {
       runOnLimitedConnection: true,
     });
@@ -950,7 +947,7 @@ export class MessageHandler {
       onGroupChatActivated: this.onGroupChatActivated,
       onGroupMembersUpdated: this.onGroupMembersUpdated,
       onMessageReceived: this.onMessageReceived,
-      nudgePeer: this.nudgePeer.bind(this),
+      nudgeGroupRefetch: this.nudgePeerGroupRefetch.bind(this),
     });
 
     await responder.leaveGroup(chat.group_id);
@@ -985,7 +982,7 @@ export class MessageHandler {
       myUsername,
       onGroupMembersUpdated: this.onGroupMembersUpdated,
       onMessageReceived: this.onMessageReceived,
-      nudgePeer: this.nudgePeer.bind(this),
+      nudgeGroupRefetch: this.nudgePeerGroupRefetch.bind(this),
       onRegisterPrevEpochGrace: (groupId: string, keyVersion: number) => {
         this.groupMessaging.registerGraceContextForEpoch(groupId, keyVersion);
       },
@@ -1588,7 +1585,7 @@ export class MessageHandler {
       onGroupChatActivated: this.onGroupChatActivated,
       onGroupMembersUpdated: this.onGroupMembersUpdated,
       onMessageReceived: this.onMessageReceived,
-      nudgePeer: this.nudgePeer.bind(this),
+      nudgeGroupRefetch: this.nudgePeerGroupRefetch.bind(this),
       onRegisterPrevEpochGrace: (groupId: string, keyVersion: number) => {
         this.groupMessaging.registerGraceContextForEpoch(groupId, keyVersion);
       },
