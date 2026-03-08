@@ -22,7 +22,7 @@ import {
   type GroupInfoVersioned,
   type GroupStatus,
 } from './types.js';
-import { nudgeGroupRefetchIfCreator } from './group-refetch-nudge.js';
+import { nudgeGroupRefetchIfKnownGroup } from './group-refetch-nudge.js';
 
 export interface GroupResponderDeps {
   node: ChatNode;
@@ -872,7 +872,7 @@ export class GroupResponder {
     }
 
     // DHT write succeeded — best-effort nudge so an online recipient checks their bucket immediately
-    nudgeGroupRefetchIfCreator(this.deps, peerId, message);
+    nudgeGroupRefetchIfKnownGroup(this.deps, peerId, message);
   }
 
   private describeControlMessage(message: object): string {

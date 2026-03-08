@@ -2,11 +2,10 @@ import type { ChatDatabase } from '../db/database.js';
 
 interface CreatorNudgeDeps {
   database: ChatDatabase;
-  myPeerId: string;
   nudgeGroupRefetch?: (peerId: string, groupId: string) => void;
 }
 
-export function nudgeGroupRefetchIfCreator(
+export function nudgeGroupRefetchIfKnownGroup(
   deps: CreatorNudgeDeps,
   peerId: string,
   message: object,
@@ -18,7 +17,7 @@ export function nudgeGroupRefetchIfCreator(
 
   const groupId = groupIdCandidate;
   const chat = deps.database.getChatByGroupId(groupId);
-  if (chat?.group_creator_peer_id === deps.myPeerId) {
+  if (chat) {
     deps.nudgeGroupRefetch?.(peerId, groupId);
   }
 }

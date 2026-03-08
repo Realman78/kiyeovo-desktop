@@ -251,12 +251,6 @@ export class MessageHandler {
           );
           return;
         }
-        if (!groupChat.group_creator_peer_id || groupChat.group_creator_peer_id !== remoteId) {
-          console.log(
-            `[NUDGE] Received group-refetch nudge from ${remoteId.slice(-8)} for group=${nudgePayload.groupId.slice(0, 8)} but sender is not creator, ignoring`,
-          );
-          return;
-        }
         console.log(
           `[NUDGE] Received group-refetch nudge from ${remoteId.slice(-8)}, scheduling group check for chat ${groupChat.id}`,
         );
