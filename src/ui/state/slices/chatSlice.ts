@@ -235,6 +235,12 @@ const chatSlice = createSlice({
     },
     setChats: (state, action: PayloadAction<Chat[]>) => {
       state.chats = action.payload;
+      if (state.activeChat) {
+        const refreshedActive = state.chats.find((c) => c.id === state.activeChat?.id);
+        if (refreshedActive) {
+          state.activeChat = refreshedActive;
+        }
+      }
     },
     addChat: (state, action: PayloadAction<Chat>) => {
       state.chats.push(action.payload);
@@ -320,6 +326,9 @@ const chatSlice = createSlice({
       const chat = state.chats.find((c) => c.id === action.payload.chatId);
       if (chat) {
         chat.isFetchingOffline = action.payload.isFetching;
+        if (state.activeChat?.id === action.payload.chatId) {
+          state.activeChat.isFetchingOffline = action.payload.isFetching;
+        }
       }
     },
     markOfflineFetched: (state, action: PayloadAction<number | number[]>) => {
@@ -329,6 +338,10 @@ const chatSlice = createSlice({
         if (chat) {
           chat.fetchedOffline = true;
           chat.isFetchingOffline = false;
+          if (state.activeChat?.id === chatId) {
+            state.activeChat.fetchedOffline = true;
+            state.activeChat.isFetchingOffline = false;
+          }
         }
       });
     },
