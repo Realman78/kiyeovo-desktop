@@ -388,7 +388,7 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
       services: {
         // TODO research kad dodes na grupe
         pubsub: gossipsub(
-          { emitSelf: false }
+          { emitSelf: false, runOnLimitedConnection: true }
         ),
         dht: kadDHT({
           protocol: modeConfig.dhtProtocol,
