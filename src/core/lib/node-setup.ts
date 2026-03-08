@@ -387,9 +387,12 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
       connectionGater: createConnectionGater(database),
       services: {
         // TODO research kad dodes na grupe
-        pubsub: gossipsub(
-          { emitSelf: false, runOnLimitedConnection: true }
-        ),
+        pubsub: gossipsub({
+          emitSelf: false,
+          runOnLimitedConnection: true,
+          fallbackToFloodsub: false,
+          allowPublishToZeroTopicPeers: false,
+        }),
         dht: kadDHT({
           protocol: modeConfig.dhtProtocol,
           peerInfoMapper: isAnonymousMode ? filterOnionAddressesMapper : passthroughMapper,

@@ -139,7 +139,9 @@ async function createBootstrapNode(): Promise<ChatNode> {
     },
     services: {
       pubsub: gossipsub({
-        doPX: true
+        doPX: true,
+        fallbackToFloodsub: false,
+        allowPublishToZeroTopicPeers: false,
       }),
       dht: kadDHT({
         protocol: modeConfig.dhtProtocol,
