@@ -133,6 +133,10 @@ export function createTransportArray(params: {
   return transports;
 }
 
+function getFastModeListenAddrs(port: number): string[] {
+  return [`/ip4/0.0.0.0/tcp/${port}`, '/p2p-circuit'];
+}
+
 function getTorConfigFromSettings(database: ChatDatabase): ReturnType<typeof getTorConfig> {
   const base = getTorConfig();
   const get = (key: string) => database.getSetting(key);
@@ -278,10 +282,12 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
       }
     }
 
+    const listenAddrs = isAnonymousMode ? [listenAddress] : getFastModeListenAddrs(port);
+
     const node = await createLibp2p({
       privateKey: privateKey,
       addresses: {
-        listen: [listenAddress],
+        listen: listenAddrs,
         announce: isAnonymousMode ? announceAddrs : []
       },
       transports: transports,
@@ -399,6 +405,20 @@ export async function connectToBootstrap(node: ChatNode, database: ChatDatabase)
     ? getConfiguredFastRelayAddrs(database)
     : { addresses: [], source: 'none' as const };
   const fastRelayAddrs = fastRelayConfig.addresses;
+  const logFastCircuitState = (): void => {
+    if (networkMode !== NETWORK_MODES.FAST) {
+      return;
+    }
+
+    const circuitAddrs = node
+      .getMultiaddrs()
+      .map((addr) => addr.toString())
+      .filter((addr) => addr.includes('/p2p-circuit'));
+
+    console.log(
+      `[STACK][FAST][RELAY] localCircuitAddrs=${circuitAddrs.length} values=${circuitAddrs.join(',') || 'none'}`
+    );
+  };
 
   const dialFastRelays = async (): Promise<void> => {
     if (networkMode !== NETWORK_MODES.FAST || fastRelayAddrs.length === 0) {
@@ -426,6 +446,7 @@ export async function connectToBootstrap(node: ChatNode, database: ChatDatabase)
 
     await Promise.all(Array.from({ length: concurrency }, () => runWorker()));
     console.log(`[STACK][FAST][RELAY] connected=${connected}/${fastRelayAddrs.length}`);
+    logFastCircuitState();
   };
 
   if (addressesToTry.length === 0 && envAddresses.length > 0) {
