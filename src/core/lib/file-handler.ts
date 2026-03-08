@@ -228,9 +228,13 @@ export class FileHandler {
 
   #setupProtocolHandler(): void {
     void this.node.handle(FILE_TRANSFER_PROTOCOL, async (context: StreamHandlerContext) => {
+      console.log("RECEIVED FILE TRANSFER", context);
       const { remoteId, stream } = StreamHandler.getRemotePeerInfo(context);
 
+
       if (this.database.isBlocked(remoteId)) return stream.close();
+
+      console.log("IT IS NOT BLOCKED");
 
       StreamHandler.logIncomingConnection(remoteId, FILE_TRANSFER_PROTOCOL);
 
@@ -836,7 +840,6 @@ export class FileHandler {
         targetPeerId,
         protocol: FILE_TRANSFER_PROTOCOL,
         context: 'file_transfer_send',
-        runOnLimitedConnection: true,
       });
 
       const activeStream = stream;

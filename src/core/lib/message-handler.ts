@@ -793,7 +793,6 @@ export class MessageHandler {
           targetPeerId,
           protocol: CHAT_PROTOCOL,
           context: 'send_message_online',
-          runOnLimitedConnection: true,
         });
 
         // Get my own username from database (last registered username) or generate fallback

@@ -12,7 +12,6 @@ type DialProtocolWithRelayFallbackParams = {
   targetPeerId: PeerId;
   protocol: string;
   context: string;
-  runOnLimitedConnection?: boolean;
 };
 
 function parseRelayMultiaddrs(raw: string): string[] {
@@ -41,12 +40,9 @@ export async function dialProtocolWithRelayFallback(
     targetPeerId,
     protocol,
     context,
-    runOnLimitedConnection,
   } = params;
 
-  const dialOptions = runOnLimitedConnection === undefined
-    ? undefined
-    : { runOnLimitedConnection };
+  const dialOptions = { runOnLimitedConnection: true };
 
   try {
     return await node.dialProtocol(targetPeerId, protocol, dialOptions);

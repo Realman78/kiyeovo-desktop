@@ -341,7 +341,6 @@ export class KeyExchange {
       targetPeerId,
       protocol: CHAT_PROTOCOL,
       context: 'key_exchange_init',
-      runOnLimitedConnection: true,
     });
     const messageJson = JSON.stringify(keyExchangeMessage);
 
@@ -1208,7 +1207,6 @@ export class KeyExchange {
         targetPeerId,
         protocol: CHAT_PROTOCOL,
         context: 'key_rotation_response',
-        runOnLimitedConnection: true,
       });
       const responseJson = JSON.stringify(rotationResponse);
       const encoder = new TextEncoder();
@@ -1388,7 +1386,6 @@ export class KeyExchange {
         targetPeerId,
         protocol: CHAT_PROTOCOL,
         context: 'key_rotation',
-        runOnLimitedConnection: true,
       });
       const messageJson = JSON.stringify(rotationMessage);
       const encoder = new TextEncoder();
