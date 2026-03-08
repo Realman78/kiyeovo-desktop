@@ -17,6 +17,8 @@ import {
   GROUP_INFO_REPUBLISH_INTERVAL,
   GROUP_INFO_REPUBLISH_JITTER,
   ERRORS,
+  FAST_RELAY_MULTIADDRS_SETTING_KEY,
+  NETWORK_MODES,
 } from '../constants.js';
 import { SessionManager } from './session-manager.js';
 import { MessageEncryption } from './message-encryption.js';
@@ -36,6 +38,8 @@ import { GroupMessaging } from './group/group-messaging.js';
 import { GroupOfflineManager } from './group/group-offline-manager.js';
 import { GroupAckRepublisher } from './group/group-ack-republisher.js';
 import { GroupInfoRepublisher } from './group/group-info-republisher.js';
+import { DEFAULT_FAST_RELAY_MULTIADDRS } from '../default-relay-nodes.js';
+import { multiaddr } from '@multiformats/multiaddr';
 
 /**
  * Main message handler that orchestrates all message handling components
@@ -634,6 +638,64 @@ export class MessageHandler {
     );
   }
 
+  private getFastRelayMultiaddrs(): string[] {
+    const configured = this.database.getSetting(FAST_RELAY_MULTIADDRS_SETTING_KEY);
+    const source = configured ?? DEFAULT_FAST_RELAY_MULTIADDRS.join(',');
+    const parsed = source
+      .split(/[\n,]/)
+      .map((value) => value.trim())
+      .filter(Boolean);
+    return Array.from(new Set(parsed));
+  }
+
+  private async dialChatProtocolWithRelayFallback(targetPeerId: PeerId, context: string) {
+    try {
+      return await this.node.dialProtocol(targetPeerId, CHAT_PROTOCOL);
+    } catch (directDialError: unknown) {
+      if (this.database.getNetworkMode() !== NETWORK_MODES.FAST) {
+        throw directDialError;
+      }
+
+      const relayAddrs = this.getFastRelayMultiaddrs();
+      if (relayAddrs.length === 0) {
+        throw directDialError;
+      }
+
+      const targetPeer = targetPeerId.toString();
+      const directReason = directDialError instanceof Error ? directDialError.message : String(directDialError);
+      console.warn(
+        `[DIAL][${context}] direct dial failed target=${targetPeer} reason=${directReason}. trying relay fallback count=${relayAddrs.length}`
+      );
+
+      let lastRelayError: unknown = directDialError;
+      for (const relayAddr of relayAddrs) {
+        try {
+          let relayBase = relayAddr;
+          if (relayBase.includes('/p2p-circuit')) {
+            relayBase = relayBase.split('/p2p-circuit')[0] ?? relayAddr;
+          }
+
+          const relayMa = multiaddr(relayBase);
+          if (!relayMa.getPeerId()) {
+            console.warn(`[DIAL][${context}] skipping relay without /p2p peer id: ${relayAddr}`);
+            continue;
+          }
+
+          const circuitAddr = `${relayBase}/p2p-circuit/p2p/${targetPeer}`;
+          const stream = await this.node.dialProtocol(multiaddr(circuitAddr), CHAT_PROTOCOL);
+          console.log(`[DIAL][${context}] relay fallback succeeded target=${targetPeer} via=${relayBase}`);
+          return stream;
+        } catch (relayError: unknown) {
+          lastRelayError = relayError;
+          const reason = relayError instanceof Error ? relayError.message : String(relayError);
+          console.warn(`[DIAL][${context}] relay fallback failed via=${relayAddr} reason=${reason}`);
+        }
+      }
+
+      throw lastRelayError;
+    }
+  }
+
   /**
    * Ensures a user exists and has an active session with key rotation handling.
    */
@@ -781,7 +843,7 @@ export class MessageHandler {
 
       const sendWithTimeout = async (): Promise<boolean> => {
         await this.logPeerDialDiagnostics(targetPeerId, 'send_message_online');
-        const stream = await this.node.dialProtocol(targetPeerId, CHAT_PROTOCOL);
+        const stream = await this.dialChatProtocolWithRelayFallback(targetPeerId, 'send_message_online');
 
         // Get my own username from database (last registered username) or generate fallback
         const myPeerId = this.node.peerId.toString();
