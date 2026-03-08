@@ -232,17 +232,10 @@ export class FileHandler {
 
       if (this.database.isBlocked(remoteId)) return stream.close();
 
-      const chat = this.database.getChatByPeerId(remoteId);
-      const session = this.messageHandler.getSessionManager().getSession(remoteId);
-
-      if (!chat || !session) {
-        return stream.close();
-      }
-
       StreamHandler.logIncomingConnection(remoteId, FILE_TRANSFER_PROTOCOL);
 
       try {
-        await this.#handleIncomingFile(remoteId, stream, chat, session);
+        await this.#handleIncomingFile(remoteId, stream);
       } catch (error: unknown) {
         generalErrorHandler(error, `Failed to handle incoming file`);
       }
@@ -251,14 +244,14 @@ export class FileHandler {
 
   async #handleIncomingFile(
     senderPeerId: string,
-    stream: Stream,
-    chat: Chat,
-    session: ConversationSession
+    stream: Stream
   ): Promise<void> {
     const writable = pushable();
     const sinkPromise = pipe(writable, stream.sink);
 
     let offer: FileOffer | null = null;
+    let chat: Chat | null = null;
+    let session: ConversationSession | null = null;
     let chunkTimeout: NodeJS.Timeout | null = null;
     let lastEmittedPercentage = 0;
 
@@ -449,6 +442,21 @@ export class FileHandler {
               return;
             }
 
+            // Require an existing direct chat and active session before accepting file transfers.
+            // We intentionally send an explicit rejection so sender does not hang waiting for response.
+            chat = this.database.getChatByPeerId(senderPeerId);
+            session = this.messageHandler.getSessionManager().getSession(senderPeerId);
+            if (!chat || !session) {
+              const response: FileOfferResponse = {
+                type: FILE_OFFER_RESPONSE,
+                fileId: offer.fileId,
+                accepted: false,
+                reason: 'No active session',
+              };
+              writable.push(this.#encodeMessage(response));
+              return;
+            }
+
             // Persist pending offer as a message (single row per file)
             await this.database.createMessage({
               id: offerMsg.fileId,
@@ -557,6 +565,8 @@ export class FileHandler {
 
           } else if (message.type === 'file_chunk') {
             if (!offer) throw new Error('Received chunk before offer');
+            if (!session) throw new Error('Received chunk without active session');
+            if (!chat) throw new Error('Received chunk without chat');
 
             const fileChunk = message;
 
@@ -681,7 +691,7 @@ export class FileHandler {
         });
 
       // Emit completion event
-      if (this.onFileTransferComplete) {
+      if (this.onFileTransferComplete && chat) {
         this.onFileTransferComplete({
           chatId: chat.id,
           messageId: messageId,
@@ -690,7 +700,7 @@ export class FileHandler {
       }
     } catch (error: unknown) {
       // Emit failure event
-      if (offer && this.onFileTransferFailed) {
+      if (offer && this.onFileTransferFailed && chat) {
         this.onFileTransferFailed({
           chatId: chat.id,
           messageId: offer.fileId,
@@ -799,6 +809,7 @@ export class FileHandler {
   async sendFile(targetUsername: string, filePath: string): Promise<void> {
     let chat: any = null;
     let fileId: string = '';
+    let stream: Stream | null = null;
     try {
       const { session, peerId: targetPeerId } = await this.messageHandler.ensureUserSession(targetUsername, '', true);
       chat = this.database.getChatByPeerId(targetPeerId.toString());
@@ -819,7 +830,7 @@ export class FileHandler {
 
       console.log(`Sending ${metadata.filename} (${metadata.size} bytes, ${metadata.totalChunks} chunks)`);
 
-      const stream = await dialProtocolWithRelayFallback({
+      stream = await dialProtocolWithRelayFallback({
         node: this.node,
         database: this.database,
         targetPeerId,
@@ -828,8 +839,9 @@ export class FileHandler {
         runOnLimitedConnection: true,
       });
 
+      const activeStream = stream;
       const writable = pushable();
-      const sinkPromise = pipe(writable, stream.sink);
+      const sinkPromise = pipe(writable, activeStream.sink);
 
       try {
         await this.database.createMessage({
@@ -869,12 +881,13 @@ export class FileHandler {
         let buffer = new Uint8Array(0);
         let response: FileOfferResponse | null = null;
 
-        const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => { reject(new Error('Timeout waiting for file acceptance')); }, FILE_ACCEPTANCE_TIMEOUT)
-        );
+        let timeoutId: ReturnType<typeof setTimeout> | null = null;
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => { reject(new Error('Timeout waiting for file acceptance')); }, FILE_ACCEPTANCE_TIMEOUT);
+        });
 
         const readResponse = async (): Promise<FileOfferResponse> => {
-          for await (const chunk of stream.source) {
+          for await (const chunk of activeStream.source) {
             const chunkData = (chunk as unknown as Uint8Array).subarray();
             const newBuffer = new Uint8Array(buffer.length + chunkData.length);
             newBuffer.set(buffer);
@@ -890,7 +903,14 @@ export class FileHandler {
           throw new Error('Stream closed before response');
         };
 
-        response = await Promise.race([readResponse(), timeoutPromise]);
+        try {
+          response = await Promise.race([readResponse(), timeoutPromise]);
+        } finally {
+          if (timeoutId) {
+            clearTimeout(timeoutId);
+            timeoutId = null;
+          }
+        }
 
         if (!response.accepted) {
           const reason = response.reason || 'Rejected';
@@ -957,6 +977,13 @@ export class FileHandler {
       }
     } catch (error: unknown) {
       const errorText = error instanceof Error ? error.message : 'Unknown error';
+      if (errorText.toLowerCase().includes('timeout waiting for file acceptance') && stream) {
+        try {
+          stream.abort(new Error('File offer acceptance timeout'));
+        } catch {
+          // best-effort stream cleanup
+        }
+      }
       if (fileId) {
         if (errorText.toLowerCase().includes('timeout waiting for file acceptance')) {
           this.database.updateMessageTransfer(fileId, {
