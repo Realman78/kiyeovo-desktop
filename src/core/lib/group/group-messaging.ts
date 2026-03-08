@@ -253,6 +253,7 @@ export class GroupMessaging {
     }
     this.ensureTopicSubscription(ctx);
     console.log("topic subscription ensured", ctx);
+    await this.logGroupPubsubDiagnostics(ctx, participantPeers, 'pre_publish');
 
     const seq = this.deps.database.getNextSeqAndIncrement(groupId, ctx.keyVersion);
     const nonce = randomBytes(24);
@@ -283,6 +284,9 @@ export class GroupMessaging {
     const publishStartedAt = Date.now();
     const publishedOnline = await this.publishWithRetry(ctx, payloadBytes, `msgId=${signedMessage.messageId}`);
     const publishMs = Date.now() - publishStartedAt;
+    if (!publishedOnline) {
+      await this.logGroupPubsubDiagnostics(ctx, participantPeers, 'offline_fallback');
+    }
 
     let warning: string | null = publishedOnline
       ? null
@@ -360,6 +364,70 @@ export class GroupMessaging {
     );
 
     return response;
+  }
+
+  private async logGroupPubsubDiagnostics(
+    ctx: GroupContext,
+    participantPeers: string[],
+    phase: 'pre_publish' | 'offline_fallback',
+  ): Promise<void> {
+    try {
+      const shortTopic = `${ctx.topic.slice(0, 16)}...`;
+      const localTopics = this.deps.node.services.pubsub.getTopics();
+      const topicSubscribers = this.deps.node.services.pubsub
+        .getSubscribers(ctx.topic)
+        .map((peerId) => peerId.toString());
+      const connected = this.deps.node.getConnections();
+      const connectionByPeer = new Map<string, Array<{
+        remoteAddr: string;
+        direction: string;
+        limited: string;
+      }>>();
+
+      for (const conn of connected) {
+        const peer = conn.remotePeer.toString();
+        const byPeer = connectionByPeer.get(peer) ?? [];
+        const connAny = conn as unknown as {
+          remoteAddr?: { toString: () => string };
+          direction?: string;
+          limits?: unknown;
+        };
+        byPeer.push({
+          remoteAddr: connAny.remoteAddr?.toString() ?? 'unknown',
+          direction: connAny.direction ?? 'unknown',
+          limited: connAny.limits == null
+            ? 'none'
+            : JSON.stringify(connAny.limits),
+        });
+        connectionByPeer.set(peer, byPeer);
+      }
+
+      const participantState = participantPeers
+        .filter((peerId) => peerId !== this.deps.myPeerId)
+        .map((peerId) => {
+          const peerConnections = connectionByPeer.get(peerId) ?? [];
+          const connSummary = peerConnections.length > 0
+            ? peerConnections
+              .map((c) => `${c.direction}:${c.remoteAddr}:limits=${c.limited}`)
+              .join('|')
+            : 'none';
+          const inSubscribers = topicSubscribers.includes(peerId);
+          return `${peerId.slice(-8)}(subs=${inSubscribers ? 'yes' : 'no'},conns=${peerConnections.length},${connSummary})`;
+        })
+        .join(' ; ');
+
+      console.log(
+        `[GROUP-DIAG][PUBSUB] phase=${phase} group=${ctx.groupId.slice(0, 8)} keyVersion=${ctx.keyVersion} topic=${shortTopic} ` +
+        `localSub=${localTopics.includes(ctx.topic)} localTopics=${localTopics.length} ` +
+        `subscribers=${topicSubscribers.map((peer) => peer.slice(-8)).join(',') || 'none'} ` +
+        `participants=${participantState || 'none'}`
+      );
+    } catch (error: unknown) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[GROUP-DIAG][PUBSUB] phase=${phase} group=${ctx.groupId.slice(0, 8)} failed_to_collect=${reason}`,
+      );
+    }
   }
 
   async retryOfflineBackup(chatId: number, messageId: string): Promise<void> {
