@@ -15,6 +15,8 @@ export const NETWORK_MODES = {
 export const DEFAULT_NETWORK_MODE: NetworkMode = NETWORK_MODES.FAST;
 export const NETWORK_MODE_SETTING_KEY = 'network_mode';
 export const NETWORK_MODE_ONBOARDED_SETTING_KEY = 'network_mode_onboarded';
+export const FAST_RELAY_MULTIADDRS_SETTING_KEY = 'fast_relay_multiaddrs';
+export const FAST_RELAY_MULTIADDRS_INITIALIZED_SETTING_KEY = 'fast_relay_multiaddrs_initialized';
 
 export const NETWORK_MODE_BOOTSTRAP_ENV_KEYS: Record<NetworkMode, string> = {
   fast: 'KNOWN_BOOTSTRAP_NODES_FAST',

@@ -163,6 +163,23 @@ declare global {
                 healthCheckInterval: number;
                 dnsResolution: 'tor' | 'system';
             }) => Promise<{ success: boolean; error: string | null }>;
+            getFastRelaySettings: () => Promise<{
+                success: boolean;
+                settings: {
+                    multiaddrs: string;
+                } | null;
+                error: string | null;
+            }>;
+            setFastRelaySettings: (settings: {
+                multiaddrs: string;
+            }) => Promise<{ success: boolean; normalizedMultiaddrs: string; error: string | null }>;
+            testFastRelayNodes: (settings: {
+                multiaddrs: string;
+            }) => Promise<{
+                success: boolean;
+                results: Array<{ address: string; success: boolean; error: string | null; latencyMs: number | null }>;
+                error: string | null;
+            }>;
             restartApp: () => Promise<{ success: boolean; error: string | null }>;
             deleteAccountAndData: () => Promise<{ success: boolean; error: string | null }>;
             backupDatabase: (backupPath: string) => Promise<{ success: boolean; error: string | null }>;

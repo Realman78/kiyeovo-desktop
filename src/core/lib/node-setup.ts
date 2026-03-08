@@ -28,14 +28,15 @@ import dotenv from 'dotenv';
 import {
   DHT_KEY_PREFIXES,
   DHT_NAMESPACE_NAMES,
+  FAST_RELAY_MULTIADDRS_SETTING_KEY,
   K_BUCKET_SIZE,
   NETWORK_MODE_BOOTSTRAP_ENV_KEYS,
-  NETWORK_MODE_RELAY_ENV_KEYS,
   NETWORK_MODES,
   PREFIX_LENGTH,
   getNetworkModeConfig,
   getTorConfig,
 } from '../constants.js';
+import { DEFAULT_FAST_RELAY_MULTIADDRS } from '../default-relay-nodes.js';
 import { filterOnionAddressesMapper } from '../utils/miscellaneous.js';
 import { generalErrorHandler } from '../utils/general-error.js';
 import { createConnectionGater } from './connection-gater.js';
@@ -60,6 +61,27 @@ function parseCommaSeparatedEnv(key: string): string[] {
     .split(',')
     .map(value => value.trim())
     .filter(Boolean);
+}
+
+function parseAddressList(raw: string): string[] {
+  return raw
+    .split(/[\n,]/)
+    .map(value => value.trim())
+    .filter(Boolean);
+}
+
+function dedupe(values: string[]): string[] {
+  return Array.from(new Set(values));
+}
+
+function getConfiguredFastRelayAddrs(database: ChatDatabase): { addresses: string[]; source: 'db' | 'default' } {
+  const settingValue = database.getSetting(FAST_RELAY_MULTIADDRS_SETTING_KEY);
+  if (settingValue !== null) {
+    const fromDb = dedupe(parseAddressList(settingValue));
+    return { addresses: fromDb, source: 'db' };
+  }
+
+  return { addresses: dedupe(DEFAULT_FAST_RELAY_MULTIADDRS), source: 'default' };
 }
 
 function isOnionMultiaddr(addr: string): boolean {
@@ -149,8 +171,9 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
     const isAnonymousMode = networkMode === NETWORK_MODES.ANONYMOUS;
     const modeConfig = getNetworkModeConfig(networkMode);
     const bootstrapEnvKey = NETWORK_MODE_BOOTSTRAP_ENV_KEYS[networkMode];
-    const relayEnvKey = NETWORK_MODE_RELAY_ENV_KEYS[networkMode];
-    const relayAddresses = relayEnvKey ? parseCommaSeparatedEnv(relayEnvKey) : [];
+    const relayConfig = networkMode === NETWORK_MODES.FAST
+      ? getConfiguredFastRelayAddrs(database)
+      : { addresses: [], source: 'none' as const };
 
     const relayRuntime: RelayRuntime = networkMode === NETWORK_MODES.FAST
       ? {
@@ -165,7 +188,7 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
     console.log(`[STACK] protocol=${modeConfig.protocolName} dhtProtocol=${modeConfig.dhtProtocol}`);
     console.log(`[STACK] bootstrapEnv=${bootstrapEnvKey}`);
     console.log(`[STACK] transport=${isAnonymousMode ? 'tcp+tor-socks' : 'tcp+relay(+dcutr)'}`);
-    console.log(`[STACK] relayEnv=${relayEnvKey ?? 'n/a'} relayConfigured=${relayAddresses.length}`);
+    console.log(`[STACK] relaySource=${relayConfig.source} relayConfigured=${relayConfig.addresses.length}`);
     if (!isAnonymousMode) {
       console.log('[STACK][FAST] relay runtime loaded');
     }
@@ -348,9 +371,6 @@ export async function connectToBootstrap(node: ChatNode, database: ChatDatabase)
 
   const networkMode = database.getNetworkMode();
   const bootstrapEnvKey = NETWORK_MODE_BOOTSTRAP_ENV_KEYS[networkMode];
-  const relayEnvKey = NETWORK_MODE_RELAY_ENV_KEYS[networkMode];
-
-  const dedupe = (values: string[]) => Array.from(new Set(values));
   const filterByMode = (values: string[]) => {
     if (networkMode === NETWORK_MODES.ANONYMOUS) {
       console.log('TOR enabled: ignoring non-onion bootstrap addresses');
@@ -375,7 +395,10 @@ export async function connectToBootstrap(node: ChatNode, database: ChatDatabase)
     ...envAddresses,
   ]));
 
-  const fastRelayAddrs = relayEnvKey ? parseCommaSeparatedEnv(relayEnvKey) : [];
+  const fastRelayConfig = networkMode === NETWORK_MODES.FAST
+    ? getConfiguredFastRelayAddrs(database)
+    : { addresses: [], source: 'none' as const };
+  const fastRelayAddrs = fastRelayConfig.addresses;
 
   const dialFastRelays = async (): Promise<void> => {
     if (networkMode !== NETWORK_MODES.FAST || fastRelayAddrs.length === 0) {
@@ -383,7 +406,7 @@ export async function connectToBootstrap(node: ChatNode, database: ChatDatabase)
     }
 
     const concurrency = Math.min(5, fastRelayAddrs.length);
-    console.log(`[STACK][FAST] attempting deterministic relay dials count=${fastRelayAddrs.length} concurrency=${concurrency}`);
+    console.log(`[STACK][FAST] attempting deterministic relay dials count=${fastRelayAddrs.length} concurrency=${concurrency} source=${fastRelayConfig.source}`);
     let connected = 0;
     let cursor = 0;
 

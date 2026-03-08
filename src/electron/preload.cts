@@ -212,6 +212,32 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
         return ipcRenderer.invoke(IPC_CHANNELS.SET_TOR_SETTINGS, settings);
     },
 
+    getFastRelaySettings: async (): Promise<{
+        success: boolean;
+        settings: {
+            multiaddrs: string;
+        } | null;
+        error: string | null;
+    }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.GET_FAST_RELAY_SETTINGS);
+    },
+
+    setFastRelaySettings: async (settings: {
+        multiaddrs: string;
+    }): Promise<{ success: boolean; normalizedMultiaddrs: string; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.SET_FAST_RELAY_SETTINGS, settings);
+    },
+
+    testFastRelayNodes: async (settings: {
+        multiaddrs: string;
+    }): Promise<{
+        success: boolean;
+        results: Array<{ address: string; success: boolean; error: string | null; latencyMs: number | null }>;
+        error: string | null;
+    }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.TEST_FAST_RELAY_NODES, settings);
+    },
+
     getAppConfig: async (): Promise<{
         success: boolean;
         config: {

@@ -13,13 +13,15 @@ type TorRestartDialogProps = {
   onOpenChange: (open: boolean) => void;
   onCancel: () => void;
   onConfirm: () => void;
+  message?: string;
 };
 
 export const TorRestartDialog: FC<TorRestartDialogProps> = ({
   open,
   onOpenChange,
   onCancel,
-  onConfirm
+  onConfirm,
+  message = 'Changing Tor transport settings requires a full app restart. Apply changes now?'
 }) => {
   const handleOpenChange = (newOpen: boolean) => {
     if (!newOpen) {
@@ -27,8 +29,6 @@ export const TorRestartDialog: FC<TorRestartDialogProps> = ({
     }
     onOpenChange(newOpen);
   };
-
-  const message = 'Changing Tor transport settings requires a full app restart. Apply changes now?';
 
   const handleConfirm = () => {
     onOpenChange(false);

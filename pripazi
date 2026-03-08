@@ -20,8 +20,8 @@ Still secure: brute force is still blocked by submit lockout.
 Cons
 Still “startup blocked” (by design) until the user submits; but at least it feels responsive.
 
-1.0 it tried to auto-register with alice, but the bootstrap node did not receive the request (same as with the above logs) so the client got stuck on login screen waiting for initializing username registry -> we should also think about just putting the client through and not make the auto-registration blocking 
 1.0.1 zac se ponekad password ne auto-filla?
+
 1.1
 I joined with a user and while the joining was happening, Alice (creator) was sending messages, but Chad did not receive them in real time, only when I checked missed messages. Alice error: [GROUP-MSG] Retrying publish for group=c883e511-02a7-4f23-9df9-4f495c094c44 after retryable error: PublishError.NoPeersSubscribedToTopic (attempt1Ms=1)
 we already went thourgh this and have not found the issue, I will have to investigate later. What do you say to the idea that if Chad is online when a new user joins or leaves or is removed, that the check missed messages gets triggered on his end? of course, only if he is online when the actual system message arrives, not when he comes online and the system message is fetched from the bucket. dont implement, let us just think about it

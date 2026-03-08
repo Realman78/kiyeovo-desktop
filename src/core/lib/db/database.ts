@@ -8,8 +8,11 @@ import type { ContactMode, NetworkMode, OfflineMessage } from '../../types.js';
 import type { AckMessageType, GroupOfflineMessage, GroupStatus } from '../group/types.js';
 import { assertGroupTransition, isGroupStatus } from '../group/group-state-machine.js';
 import { DEFAULT_BOOTSTRAP_NODES } from '../../default-bootstrap-nodes.js';
+import { DEFAULT_FAST_RELAY_MULTIADDRS } from '../../default-relay-nodes.js';
 import {
     DEFAULT_NETWORK_MODE,
+    FAST_RELAY_MULTIADDRS_INITIALIZED_SETTING_KEY,
+    FAST_RELAY_MULTIADDRS_SETTING_KEY,
     GROUP_OFFLINE_BUCKET_PREFIX,
     NETWORK_MODE_SETTING_KEY,
     PENDING_KEY_EXCHANGE_EXPIRATION,
@@ -405,6 +408,19 @@ export class ChatDatabase {
         const networkModeSetting = this.db.prepare('SELECT value FROM settings WHERE key = ?').get(NETWORK_MODE_SETTING_KEY);
         if (!networkModeSetting) {
             this.db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run(NETWORK_MODE_SETTING_KEY, DEFAULT_NETWORK_MODE);
+        }
+
+        // Initialize default fast relays once. Users can later edit/clear via settings UI.
+        const fastRelayInitialized = this.db.prepare('SELECT value FROM settings WHERE key = ?').get(FAST_RELAY_MULTIADDRS_INITIALIZED_SETTING_KEY);
+        if (!fastRelayInitialized) {
+            this.db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(
+                FAST_RELAY_MULTIADDRS_SETTING_KEY,
+                DEFAULT_FAST_RELAY_MULTIADDRS.join(',')
+            );
+            this.db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run(
+                FAST_RELAY_MULTIADDRS_INITIALIZED_SETTING_KEY,
+                'true'
+            );
         }
 
         // Offline sent messages table (local cache of messages we've sent to DHT)
