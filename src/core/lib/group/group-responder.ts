@@ -6,7 +6,7 @@ import type { ChatDatabase } from '../db/database.js';
 import type { EncryptedUserIdentity } from '../encrypted-user-identity.js';
 import { OfflineMessageManager } from '../offline-message-manager.js';
 import { toBase64Url } from '../base64url.js';
-import { GROUP_INFO_LATEST_PREFIX, GROUP_INFO_VERSION_PREFIX, GROUP_OFFLINE_BUCKET_PREFIX, OFFLINE_BUCKET_PREFIX } from '../../constants.js';
+import { getNetworkModeRuntime } from '../../constants.js';
 import {
   GroupMessageType,
   type GroupInvite,
@@ -37,9 +37,18 @@ export interface GroupResponderDeps {
 
 export class GroupResponder {
   private deps: GroupResponderDeps;
+  private readonly directOfflineBucketPrefix: string;
+  private readonly groupOfflineBucketPrefix: string;
+  private readonly groupInfoLatestPrefix: string;
+  private readonly groupInfoVersionPrefix: string;
 
   constructor(deps: GroupResponderDeps) {
     this.deps = deps;
+    const runtime = getNetworkModeRuntime(this.deps.database.getNetworkMode());
+    this.directOfflineBucketPrefix = runtime.config.dhtNamespaces.offline;
+    this.groupOfflineBucketPrefix = runtime.config.dhtNamespaces.groupOffline;
+    this.groupInfoLatestPrefix = runtime.config.dhtNamespaces.groupInfoLatest;
+    this.groupInfoVersionPrefix = runtime.config.dhtNamespaces.groupInfoVersion;
   }
 
   async handleGroupInvite(invite: GroupInvite): Promise<void> {
@@ -385,6 +394,17 @@ export class GroupResponder {
     if (!creator) return;
 
     this.verifySignature(welcome, creator.signing_public_key);
+    if (
+      welcome.groupInfoLatestDhtKey &&
+      !welcome.groupInfoLatestDhtKey.startsWith(`${this.groupInfoLatestPrefix}/`)
+    ) {
+      console.warn(
+        `[MODE-GUARD][REJECT][group_welcome] group=${welcome.groupId} ` +
+        `reason=group_info_key_mode_mismatch expectedPrefix=${this.groupInfoLatestPrefix}/ ` +
+        `got=${welcome.groupInfoLatestDhtKey.slice(0, 64)}...`
+      );
+      return;
+    }
 
     // If already active, this is a duplicate welcome — just re-send the ACK
     if (chat.group_status === 'active') {
@@ -814,7 +834,7 @@ export class GroupResponder {
     }
 
     const ourPubKeyBase64url = toBase64Url(userIdentity.signingPublicKey);
-    const writeBucketKey = `${OFFLINE_BUCKET_PREFIX}/${bucketSecret}/${ourPubKeyBase64url}`;
+    const writeBucketKey = `${this.directOfflineBucketPrefix}/${bucketSecret}/${ourPubKeyBase64url}`;
     const bucketTag = writeBucketKey.slice(-12);
 
     const recipientPubKeyPem = Buffer.from(user.offline_public_key, 'base64').toString();
@@ -901,7 +921,7 @@ export class GroupResponder {
 
     const creatorPubBytes = Buffer.from(creatorSigningPubKeyBase64, 'base64');
     const creatorPubKeyBase64url = toBase64Url(creatorPubBytes);
-    const latestDhtKey = `${GROUP_INFO_LATEST_PREFIX}/${groupId}/${creatorPubKeyBase64url}`;
+    const latestDhtKey = `${this.groupInfoLatestPrefix}/${groupId}/${creatorPubKeyBase64url}`;
     const latest = await this.fetchLatestGroupInfoRecord(latestDhtKey, groupId, creatorPubBytes);
     if (!latest) {
       console.log(
@@ -1053,7 +1073,7 @@ export class GroupResponder {
 
         const version = versions[current];
         if (version === undefined) break;
-        const dhtKey = `${GROUP_INFO_VERSION_PREFIX}/${groupId}/${creatorPubKeyBase64url}/${version}`;
+        const dhtKey = `${this.groupInfoVersionPrefix}/${groupId}/${creatorPubKeyBase64url}/${version}`;
         const record = await this.fetchVersionedGroupInfoRecord(dhtKey, groupId, version, creatorPubKey);
         if (!record) {
           failedVersion = version;
@@ -1161,7 +1181,7 @@ export class GroupResponder {
     database.deleteGroupSenderSeqs(groupId);
     database.deleteGroupMemberSeqs(groupId);
     database.deleteGroupKeyHistory(groupId);
-    database.deleteGroupOfflineSentMessagesByPrefix(`${GROUP_OFFLINE_BUCKET_PREFIX}/${groupId}/`);
+    database.deleteGroupOfflineSentMessagesByPrefix(`${this.groupOfflineBucketPrefix}/${groupId}/`);
     database.deleteChatById(chatId);
   }
 
@@ -1171,7 +1191,7 @@ export class GroupResponder {
     database.removePendingAcksForGroup(groupId);
     database.removeInviteDeliveryAcksForMember(groupId, myPeerId);
     // Keep cursors/seqs so post-removal catch-up can resume without rescanning from scratch.
-    database.deleteGroupOfflineSentMessagesByPrefix(`${GROUP_OFFLINE_BUCKET_PREFIX}/${groupId}/`);
+    database.deleteGroupOfflineSentMessagesByPrefix(`${this.groupOfflineBucketPrefix}/${groupId}/`);
   }
 
   private async appendMembershipSystemMessage(

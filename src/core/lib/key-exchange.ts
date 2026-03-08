@@ -8,14 +8,13 @@ import type { ChatNode, ConversationSession, AuthenticatedEncryptedMessage, Mess
 import { EncryptedUserIdentity } from './encrypted-user-identity.js';
 import { SessionManager } from './session-manager.js';
 import {
-  CHAT_PROTOCOL,
   KEY_EXCHANGE_RATE_LIMIT_DEFAULT,
   KEY_ROTATION_TIMEOUT,
   MAX_KEY_EXCHANGE_AGE,
-  OFFLINE_BUCKET_PREFIX,
   PENDING_KEY_EXCHANGE_EXPIRATION,
   RECENT_KEY_EXCHANGE_ATTEMPTS_WINDOW,
-  ROTATION_COOLDOWN
+  ROTATION_COOLDOWN,
+  getNetworkModeRuntime,
 } from '../constants.js';
 import { Chat, ChatDatabase, User } from './db/database.js';
 import { toBase64Url } from './base64url.js';
@@ -42,6 +41,8 @@ export class KeyExchange {
   private onContactRequestReceived: (data: ContactRequestEvent) => void;
   private onChatCreated: (data: ChatCreatedEvent) => void;
   private onKeyExchangeFailed: (data: KeyExchangeFailedEvent) => void;
+  private readonly offlineBucketPrefix: string;
+  private readonly chatProtocol: string;
 
   constructor(
     node: ChatNode,
@@ -61,6 +62,9 @@ export class KeyExchange {
     this.onContactRequestReceived = onContactRequestReceived;
     this.onChatCreated = onChatCreated;
     this.onKeyExchangeFailed = onKeyExchangeFailed;
+    const modeConfig = getNetworkModeRuntime(database.getNetworkMode()).config;
+    this.offlineBucketPrefix = modeConfig.dhtNamespaces.offline;
+    this.chatProtocol = modeConfig.chatProtocol;
   }
 
   private async logPeerDialDiagnostics(targetPeerId: PeerId, context: string): Promise<void> {
@@ -254,13 +258,13 @@ export class KeyExchange {
       throw new Error('User identity not available');
     }
     const ourPubKeyBase64url = toBase64Url(userIdentity.signingPublicKey);
-    return `${OFFLINE_BUCKET_PREFIX}/${offlineBucketSecret}/${ourPubKeyBase64url}`;
+    return `${this.offlineBucketPrefix}/${offlineBucketSecret}/${ourPubKeyBase64url}`;
   }
 
   public constructReadBucketKey(offlineBucketSecret: string, peerSigningPubKeyBase64: string): string {
     const peerPubKeyBytes = Buffer.from(peerSigningPubKeyBase64, 'base64');
     const peerPubKeyBase64url = toBase64Url(peerPubKeyBytes);
-    return `${OFFLINE_BUCKET_PREFIX}/${offlineBucketSecret}/${peerPubKeyBase64url}`;
+    return `${this.offlineBucketPrefix}/${offlineBucketSecret}/${peerPubKeyBase64url}`;
   }
 
   private deriveNotificationsBucketKey(
@@ -335,13 +339,13 @@ export class KeyExchange {
     };
 
     await this.logPeerDialDiagnostics(targetPeerId, 'key_exchange_init');
-    const stream = await dialProtocolWithRelayFallback({
-      node: this.node,
-      database: this.database,
-      targetPeerId,
-      protocol: CHAT_PROTOCOL,
-      context: 'key_exchange_init',
-    });
+      const stream = await dialProtocolWithRelayFallback({
+        node: this.node,
+        database: this.database,
+        targetPeerId,
+        protocol: this.chatProtocol,
+        context: 'key_exchange_init',
+      });
     const messageJson = JSON.stringify(keyExchangeMessage);
 
     const encoder = new TextEncoder();
@@ -1205,7 +1209,7 @@ export class KeyExchange {
         node: this.node,
         database: this.database,
         targetPeerId,
-        protocol: CHAT_PROTOCOL,
+        protocol: this.chatProtocol,
         context: 'key_rotation_response',
       });
       const responseJson = JSON.stringify(rotationResponse);
@@ -1384,7 +1388,7 @@ export class KeyExchange {
         node: this.node,
         database: this.database,
         targetPeerId,
-        protocol: CHAT_PROTOCOL,
+        protocol: this.chatProtocol,
         context: 'key_rotation',
       });
       const messageJson = JSON.stringify(rotationMessage);

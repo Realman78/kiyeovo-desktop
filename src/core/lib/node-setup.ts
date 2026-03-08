@@ -26,14 +26,13 @@ import {
 } from './group/group-dht-validator.js';
 import dotenv from 'dotenv';
 import {
-  DHT_KEY_PREFIXES,
-  DHT_NAMESPACE_NAMES,
   FAST_RELAY_MULTIADDRS_SETTING_KEY,
   K_BUCKET_SIZE,
   NETWORK_MODE_BOOTSTRAP_ENV_KEYS,
   NETWORK_MODES,
   PREFIX_LENGTH,
   getNetworkModeConfig,
+  getNetworkModeRuntime,
   getTorConfig,
 } from '../constants.js';
 import { DEFAULT_FAST_RELAY_MULTIADDRS } from '../default-relay-nodes.js';
@@ -253,6 +252,7 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
     const networkMode = database.getNetworkMode();
     const isAnonymousMode = networkMode === NETWORK_MODES.ANONYMOUS;
     const modeConfig = getNetworkModeConfig(networkMode);
+    const modeRuntime = getNetworkModeRuntime(networkMode);
     const bootstrapEnvKey = NETWORK_MODE_BOOTSTRAP_ENV_KEYS[networkMode];
     const relayConfig = networkMode === NETWORK_MODES.FAST
       ? getConfiguredFastRelayAddrs(database)
@@ -400,35 +400,39 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
           kBucketSize: K_BUCKET_SIZE,
           prefixLength: PREFIX_LENGTH,
           validators: {
-            [DHT_NAMESPACE_NAMES.offline]: offlineMessageValidator,
-            [DHT_NAMESPACE_NAMES.username]: usernameRegistrationValidator,
-            [DHT_NAMESPACE_NAMES.groupOffline]: groupOfflineMessageValidator,
-            [DHT_NAMESPACE_NAMES.groupInfoLatest]: groupInfoLatestValidator,
-            [DHT_NAMESPACE_NAMES.groupInfoVersion]: groupInfoVersionedValidator,
+            [modeRuntime.dhtNamespaceNames.offline]: offlineMessageValidator,
+            [modeRuntime.dhtNamespaceNames.username]: usernameRegistrationValidator,
+            [modeRuntime.dhtNamespaceNames.groupOffline]: groupOfflineMessageValidator,
+            [modeRuntime.dhtNamespaceNames.groupInfoLatest]: groupInfoLatestValidator,
+            [modeRuntime.dhtNamespaceNames.groupInfoVersion]: groupInfoVersionedValidator,
           },
           selectors: {
-            [DHT_NAMESPACE_NAMES.offline]: offlineMessageSelector,
-            [DHT_NAMESPACE_NAMES.username]: usernameRegistrationSelector,
-            [DHT_NAMESPACE_NAMES.groupOffline]: groupOfflineMessageSelector,
-            [DHT_NAMESPACE_NAMES.groupInfoLatest]: groupInfoLatestSelector,
+            [modeRuntime.dhtNamespaceNames.offline]: offlineMessageSelector,
+            [modeRuntime.dhtNamespaceNames.username]: usernameRegistrationSelector,
+            [modeRuntime.dhtNamespaceNames.groupOffline]: groupOfflineMessageSelector,
+            [modeRuntime.dhtNamespaceNames.groupInfoLatest]: groupInfoLatestSelector,
           },
           validateUpdate: async (key, existing, incoming) => {
             const keyStr = new TextDecoder().decode(key);
-            if (keyStr.startsWith(DHT_KEY_PREFIXES.offline)) {
+            if (keyStr.startsWith(modeRuntime.dhtKeyPrefixes.offline)) {
               return offlineMessageValidateUpdate(key, existing, incoming);
             }
-            if (keyStr.startsWith(DHT_KEY_PREFIXES.username)) {
+            if (keyStr.startsWith(modeRuntime.dhtKeyPrefixes.username)) {
               return usernameRegistrationValidateUpdate(key, existing, incoming);
             }
-            if (keyStr.startsWith(DHT_KEY_PREFIXES.groupOffline)) {
+            if (keyStr.startsWith(modeRuntime.dhtKeyPrefixes.groupOffline)) {
               return groupOfflineValidateUpdate(key, existing, incoming);
             }
-            if (keyStr.startsWith(DHT_KEY_PREFIXES.groupInfoLatest)) {
+            if (keyStr.startsWith(modeRuntime.dhtKeyPrefixes.groupInfoLatest)) {
               return groupInfoLatestValidateUpdate(key, existing, incoming);
             }
-            if (keyStr.startsWith(DHT_KEY_PREFIXES.groupInfoVersion)) {
+            if (keyStr.startsWith(modeRuntime.dhtKeyPrefixes.groupInfoVersion)) {
               return groupInfoVersionedValidateUpdate(key, existing, incoming);
             }
+            console.warn(
+              `[MODE-GUARD][REJECT][dht_validate_update] mode=${networkMode} reason=unknown_namespace key=${keyStr}`
+            );
+            throw new Error('cross_mode_dht_key_rejected');
           }
         }),
         identify: identify({

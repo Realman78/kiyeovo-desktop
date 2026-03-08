@@ -2,11 +2,9 @@ import { ed25519 } from '@noble/curves/ed25519';
 import { gunzipSync } from 'zlib';
 import { fromBase64Url } from '../base64url.js';
 import {
-  GROUP_OFFLINE_BUCKET_PREFIX,
-  GROUP_INFO_LATEST_PREFIX,
-  GROUP_INFO_VERSION_PREFIX,
   GROUP_MAX_MESSAGES_PER_SENDER,
   GROUP_OFFLINE_STORE_MAX_COMPRESSED_BYTES,
+  NETWORK_MODE_CONFIG,
 } from '../../constants.js';
 import type {
   GroupContentMessage,
@@ -17,7 +15,20 @@ import type {
 } from './types.js';
 
 // --- Group offline bucket validator ---
-// Key format: /kiyeovo-group-offline/<groupId>/<keyVersion>/<senderPubKeyBase64url>
+// Key format: /<mode-group-offline-prefix>/<groupId>/<keyVersion>/<senderPubKeyBase64url>
+const GROUP_OFFLINE_BUCKET_PREFIXES = Object.values(NETWORK_MODE_CONFIG).map(
+  (config) => config.dhtNamespaces.groupOffline,
+);
+const GROUP_INFO_LATEST_PREFIXES = Object.values(NETWORK_MODE_CONFIG).map(
+  (config) => config.dhtNamespaces.groupInfoLatest,
+);
+const GROUP_INFO_VERSION_PREFIXES = Object.values(NETWORK_MODE_CONFIG).map(
+  (config) => config.dhtNamespaces.groupInfoVersion,
+);
+
+function hasMatchingPrefix(keyStr: string, prefixes: string[]): boolean {
+  return prefixes.some((prefix) => keyStr.startsWith(`${prefix}/`));
+}
 
 function getOfflineMessageId(message: GroupOfflineMessage): string {
   return message.messageId ?? message.id;
@@ -49,17 +60,17 @@ export async function groupOfflineMessageValidator(
   }
   const keyStr = new TextDecoder().decode(key);
 
-  if (!keyStr.startsWith(GROUP_OFFLINE_BUCKET_PREFIX + '/')) {
+  if (!hasMatchingPrefix(keyStr, GROUP_OFFLINE_BUCKET_PREFIXES)) {
     throw new Error(`Invalid group offline bucket key prefix`);
   }
 
-  // /kiyeovo-group-offline/<groupId>/<keyVersion>/<senderPubKey> = 5 parts (leading slash makes [0] empty)
+  // /<prefix>/<groupId>/<keyVersion>/<senderPubKey> = 5 parts (leading slash makes [0] empty)
   const parts = keyStr.split('/');
   if (parts.length !== 5) {
     throw new Error(`Invalid group offline bucket key format: expected 5 parts, got ${parts.length}`);
   }
 
-  // split('/') gives ['', 'kiyeovo-group-offline', groupId, keyVersion, senderPubKey]
+  // split('/') gives ['', '<prefix-name>', groupId, keyVersion, senderPubKey]
   const pathGroupId = parts[2];
   const pathKeyVersion = parts[3];
   const senderPubKeyBase64url = parts[4];
@@ -214,7 +225,7 @@ function decompressGroupOfflineStore(value: Uint8Array): GroupOfflineStore {
 }
 
 // --- Group info latest validator ---
-// Key format: /kiyeovo-group-info-latest/<groupId>/<creatorPubKeyBase64url>
+// Key format: /<mode-group-info-latest-prefix>/<groupId>/<creatorPubKeyBase64url>
 
 export async function groupInfoLatestValidator(
   key: Uint8Array,
@@ -222,11 +233,11 @@ export async function groupInfoLatestValidator(
 ): Promise<void> {
   const keyStr = new TextDecoder().decode(key);
 
-  if (!keyStr.startsWith(GROUP_INFO_LATEST_PREFIX + '/')) {
+  if (!hasMatchingPrefix(keyStr, GROUP_INFO_LATEST_PREFIXES)) {
     throw new Error('Invalid group info latest key prefix');
   }
 
-  // ['', 'kiyeovo-group-info-latest', groupId, creatorPubKey]
+  // ['', '<prefix-name>', groupId, creatorPubKey]
   const parts = keyStr.split('/');
   if (parts.length !== 4) {
     throw new Error(`Invalid group info latest key format: expected 4 parts, got ${parts.length}`);
@@ -332,7 +343,7 @@ export async function groupInfoLatestValidateUpdate(
 }
 
 // --- Group info versioned validator ---
-// Key format: /kiyeovo-group-info-v/<groupId>/<creatorPubKeyBase64url>/<version>
+// Key format: /<mode-group-info-version-prefix>/<groupId>/<creatorPubKeyBase64url>/<version>
 
 export async function groupInfoVersionedValidator(
   key: Uint8Array,
@@ -340,11 +351,11 @@ export async function groupInfoVersionedValidator(
 ): Promise<void> {
   const keyStr = new TextDecoder().decode(key);
 
-  if (!keyStr.startsWith(GROUP_INFO_VERSION_PREFIX + '/')) {
+  if (!hasMatchingPrefix(keyStr, GROUP_INFO_VERSION_PREFIXES)) {
     throw new Error('Invalid group info versioned key prefix');
   }
 
-  // ['', 'kiyeovo-group-info-v', groupId, creatorPubKey, version]
+  // ['', '<prefix-name>', groupId, creatorPubKey, version]
   const parts = keyStr.split('/');
   if (parts.length !== 5) {
     throw new Error(`Invalid group info versioned key format: expected 5 parts, got ${parts.length}`);

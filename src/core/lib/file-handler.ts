@@ -10,7 +10,7 @@ import { pushable } from "it-pushable";
 import { pipe } from "it-pipe";
 import { StreamHandler } from "./stream-handler.js";
 import mime from "mime-types";
-import { CHUNK_SIZE, DOWNLOADS_DIR, FILE_ACCEPTANCE_TIMEOUT, FILE_OFFER, FILE_OFFER_RESPONSE, FILE_TRANSFER_PROTOCOL, MAX_FILE_MESSAGE_SIZE, MAX_FILE_SIZE, MAX_COPY_ATTEMPTS, CHUNK_RECEIVE_TIMEOUT, CHUNK_IDLE_TIMEOUT, FILE_OFFER_RATE_LIMIT, FILE_OFFER_RATE_LIMIT_WINDOW, MAX_PENDING_FILES_PER_PEER, MAX_PENDING_FILES_TOTAL, FILE_REJECTION_COUNTER_RESET_INTERVAL, SILENT_REJECTION_THRESHOLD_GLOBAL, SILENT_REJECTION_THRESHOLD_PER_PEER } from "../constants.js";
+import { CHUNK_SIZE, DOWNLOADS_DIR, FILE_ACCEPTANCE_TIMEOUT, FILE_OFFER, FILE_OFFER_RESPONSE, MAX_FILE_MESSAGE_SIZE, MAX_FILE_SIZE, MAX_COPY_ATTEMPTS, CHUNK_RECEIVE_TIMEOUT, CHUNK_IDLE_TIMEOUT, FILE_OFFER_RATE_LIMIT, FILE_OFFER_RATE_LIMIT_WINDOW, MAX_PENDING_FILES_PER_PEER, MAX_PENDING_FILES_TOTAL, FILE_REJECTION_COUNTER_RESET_INTERVAL, SILENT_REJECTION_THRESHOLD_GLOBAL, SILENT_REJECTION_THRESHOLD_PER_PEER, getNetworkModeRuntime } from "../constants.js";
 import { MessageHandler } from "./message-handler.js";
 import { generalErrorHandler } from "../utils/general-error.js";
 import { EncryptedUserIdentity } from "./encrypted-user-identity.js";
@@ -48,6 +48,7 @@ export class FileHandler {
   private onFileTransferComplete: (data: FileTransferCompleteEvent) => void;
   private onFileTransferFailed: (data: FileTransferFailedEvent) => void;
   private onPendingFileReceived: (data: PendingFileReceivedEvent) => void;
+  private readonly fileTransferProtocol: string;
 
   constructor(
     node: ChatNode,
@@ -65,6 +66,7 @@ export class FileHandler {
     this.onFileTransferComplete = onFileTransferComplete;
     this.onFileTransferFailed = onFileTransferFailed;
     this.onPendingFileReceived = onPendingFileReceived;
+    this.fileTransferProtocol = getNetworkModeRuntime(this.database.getNetworkMode()).config.fileTransferProtocol;
     const expiredCount = this.database.expirePendingFileOffers(FILE_ACCEPTANCE_TIMEOUT);
     if (expiredCount > 0) {
       console.log(`[FileHandler] Expired ${expiredCount} pending file offer(s) on startup`);
@@ -227,16 +229,12 @@ export class FileHandler {
   }
 
   #setupProtocolHandler(): void {
-    void this.node.handle(FILE_TRANSFER_PROTOCOL, async (context: StreamHandlerContext) => {
-      console.log("RECEIVED FILE TRANSFER", context);
+    void this.node.handle(this.fileTransferProtocol, async (context: StreamHandlerContext) => {
       const { remoteId, stream } = StreamHandler.getRemotePeerInfo(context);
-
 
       if (this.database.isBlocked(remoteId)) return stream.close();
 
-      console.log("IT IS NOT BLOCKED");
-
-      StreamHandler.logIncomingConnection(remoteId, FILE_TRANSFER_PROTOCOL);
+      StreamHandler.logIncomingConnection(remoteId, this.fileTransferProtocol);
 
       try {
         await this.#handleIncomingFile(remoteId, stream);
@@ -839,7 +837,7 @@ export class FileHandler {
         node: this.node,
         database: this.database,
         targetPeerId,
-        protocol: FILE_TRANSFER_PROTOCOL,
+        protocol: this.fileTransferProtocol,
         context: 'file_transfer_send',
       });
 

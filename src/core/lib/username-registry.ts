@@ -1,7 +1,6 @@
 import { ChatDatabase, User } from './db/database.js';
-import * as readline from 'readline';
 import type { ChatNode, UserRegistration } from '../types.js';
-import { ERRORS, REREGISTRATION_INTERVAL, USERNAME_DHT_PREFIX } from '../constants.js';
+import { ERRORS, REREGISTRATION_INTERVAL, getNetworkModeRuntime } from '../constants.js';
 import { EncryptedUserIdentity } from './encrypted-user-identity.js';
 import { generalErrorHandler } from '../utils/general-error.js';
 import { hashUsingSha256 } from '../utils/crypto.js';
@@ -30,10 +29,12 @@ export class UsernameRegistry {
   private userIdentity: EncryptedUserIdentity | null = null;
   public reregistrationInterval: NodeJS.Timeout | null = null;
   private database: ChatDatabase;
+  private readonly usernameDhtPrefix: string;
 
   constructor(node: ChatNode, database: ChatDatabase) {
     this.node = node;
     this.database = database;
+    this.usernameDhtPrefix = getNetworkModeRuntime(database.getNetworkMode()).config.dhtNamespaces.username;
   }
 
   async initialize(userIdentity: EncryptedUserIdentity, onRestoreUsername: (username: string) => void): Promise<void> {
@@ -607,12 +608,12 @@ export class UsernameRegistry {
 
   private buildUsernameByNameKey(username: string): Uint8Array {
     const hashed = hashUsingSha256(username);
-    return UsernameRegistry.TEXT_ENCODER.encode(`${USERNAME_DHT_PREFIX}/by-name/${hashed}`);
+    return UsernameRegistry.TEXT_ENCODER.encode(`${this.usernameDhtPrefix}/by-name/${hashed}`);
   }
 
   private buildUsernameByPeerIdKey(peerId: string): Uint8Array {
     const hashed = hashUsingSha256(peerId);
-    return UsernameRegistry.TEXT_ENCODER.encode(`${USERNAME_DHT_PREFIX}/by-peer/${hashed}`);
+    return UsernameRegistry.TEXT_ENCODER.encode(`${this.usernameDhtPrefix}/by-peer/${hashed}`);
   }
 
 }

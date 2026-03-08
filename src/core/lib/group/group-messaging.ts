@@ -11,6 +11,7 @@ import {
   GROUP_PUBLISH_RETRYABLE_ERROR_PLACEHOLDER,
   GROUP_PUBLISH_RETRY_DELAY_MS,
   GROUP_TOPIC_RECONCILE_INTERVAL,
+  getNetworkModeRuntime,
 } from '../../constants.js';
 import type { ChatDatabase } from '../db/database.js';
 import type { EncryptedUserIdentity } from '../encrypted-user-identity.js';
@@ -48,6 +49,7 @@ interface GroupGraceContext extends GroupContext {
 
 export class GroupMessaging {
   private readonly deps: GroupMessagingDeps;
+  private readonly buildPubsubTopic: (topic: string) => string;
   private readonly groupTopics = new Map<string, string>();
   private readonly groupGraceContexts = new Map<string, GroupGraceContext[]>();
   private readonly graceTopicTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -72,6 +74,7 @@ export class GroupMessaging {
 
   constructor(deps: GroupMessagingDeps) {
     this.deps = deps;
+    this.buildPubsubTopic = getNetworkModeRuntime(this.deps.database.getNetworkMode()).buildPubsubTopic;
   }
 
   start(): void {
@@ -784,7 +787,8 @@ export class GroupMessaging {
 
   private deriveTopic(groupId: string, groupKey: Uint8Array): string {
     const keyHash = createHash('sha256').update(groupKey).digest('hex');
-    return createHash('sha256').update(groupId + keyHash).digest('hex');
+    const rawTopic = createHash('sha256').update(groupId + keyHash).digest('hex');
+    return this.buildPubsubTopic(rawTopic);
   }
 
   private sign(payload: Omit<GroupChatMessage, 'signature'>): string {

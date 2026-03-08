@@ -46,6 +46,15 @@ export interface NetworkModeConfig {
   pubsubTopicPrefix: string;
 }
 
+export interface NetworkModeRuntime {
+  mode: NetworkMode;
+  config: NetworkModeConfig;
+  dhtNamespaceNames: ReturnType<typeof getDhtNamespaceNamesForMode>;
+  dhtKeyPrefixes: ReturnType<typeof getDhtKeyPrefixesForMode>;
+  buildDhtKey: (kind: ModeNamespaceKind, ...parts: Array<string | number>) => string;
+  buildPubsubTopic: (topic: string) => string;
+}
+
 function buildModeConfig(baseProtocol: string, namespacePrefix: string, topicPrefix: string): NetworkModeConfig {
   return {
     protocolName: baseProtocol,
@@ -92,11 +101,6 @@ export function getDhtKeyPrefixesForMode(mode: NetworkMode) {
   } as const;
 }
 
-// Current runtime aliases are intentionally anonymous-mode until U4 rewires
-// all DHT key builders/readers to mode-aware helpers.
-export const DHT_NAMESPACE_NAMES = getDhtNamespaceNamesForMode(NETWORK_MODES.ANONYMOUS);
-export const DHT_KEY_PREFIXES = getDhtKeyPrefixesForMode(NETWORK_MODES.ANONYMOUS);
-
 export function getNetworkModeConfig(mode: NetworkMode): NetworkModeConfig {
   return NETWORK_MODE_CONFIG[mode];
 }
@@ -118,15 +122,21 @@ export function buildModePubsubTopic(mode: NetworkMode, topic: string): string {
   return `${getNetworkModeConfig(mode).pubsubTopicPrefix}/${topic.replace(/^\/+/, '')}`;
 }
 
+export function getNetworkModeRuntime(mode: NetworkMode): NetworkModeRuntime {
+  return {
+    mode,
+    config: getNetworkModeConfig(mode),
+    dhtNamespaceNames: getDhtNamespaceNamesForMode(mode),
+    dhtKeyPrefixes: getDhtKeyPrefixesForMode(mode),
+    buildDhtKey: (kind: ModeNamespaceKind, ...parts: Array<string | number>) =>
+      buildModeDhtKey(mode, kind, ...parts),
+    buildPubsubTopic: (topic: string) => buildModePubsubTopic(mode, topic),
+  };
+}
+
 /**
  * Protocol and network constants
  */
-// Backward-compatible default aliases (anonymous mode stack).
-export const PROTOCOL_NAME = NETWORK_MODE_CONFIG.anonymous.protocolName;
-export const CHAT_PROTOCOL = NETWORK_MODE_CONFIG.anonymous.chatProtocol;
-export const BOOTSTRAP_PROTOCOL = NETWORK_MODE_CONFIG.anonymous.bootstrapProtocol;
-export const FILE_TRANSFER_PROTOCOL = NETWORK_MODE_CONFIG.anonymous.fileTransferProtocol;
-export const BUCKET_NUDGE_PROTOCOL = NETWORK_MODE_CONFIG.anonymous.bucketNudgeProtocol;
 export const BUCKET_NUDGE_COOLDOWN_MS = 5000;
 export const BUCKET_NUDGE_DIAL_TIMEOUT_MS = 5000;
 export const BUCKET_NUDGE_FETCH_DELAY_MS = 4000;
@@ -143,10 +153,7 @@ export const BOOTSTRAP_PORT = 9000;
 /**
  * DHT settings
  */
-export const DHT_PROTOCOL = NETWORK_MODE_CONFIG.anonymous.dhtProtocol;
 export const USERNAME_RECORD_PREFIX = 'kiyeovo-user-';
-export const OFFLINE_BUCKET_PREFIX = NETWORK_MODE_CONFIG.anonymous.dhtNamespaces.offline;
-export const USERNAME_DHT_PREFIX = NETWORK_MODE_CONFIG.anonymous.dhtNamespaces.username;
 export const K_BUCKET_SIZE = 20;
 export const PREFIX_LENGTH = 6;
 export const MDNS_SERVICE_TAG = 'kiyeovo.local';
@@ -334,9 +341,6 @@ export const GROUP_MESSAGE_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
 export const GROUP_HEARTBEAT_MAX_AGE_MS = 5 * 60 * 1000; // 5 minutes
 export const GROUP_ROTATION_GRACE_WINDOW_MS = 60 * 1000; // 60 seconds - grace period after rotation for late messages
 export const GROUP_OLD_TOPIC_SUBSCRIPTION_GRACE_MS = 2 * 60 * 1000; // 2 minutes - keep previous topic subscribed after rekey
-export const GROUP_OFFLINE_BUCKET_PREFIX = NETWORK_MODE_CONFIG.anonymous.dhtNamespaces.groupOffline;
-export const GROUP_INFO_LATEST_PREFIX = NETWORK_MODE_CONFIG.anonymous.dhtNamespaces.groupInfoLatest;
-export const GROUP_INFO_VERSION_PREFIX = NETWORK_MODE_CONFIG.anonymous.dhtNamespaces.groupInfoVersion;
 export const GROUP_DHT_REPUBLISH_INTERVAL = 30 * 60 * 1000; // 30 minutes
 export const GROUP_DHT_REPUBLISH_JITTER = 5 * 60 * 1000; // ±5 minutes
 export const GROUP_INFO_REPUBLISH_STARTUP_DELAY = 60 * 1000; // 60 seconds

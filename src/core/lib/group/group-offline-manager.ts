@@ -8,15 +8,14 @@ import type { ChatDatabase, Chat } from '../db/database.js';
 import type { EncryptedUserIdentity } from '../encrypted-user-identity.js';
 import {
   CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES,
-  GROUP_INFO_VERSION_PREFIX,
   GROUP_MAX_MESSAGES_PER_SENDER,
-  GROUP_OFFLINE_BUCKET_PREFIX,
   GROUP_OFFLINE_CLEANUP_INTERVAL_MS,
   GROUP_OFFLINE_LOCAL_CACHE_MAX_ENTRIES,
   GROUP_OFFLINE_LOCAL_CACHE_TTL_MS,
   GROUP_OFFLINE_MESSAGE_TTL_MS,
   GROUP_OFFLINE_STORE_MAX_COMPRESSED_BYTES,
   GROUP_ROTATION_GRACE_WINDOW_MS,
+  getNetworkModeRuntime,
 } from '../../constants.js';
 import {
   type GroupContentMessage,
@@ -80,6 +79,8 @@ export interface GroupOfflineCheckResult {
 
 export class GroupOfflineManager {
   private readonly deps: GroupOfflineManagerDeps;
+  private readonly groupOfflineBucketPrefix: string;
+  private readonly groupInfoVersionPrefix: string;
   private readonly bucketMutationQueues = new Map<string, Promise<void>>();
   private readonly localStoreCache = new Map<string, CachedStoreEntry>();
   private readonly versionMetaCache = new Map<string, CachedVersionMetaEntry>();
@@ -90,13 +91,16 @@ export class GroupOfflineManager {
 
   constructor(deps: GroupOfflineManagerDeps) {
     this.deps = deps;
+    const runtime = getNetworkModeRuntime(this.deps.database.getNetworkMode());
+    this.groupOfflineBucketPrefix = runtime.config.dhtNamespaces.groupOffline;
+    this.groupInfoVersionPrefix = runtime.config.dhtNamespaces.groupInfoVersion;
   }
 
   async storeGroupMessage(message: GroupContentMessage): Promise<void> {
     console.log("storing group message", message);
     this.pruneLocalCaches();
     const ownPubKeyBase64url = toBase64Url(this.deps.userIdentity.signingPublicKey);
-    const bucketKey = `${GROUP_OFFLINE_BUCKET_PREFIX}/${message.groupId}/${message.keyVersion}/${ownPubKeyBase64url}`;
+    const bucketKey = `${this.groupOfflineBucketPrefix}/${message.groupId}/${message.keyVersion}/${ownPubKeyBase64url}`;
     console.log("to bucket", bucketKey);
     const offlineMessage: GroupOfflineMessage = {
       id: message.messageId,
@@ -387,7 +391,7 @@ export class GroupOfflineManager {
           const sender = this.deps.database.getUserByPeerId(senderPeerId);
           if (!sender) return null;
           const senderPubKeyBase64url = toBase64Url(Buffer.from(sender.signing_public_key, 'base64'));
-          const bucketKey = `${GROUP_OFFLINE_BUCKET_PREFIX}/${chat.group_id}/${epoch.key_version}/${senderPubKeyBase64url}`;
+          const bucketKey = `${this.groupOfflineBucketPrefix}/${chat.group_id}/${epoch.key_version}/${senderPubKeyBase64url}`;
           return { senderPeerId, sender, bucketKey };
         })
         .filter((item): item is { senderPeerId: string; sender: NonNullable<ReturnType<ChatDatabase['getUserByPeerId']>>; bucketKey: string } => item !== null);
@@ -600,7 +604,7 @@ export class GroupOfflineManager {
     if (!creatorPubBytes) return null;
 
     const creatorPubKeyBase64url = toBase64Url(creatorPubBytes);
-    const dhtKey = `${GROUP_INFO_VERSION_PREFIX}/${chat.group_id}/${creatorPubKeyBase64url}/${keyVersion}`;
+    const dhtKey = `${this.groupInfoVersionPrefix}/${chat.group_id}/${creatorPubKeyBase64url}/${keyVersion}`;
     const keyBytes = new TextEncoder().encode(dhtKey);
     let best: GroupInfoVersioned | null = null;
     let valueEvents = 0;
@@ -1001,7 +1005,7 @@ export class GroupOfflineManager {
         .sort((a, b) => a.key_version - b.key_version);
 
       for (const epoch of history) {
-        const bucketKey = `${GROUP_OFFLINE_BUCKET_PREFIX}/${chat.group_id}/${epoch.key_version}/${ownPubKeyBase64url}`;
+        const bucketKey = `${this.groupOfflineBucketPrefix}/${chat.group_id}/${epoch.key_version}/${ownPubKeyBase64url}`;
         await this.withBucketMutationLock(bucketKey, async () => {
           const existing = this.getCachedStore(bucketKey) ?? await this.getLatestStore(bucketKey);
           if (!existing || existing.messages.length === 0) return;
@@ -1068,7 +1072,7 @@ export class GroupOfflineManager {
     const successorMetaCacheKey = `${chat.group_id}:${epoch.key_version + 1}`;
     this.versionMetaCache.delete(successorMetaCacheKey);
 
-    const bucketPrefix = `${GROUP_OFFLINE_BUCKET_PREFIX}/${chat.group_id}/${epoch.key_version}/`;
+    const bucketPrefix = `${this.groupOfflineBucketPrefix}/${chat.group_id}/${epoch.key_version}/`;
     this.deps.database.deleteGroupOfflineSentMessagesByPrefix(bucketPrefix);
     for (const bucketKey of this.localStoreCache.keys()) {
       if (bucketKey.startsWith(bucketPrefix)) {

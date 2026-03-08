@@ -2,7 +2,7 @@ import type { PeerId, Stream } from '@libp2p/interface';
 import { multiaddr } from '@multiformats/multiaddr';
 
 import type { ChatNode } from '../types.js';
-import { FAST_RELAY_MULTIADDRS_SETTING_KEY, NETWORK_MODES } from '../constants.js';
+import { FAST_RELAY_MULTIADDRS_SETTING_KEY, NETWORK_MODES, getNetworkModeConfig } from '../constants.js';
 import { DEFAULT_FAST_RELAY_MULTIADDRS } from '../default-relay-nodes.js';
 import type { ChatDatabase } from './db/database.js';
 
@@ -42,12 +42,23 @@ export async function dialProtocolWithRelayFallback(
     context,
   } = params;
 
+  const networkMode = database.getNetworkMode();
+  const modeConfig = getNetworkModeConfig(networkMode);
+  const expectedProtocolPrefix = `${modeConfig.protocolName}/`;
+  if (!protocol.startsWith(expectedProtocolPrefix)) {
+    console.warn(
+      `[MODE-GUARD][REJECT][dial_protocol] mode=${networkMode} context=${context} ` +
+      `protocol=${protocol} expectedPrefix=${expectedProtocolPrefix}`
+    );
+    throw new Error('cross_mode_protocol_rejected');
+  }
+
   const dialOptions = { runOnLimitedConnection: true };
 
   try {
     return await node.dialProtocol(targetPeerId, protocol, dialOptions);
   } catch (directDialError: unknown) {
-    if (database.getNetworkMode() !== NETWORK_MODES.FAST) {
+    if (networkMode !== NETWORK_MODES.FAST) {
       throw directDialError;
     }
 

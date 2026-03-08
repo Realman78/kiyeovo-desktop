@@ -4,9 +4,10 @@ import { gunzipSync, gunzip } from 'zlib';
 import { promisify } from 'util';
 import { fromBase64Url } from './base64url.js';
 import { generalErrorHandler } from '../utils/general-error.js';
-import { MAX_MESSAGES_PER_STORE, MESSAGE_TTL, OFFLINE_BUCKET_PREFIX } from '../constants.js';
+import { MAX_MESSAGES_PER_STORE, MESSAGE_TTL, NETWORK_MODE_CONFIG } from '../constants.js';
 
 const gunzipAsync = promisify(gunzip);
+const OFFLINE_BUCKET_PREFIXES = Object.values(NETWORK_MODE_CONFIG).map((config) => config.dhtNamespaces.offline);
 
 /**
  * The signed payload structure included in each offline message
@@ -78,22 +79,7 @@ export async function offlineMessageValidator(
 ): Promise<void> {
   try {
     const keyStr = new TextDecoder().decode(key);
-
-    // 1. Check key format
-    if (!keyStr.startsWith(OFFLINE_BUCKET_PREFIX + '/')) {
-      throw new Error(`Invalid offline bucket key prefix: ${keyStr.slice(0, 20)}...`);
-    }
-
-    // 2. Parse key parts: /kiyeovo-offline/<secret>/<sender_pubkey>
-    const parts = keyStr.split('/');
-    if (parts.length !== 4) {
-      throw new Error(`Invalid bucket key format: expected 4 parts, got ${parts.length}`);
-    }
-
-    const senderPubKeyBase64url = parts[3];
-    if (!senderPubKeyBase64url) {
-      throw new Error('Missing sender public key in bucket key');
-    }
+    const senderPubKeyBase64url = parseOfflineBucketSenderPubKeyBase64Url(keyStr);
 
     // Decode sender public key from bucket key
     const senderPubKey = fromBase64Url(senderPubKeyBase64url);
@@ -133,6 +119,25 @@ export async function offlineMessageValidator(
     generalErrorHandler(error, 'DHT offline message validation failed');
     throw error; // Re-throw to reject the DHT write
   }
+}
+
+function parseOfflineBucketSenderPubKeyBase64Url(keyStr: string): string {
+  const matchedPrefix = OFFLINE_BUCKET_PREFIXES.find((prefix) => keyStr.startsWith(`${prefix}/`));
+  if (!matchedPrefix) {
+    throw new Error(`Invalid offline bucket key prefix: ${keyStr.slice(0, 20)}...`);
+  }
+
+  const parts = keyStr.split('/');
+  if (parts.length !== 4) {
+    throw new Error(`Invalid bucket key format: expected 4 parts, got ${parts.length}`);
+  }
+
+  const senderPubKeyBase64url = parts[3];
+  if (!senderPubKeyBase64url) {
+    throw new Error('Missing sender public key in bucket key');
+  }
+
+  return senderPubKeyBase64url;
 }
 
 /**

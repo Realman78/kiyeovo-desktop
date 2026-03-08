@@ -8,14 +8,11 @@ import type { EncryptedUserIdentity } from '../encrypted-user-identity.js';
 import { OfflineMessageManager } from '../offline-message-manager.js';
 import { toBase64Url } from '../base64url.js';
 import {
-  OFFLINE_BUCKET_PREFIX,
   GROUP_INVITE_LIFETIME,
   GROUP_MAX_MEMBERS,
-  GROUP_INFO_LATEST_PREFIX,
-  GROUP_INFO_VERSION_PREFIX,
-  GROUP_OFFLINE_BUCKET_PREFIX,
   GROUP_INFO_REPUBLISH_RETRY_BASE_DELAY,
   GROUP_ROTATION_IO_CONCURRENCY,
+  getNetworkModeRuntime,
 } from '../../constants.js';
 import {
   GroupMessageType,
@@ -65,9 +62,18 @@ export interface GroupCreateResult {
 
 export class GroupCreator {
   private deps: GroupCreatorDeps;
+  private readonly directOfflineBucketPrefix: string;
+  private readonly groupOfflineBucketPrefix: string;
+  private readonly groupInfoLatestPrefix: string;
+  private readonly groupInfoVersionPrefix: string;
 
   constructor(deps: GroupCreatorDeps) {
     this.deps = deps;
+    const runtime = getNetworkModeRuntime(this.deps.database.getNetworkMode());
+    this.directOfflineBucketPrefix = runtime.config.dhtNamespaces.offline;
+    this.groupOfflineBucketPrefix = runtime.config.dhtNamespaces.groupOffline;
+    this.groupInfoLatestPrefix = runtime.config.dhtNamespaces.groupInfoLatest;
+    this.groupInfoVersionPrefix = runtime.config.dhtNamespaces.groupInfoVersion;
   }
 
   async createGroup(groupName: string, invitedPeerIds: string[]): Promise<GroupCreateResult> {
@@ -818,7 +824,7 @@ export class GroupCreator {
 
       // Construct GroupWelcome
       const creatorPubKeyBase64url = toBase64Url(userIdentity.signingPublicKey);
-      const groupInfoLatestDhtKey = `${GROUP_INFO_LATEST_PREFIX}/${groupId}/${creatorPubKeyBase64url}`;
+      const groupInfoLatestDhtKey = `${this.groupInfoLatestPrefix}/${groupId}/${creatorPubKeyBase64url}`;
 
       const welcome: Omit<GroupWelcome, 'signature'> = {
         type: GroupMessageType.GROUP_WELCOME,
@@ -1138,7 +1144,7 @@ export class GroupCreator {
     const signedVersioned: GroupInfoVersioned = { ...versionedRecord, creatorSignature: versionedSignature };
 
     // Publish versioned record
-    const versionedDhtKey = `${GROUP_INFO_VERSION_PREFIX}/${groupId}/${creatorPubKeyBase64url}/${keyVersion}`;
+    const versionedDhtKey = `${this.groupInfoVersionPrefix}/${groupId}/${creatorPubKeyBase64url}/${keyVersion}`;
 
     // Publish latest pointer
     const latestPayload: Omit<GroupInfoLatest, 'creatorSignature'> = {
@@ -1151,7 +1157,7 @@ export class GroupCreator {
     const latestSignature = this.sign(latestPayload);
     const signedLatest: GroupInfoLatest = { ...latestPayload, creatorSignature: latestSignature };
 
-    const latestDhtKey = `${GROUP_INFO_LATEST_PREFIX}/${groupId}/${creatorPubKeyBase64url}`;
+    const latestDhtKey = `${this.groupInfoLatestPrefix}/${groupId}/${creatorPubKeyBase64url}`;
     const startedAt = Date.now();
     console.log(
       `[GROUP-INFO][PUBLISH][START] group=${groupId} keyVersion=${keyVersion} ` +
@@ -1277,7 +1283,7 @@ export class GroupCreator {
     if (!sender) return 0;
 
     const senderPubKeyBase64url = toBase64Url(Buffer.from(sender.signing_public_key, 'base64'));
-    const bucketKey = `${GROUP_OFFLINE_BUCKET_PREFIX}/${groupId}/${keyVersion}/${senderPubKeyBase64url}`;
+    const bucketKey = `${this.groupOfflineBucketPrefix}/${groupId}/${keyVersion}/${senderPubKeyBase64url}`;
     const keyBytes = new TextEncoder().encode(bucketKey);
 
     let best: GroupOfflineStore | null = null;
@@ -1358,7 +1364,7 @@ export class GroupCreator {
     }
 
     const ourPubKeyBase64url = toBase64Url(userIdentity.signingPublicKey);
-    const writeBucketKey = `${OFFLINE_BUCKET_PREFIX}/${bucketSecret}/${ourPubKeyBase64url}`;
+    const writeBucketKey = `${this.directOfflineBucketPrefix}/${bucketSecret}/${ourPubKeyBase64url}`;
     const bucketTag = writeBucketKey.slice(-12);
 
     // Wrap the group control message as an offline message

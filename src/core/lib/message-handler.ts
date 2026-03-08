@@ -1,11 +1,9 @@
 import { peerIdFromString } from '@libp2p/peer-id';
 import type { ChatNode, StreamHandlerContext, AuthenticatedEncryptedMessage, OfflineMessage, OfflineSenderInfo, ConversationSession, EncryptedMessage, ContactMode, KeyExchangeEvent, ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent, SendMessageResponse, StrippedMessage, MessageSentStatus, FileTransferProgressEvent, FileTransferCompleteEvent, FileTransferFailedEvent, PendingFileReceivedEvent, GroupChatActivatedEvent, GroupMembersUpdatedEvent, GroupOfflineGapWarning } from '../types.js';
 import {
-  CHAT_PROTOCOL,
   CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES,
   MESSAGE_TIMEOUT,
   SESSION_MANAGER_CLEANUP_INTERVAL,
-  BUCKET_NUDGE_PROTOCOL,
   BUCKET_NUDGE_COOLDOWN_MS,
   BUCKET_NUDGE_DIAL_TIMEOUT_MS,
   BUCKET_NUDGE_FETCH_DELAY_MS,
@@ -17,6 +15,7 @@ import {
   GROUP_INFO_REPUBLISH_INTERVAL,
   GROUP_INFO_REPUBLISH_JITTER,
   ERRORS,
+  getNetworkModeRuntime,
 } from '../constants.js';
 import { SessionManager } from './session-manager.js';
 import { MessageEncryption } from './message-encryption.js';
@@ -37,6 +36,14 @@ import { GroupOfflineManager } from './group/group-offline-manager.js';
 import { GroupAckRepublisher } from './group/group-ack-republisher.js';
 import { GroupInfoRepublisher } from './group/group-info-republisher.js';
 import { dialProtocolWithRelayFallback } from './protocol-dialer.js';
+
+type OfflineReadBucketInfo = ReturnType<ChatDatabase['getOfflineReadBucketInfo']>[number];
+type OfflineReadBucketInfoForChats = ReturnType<ChatDatabase['getOfflineReadBucketInfoForChats']>[number];
+type OfflineReadBucketInfoAny = OfflineReadBucketInfo | OfflineReadBucketInfoForChats;
+
+function hasChatId(info: OfflineReadBucketInfoAny): info is OfflineReadBucketInfoForChats {
+  return 'chat_id' in info;
+}
 
 /**
  * Main message handler that orchestrates all message handling components
@@ -69,6 +76,9 @@ export class MessageHandler {
   private groupMessaging: GroupMessaging;
   private groupAckRepublisher: GroupAckRepublisher;
   private groupInfoRepublisher: GroupInfoRepublisher;
+  private readonly bucketNudgeProtocol: string;
+  private readonly chatProtocol: string;
+  private readonly expectedOfflineBucketPrefix: string;
 
   constructor(
     node: ChatNode,
@@ -97,6 +107,10 @@ export class MessageHandler {
     this.onOfflineMessagesFetchComplete = onOfflineMessagesFetchComplete;
     this.keyExchange = new KeyExchange(node, usernameRegistry, this.sessionManager, database, onKeyExchangeSent, onContactRequestReceived, onChatCreated, onKeyExchangeFailed);
     this.fileHandler = new FileHandler(node, this, database, onFileTransferProgress, onFileTransferComplete, onFileTransferFailed, onPendingFileReceived);
+    const modeConfig = getNetworkModeRuntime(database.getNetworkMode()).config;
+    this.bucketNudgeProtocol = modeConfig.bucketNudgeProtocol;
+    this.chatProtocol = modeConfig.chatProtocol;
+    this.expectedOfflineBucketPrefix = `${modeConfig.dhtNamespaces.offline}/`;
     const userIdentity = this.usernameRegistry.getUserIdentity();
     if (!userIdentity) {
       throw new Error('User identity not available');
@@ -191,7 +205,7 @@ export class MessageHandler {
     void (async () => {
       try {
         const targetPeerId = peerIdFromString(peerId);
-        const stream = await this.node.dialProtocol(targetPeerId, BUCKET_NUDGE_PROTOCOL, {
+        const stream = await this.node.dialProtocol(targetPeerId, this.bucketNudgeProtocol, {
           signal: AbortSignal.timeout(BUCKET_NUDGE_DIAL_TIMEOUT_MS),
           runOnLimitedConnection: true,
         });
@@ -215,7 +229,7 @@ export class MessageHandler {
    * Sets up the chat protocol handler for incoming messages
    */
   private setupProtocolHandler(): void {
-    void this.node.handle(BUCKET_NUDGE_PROTOCOL, async (context: StreamHandlerContext) => {
+    void this.node.handle(this.bucketNudgeProtocol, async (context: StreamHandlerContext) => {
       const { remoteId, stream } = StreamHandler.getRemotePeerInfo(context);
       const nudgePayload = await this.readBucketNudgePayload(stream);
       await stream.close();
@@ -257,7 +271,7 @@ export class MessageHandler {
       runOnLimitedConnection: true,
     });
 
-    void this.node.handle(CHAT_PROTOCOL, async (context: StreamHandlerContext) => {
+    void this.node.handle(this.chatProtocol, async (context: StreamHandlerContext) => {
       const { remoteId, stream } = StreamHandler.getRemotePeerInfo(context);
       // Immediately check if the user is blocked
       try {
@@ -268,7 +282,7 @@ export class MessageHandler {
         generalErrorHandler(e, `Error checking if user is blocked`);
         return;
       }
-      StreamHandler.logIncomingConnection(remoteId, CHAT_PROTOCOL);
+      StreamHandler.logIncomingConnection(remoteId, this.chatProtocol);
 
       try {
         const message = await StreamHandler.readMessageFromStream<EncryptedMessage>(stream);
@@ -791,7 +805,7 @@ export class MessageHandler {
           node: this.node,
           database: this.database,
           targetPeerId,
-          protocol: CHAT_PROTOCOL,
+          protocol: this.chatProtocol,
           context: 'send_message_online',
         });
 
@@ -1119,7 +1133,7 @@ export class MessageHandler {
     );
 
     // Get bucket info for reading: secret + peer's signing public key
-    const bucketInfoList = chatIds
+    const bucketInfoList: OfflineReadBucketInfoAny[] = chatIds
       ? this.database.getOfflineReadBucketInfoForChats(chatIds)
       : this.database.getOfflineReadBucketInfo(this.getChatsToCheckForOfflineMessages());
 
@@ -1139,8 +1153,16 @@ export class MessageHandler {
         info.offline_bucket_secret,
         info.signing_public_key
       );
+      if (!readBucketKey.startsWith(this.expectedOfflineBucketPrefix)) {
+        const chatIdForLog = hasChatId(info) ? String(info.chat_id) : 'n/a';
+        console.warn(
+          `[MODE-GUARD][REJECT][offline_lookup] run=${runId} chatId=${chatIdForLog} peer=${info.peer_id} ` +
+          `reason=bucket_prefix_mismatch expectedPrefix=${this.expectedOfflineBucketPrefix} got=${readBucketKey.slice(0, 64)}...`
+        );
+        continue;
+      }
 
-      const chatId = 'chat_id' in info ? (info as any).chat_id as number : undefined;
+      const chatId = hasChatId(info) ? info.chat_id : undefined;
 
       if (chatId !== undefined) {
         readBuckets.push({
@@ -1204,6 +1226,13 @@ export class MessageHandler {
 
     for (const msg of store.messages) {
       if (!msg.bucket_key) continue;
+      if (!msg.bucket_key.startsWith(this.expectedOfflineBucketPrefix)) {
+        console.warn(
+          `[MODE-GUARD][REJECT][offline_lookup] run=${runId} reason=message_bucket_prefix_mismatch ` +
+          `expectedPrefix=${this.expectedOfflineBucketPrefix} got=${msg.bucket_key.slice(0, 64)}... msgId=${msg.id}`
+        );
+        continue;
+      }
       try {
         const userIdentity = this.usernameRegistry.getUserIdentity();
         if (!userIdentity) {

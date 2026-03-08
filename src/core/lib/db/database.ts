@@ -13,9 +13,9 @@ import {
     DEFAULT_NETWORK_MODE,
     FAST_RELAY_MULTIADDRS_INITIALIZED_SETTING_KEY,
     FAST_RELAY_MULTIADDRS_SETTING_KEY,
-    GROUP_OFFLINE_BUCKET_PREFIX,
     NETWORK_MODE_SETTING_KEY,
     PENDING_KEY_EXCHANGE_EXPIRATION,
+    getNetworkModeRuntime,
     isNetworkMode,
 } from '../../constants.js';
 
@@ -2381,6 +2381,7 @@ export class ChatDatabase {
     }
 
     resetGroupRuntimeForReinvite(chatId: number, groupId: string): void {
+        const groupOfflineBucketPrefix = getNetworkModeRuntime(this.getNetworkMode()).config.dhtNamespaces.groupOffline;
         const clearChatRuntimeStmt = this.db.prepare(`
             UPDATE chats
             SET permanent_key = NULL,
@@ -2402,7 +2403,7 @@ export class ChatDatabase {
             deleteOfflineCursorsStmt.run(gId);
             deleteSenderSeqStmt.run(gId);
             deleteMemberSeqStmt.run(gId);
-            deleteOfflineSentStmt.run(`${GROUP_OFFLINE_BUCKET_PREFIX}/${gId}/%`);
+            deleteOfflineSentStmt.run(`${groupOfflineBucketPrefix}/${gId}/%`);
         });
 
         txn(chatId, groupId);

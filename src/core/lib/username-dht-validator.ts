@@ -1,4 +1,4 @@
-import { REREGISTRATION_INTERVAL, USERNAME_DHT_PREFIX } from '../constants.js';
+import { NETWORK_MODE_CONFIG, REREGISTRATION_INTERVAL } from '../constants.js';
 import type { UserRegistration } from '../types.js';
 import { hashUsingSha256 } from '../utils/crypto.js';
 import {
@@ -9,10 +9,12 @@ import {
 
 type UsernameKeyKind = 'by-name' | 'by-peer';
 const MAX_REGISTRATION_AGE = REREGISTRATION_INTERVAL * 2;
+const USERNAME_DHT_PREFIXES = Object.values(NETWORK_MODE_CONFIG).map((config) => config.dhtNamespaces.username);
 
 function parseUsernameKey(key: Uint8Array): { kind: UsernameKeyKind; hash: string } {
   const keyStr = new TextDecoder().decode(key);
-  if (!keyStr.startsWith(`${USERNAME_DHT_PREFIX}/`)) {
+  const matchedPrefix = USERNAME_DHT_PREFIXES.find((prefix) => keyStr.startsWith(`${prefix}/`));
+  if (!matchedPrefix) {
     throw new Error('Invalid username key prefix');
   }
 
