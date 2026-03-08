@@ -56,6 +56,14 @@ type DhtAdmissionApi = {
   onPeerConnect: (peerData: PeerInfo) => Promise<void>;
 };
 
+export type FastRelayDialResult = {
+  attempted: number;
+  connected: number;
+  addresses: string[];
+  source: 'db' | 'default' | 'none';
+  skipped: boolean;
+};
+
 function parseCommaSeparatedEnv(key: string): string[] {
   return (process.env[key] ?? '')
     .split(',')
@@ -74,7 +82,7 @@ function dedupe(values: string[]): string[] {
   return Array.from(new Set(values));
 }
 
-function getConfiguredFastRelayAddrs(database: ChatDatabase): { addresses: string[]; source: 'db' | 'default' } {
+export function getConfiguredFastRelayAddrs(database: ChatDatabase): { addresses: string[]; source: 'db' | 'default' } {
   const settingValue = database.getSetting(FAST_RELAY_MULTIADDRS_SETTING_KEY);
   if (settingValue !== null) {
     const fromDb = dedupe(parseAddressList(settingValue));
@@ -100,6 +108,77 @@ function getDhtAdmissionApi(node: ChatNode): DhtAdmissionApi | null {
   }
 
   return dhtCandidate as DhtAdmissionApi;
+}
+
+function logFastCircuitState(node: ChatNode): void {
+  const circuitAddrs = node
+    .getMultiaddrs()
+    .map((addr) => addr.toString())
+    .filter((addr) => addr.includes('/p2p-circuit'));
+
+  console.log(
+    `[STACK][FAST][RELAY] localCircuitAddrs=${circuitAddrs.length} values=${circuitAddrs.join(',') || 'none'}`
+  );
+}
+
+export async function dialConfiguredFastRelays(node: ChatNode, database: ChatDatabase): Promise<FastRelayDialResult> {
+  const networkMode = database.getNetworkMode();
+  if (networkMode !== NETWORK_MODES.FAST) {
+    return {
+      attempted: 0,
+      connected: 0,
+      addresses: [],
+      source: 'none',
+      skipped: true,
+    };
+  }
+
+  const fastRelayConfig = getConfiguredFastRelayAddrs(database);
+  const fastRelayAddrs = fastRelayConfig.addresses;
+  if (fastRelayAddrs.length === 0) {
+    console.log(`[STACK][FAST] no relay addresses configured (source=${fastRelayConfig.source})`);
+    logFastCircuitState(node);
+    return {
+      attempted: 0,
+      connected: 0,
+      addresses: [],
+      source: fastRelayConfig.source,
+      skipped: false,
+    };
+  }
+
+  const concurrency = Math.min(5, fastRelayAddrs.length);
+  console.log(
+    `[STACK][FAST] attempting deterministic relay dials count=${fastRelayAddrs.length} concurrency=${concurrency} source=${fastRelayConfig.source}`
+  );
+  let connected = 0;
+  let cursor = 0;
+
+  const runWorker = async (): Promise<void> => {
+    while (cursor < fastRelayAddrs.length) {
+      const relayAddr = fastRelayAddrs[cursor++];
+      try {
+        await node.dial(multiaddr(relayAddr));
+        connected++;
+        console.log(`[STACK][FAST][RELAY] connected ${relayAddr}`);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : 'unknown';
+        console.warn(`[STACK][FAST][RELAY] failed ${relayAddr} reason=${reason}`);
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: concurrency }, () => runWorker()));
+  console.log(`[STACK][FAST][RELAY] connected=${connected}/${fastRelayAddrs.length}`);
+  logFastCircuitState(node);
+
+  return {
+    attempted: fastRelayAddrs.length,
+    connected,
+    addresses: fastRelayAddrs,
+    source: fastRelayConfig.source,
+    skipped: false,
+  };
 }
 
 export function createTransportArray(params: {
@@ -401,54 +480,6 @@ export async function connectToBootstrap(node: ChatNode, database: ChatDatabase)
     ...envAddresses,
   ]));
 
-  const fastRelayConfig = networkMode === NETWORK_MODES.FAST
-    ? getConfiguredFastRelayAddrs(database)
-    : { addresses: [], source: 'none' as const };
-  const fastRelayAddrs = fastRelayConfig.addresses;
-  const logFastCircuitState = (): void => {
-    if (networkMode !== NETWORK_MODES.FAST) {
-      return;
-    }
-
-    const circuitAddrs = node
-      .getMultiaddrs()
-      .map((addr) => addr.toString())
-      .filter((addr) => addr.includes('/p2p-circuit'));
-
-    console.log(
-      `[STACK][FAST][RELAY] localCircuitAddrs=${circuitAddrs.length} values=${circuitAddrs.join(',') || 'none'}`
-    );
-  };
-
-  const dialFastRelays = async (): Promise<void> => {
-    if (networkMode !== NETWORK_MODES.FAST || fastRelayAddrs.length === 0) {
-      return;
-    }
-
-    const concurrency = Math.min(5, fastRelayAddrs.length);
-    console.log(`[STACK][FAST] attempting deterministic relay dials count=${fastRelayAddrs.length} concurrency=${concurrency} source=${fastRelayConfig.source}`);
-    let connected = 0;
-    let cursor = 0;
-
-    const runWorker = async (): Promise<void> => {
-      while (cursor < fastRelayAddrs.length) {
-        const relayAddr = fastRelayAddrs[cursor++];
-        try {
-          await node.dial(multiaddr(relayAddr));
-          connected++;
-          console.log(`[STACK][FAST][RELAY] connected ${relayAddr}`);
-        } catch (error) {
-          const reason = error instanceof Error ? error.message : 'unknown';
-          console.warn(`[STACK][FAST][RELAY] failed ${relayAddr} reason=${reason}`);
-        }
-      }
-    };
-
-    await Promise.all(Array.from({ length: concurrency }, () => runWorker()));
-    console.log(`[STACK][FAST][RELAY] connected=${connected}/${fastRelayAddrs.length}`);
-    logFastCircuitState();
-  };
-
   if (addressesToTry.length === 0 && envAddresses.length > 0) {
     // Defensive fallback in case DB entries are stale for current mode.
     addressesToTry = filterByMode(envAddresses);
@@ -456,7 +487,7 @@ export async function connectToBootstrap(node: ChatNode, database: ChatDatabase)
 
   if (addressesToTry.length === 0) {
     console.log(`[STACK] No bootstrap addresses configured for mode=${networkMode}.`);
-    await dialFastRelays();
+    await dialConfiguredFastRelays(node, database);
     // Status will be sent by periodic peer count checker
     return;
   }
@@ -492,7 +523,7 @@ export async function connectToBootstrap(node: ChatNode, database: ChatDatabase)
       console.log(`Connected to bootstrap peer: ${addr}`);
       database.updateBootstrapNodeStatus(addr, true);
       await probeDhtAdmission(connection?.remotePeer);
-      await dialFastRelays();
+      await dialConfiguredFastRelays(node, database);
 
       return;
 
@@ -503,6 +534,6 @@ export async function connectToBootstrap(node: ChatNode, database: ChatDatabase)
   }
 
   console.log('No hardcoded bootstrap nodes available.');
-  await dialFastRelays();
+  await dialConfiguredFastRelays(node, database);
   // Status will be sent by periodic peer count checker
-} 
+}

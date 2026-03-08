@@ -1,11 +1,17 @@
 import { useState, useEffect } from "react";
-import { Wifi, WifiOff, Plus, Trash2, RefreshCw, Loader2, Copy, Check } from "lucide-react";
+import { Wifi, WifiOff, Loader2 } from "lucide-react";
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../ui/Dialog";
-import { Button } from "../../ui/Button";
-import { Input } from "../../ui/Input";
+import { useToast } from "../../ui/use-toast";
+import type { NetworkMode } from "../../../../core/types";
+import { ConnectionNodesTab } from "./ConnectionNodesTab";
 
 interface BootstrapNode {
   id: string;
+  address: string;
+  connected: boolean;
+}
+
+interface RelayNode {
   address: string;
   connected: boolean;
 }
@@ -21,139 +27,253 @@ const ConnectionStatusDialog = ({
   onOpenChange,
   isConnected,
 }: ConnectionStatusDialogProps) => {
-  const [nodes, setNodes] = useState<BootstrapNode[]>([]);
-  const [newAddress, setNewAddress] = useState("");
-  const [isLoadingNodes, setIsLoadingNodes] = useState(true);
-  const [nodesError, setNodesError] = useState<string | null>(null);
-  const [isRetrying, setIsRetrying] = useState(false);
-  const [isCopied, setIsCopied] = useState(false);
+  const { toast } = useToast();
+  const [activeTab, setActiveTab] = useState<'bootstrap' | 'relays'>('bootstrap');
+  const [networkMode, setNetworkMode] = useState<NetworkMode>('fast');
+
+  const [bootstrapNodes, setBootstrapNodes] = useState<BootstrapNode[]>([]);
+  const [relayNodes, setRelayNodes] = useState<RelayNode[]>([]);
+
+  const [newBootstrapAddress, setNewBootstrapAddress] = useState("");
+  const [newRelayAddress, setNewRelayAddress] = useState("");
+
+  const [isLoadingBootstrapNodes, setIsLoadingBootstrapNodes] = useState(true);
+  const [isLoadingRelayNodes, setIsLoadingRelayNodes] = useState(true);
+  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
+  const [relayError, setRelayError] = useState<string | null>(null);
+  const [isRetryingBootstrap, setIsRetryingBootstrap] = useState(false);
+  const [isRetryingRelays, setIsRetryingRelays] = useState(false);
+  const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
+
+  const refreshBootstrapNodes = async () => {
+    const nodesResult = await window.kiyeovoAPI.getBootstrapNodes();
+    if (!nodesResult.success) {
+      throw new Error(nodesResult.error || 'Failed to fetch bootstrap nodes');
+    }
+
+    const fetchedNodes: BootstrapNode[] = nodesResult.nodes.map((node, index) => ({
+      id: `${index}`,
+      address: node.address,
+      connected: node.connected,
+    }));
+    setBootstrapNodes(fetchedNodes);
+  };
+
+  const refreshRelayNodes = async () => {
+    const relayResult = await window.kiyeovoAPI.getRelayStatus();
+    if (!relayResult.success) {
+      throw new Error(relayResult.error || 'Failed to fetch relay nodes');
+    }
+    setRelayNodes(relayResult.nodes);
+  };
 
   useEffect(() => {
-    if (open) {
-      const fetchBootstrapNodes = async () => {
-        setIsLoadingNodes(true);
-        setNodesError(null);
+    if (!open) return;
 
-        try {
-          const result = await window.kiyeovoAPI.getBootstrapNodes();
+    const fetchDialogData = async () => {
+      setIsLoadingBootstrapNodes(true);
+      setIsLoadingRelayNodes(true);
+      setBootstrapError(null);
+      setRelayError(null);
 
-          if (result.success) {
-            const fetchedNodes: BootstrapNode[] = result.nodes.map((node, index) => ({
-              id: `${index}`,
-              address: node.address,
-              connected: node.connected,
-            }));
-            setNodes(fetchedNodes);
-          } else {
-            setNodesError(result.error || 'Failed to fetch bootstrap nodes');
-          }
-        } catch (error) {
-          console.error('Failed to fetch bootstrap nodes:', error);
-          setNodesError(error instanceof Error ? error.message : 'Unexpected error occurred');
-        } finally {
-          setIsLoadingNodes(false);
+      try {
+        const modeResult = await window.kiyeovoAPI.getNetworkMode();
+        if (!modeResult.success) {
+          throw new Error(modeResult.error || 'Failed to fetch network mode');
         }
-      };
+        setNetworkMode(modeResult.mode);
 
-      void fetchBootstrapNodes();
-    }
+        await refreshBootstrapNodes();
+        if (modeResult.mode === 'fast') {
+          await refreshRelayNodes();
+        } else {
+          setRelayNodes([]);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unexpected error occurred';
+        setBootstrapError(message);
+        setRelayError(message);
+      } finally {
+        setIsLoadingBootstrapNodes(false);
+        setIsLoadingRelayNodes(false);
+      }
+    };
+
+    void fetchDialogData();
   }, [open]);
 
+  useEffect(() => {
+    if (networkMode !== 'fast' && activeTab === 'relays') {
+      setActiveTab('bootstrap');
+    }
+  }, [networkMode, activeTab]);
+
   const handleRetryBootstrap = async () => {
-    setIsRetrying(true);
-    setNodesError(null);
+    setIsRetryingBootstrap(true);
+    setBootstrapError(null);
 
     try {
       const result = await window.kiyeovoAPI.retryBootstrap();
-
-      if (result.success) {
-        console.log('[UI] Bootstrap retry successful, refetching nodes...');
-        const nodesResult = await window.kiyeovoAPI.getBootstrapNodes();
-        if (nodesResult.success) {
-          const fetchedNodes: BootstrapNode[] = nodesResult.nodes.map((node, index) => ({
-            id: `${index}`,
-            address: node.address,
-            connected: node.connected,
-          }));
-          setNodes(fetchedNodes);
-        }
-      } else {
-        setNodesError(result.error || 'Failed to retry bootstrap connection');
+      if (!result.success) {
+        const message = result.error || 'Failed to retry bootstrap connection';
+        setBootstrapError(message);
+        toast.error(message);
+        return;
       }
+
+      await refreshBootstrapNodes();
+      if (networkMode === 'fast') {
+        await refreshRelayNodes();
+      }
+      toast.success('Bootstrap retry complete');
     } catch (error) {
-      console.error('Failed to retry bootstrap:', error);
-      setNodesError(error instanceof Error ? error.message : 'Unexpected error occurred');
+      const message = error instanceof Error ? error.message : 'Unexpected error occurred';
+      setBootstrapError(message);
+      toast.error(message);
     } finally {
-      setIsRetrying(false);
+      setIsRetryingBootstrap(false);
     }
   };
 
-  const handleAddNode = async () => {
-    const normalizedAddress = newAddress.trim();
+  const handleRetryRelays = async () => {
+    setIsRetryingRelays(true);
+    setRelayError(null);
+
+    try {
+      const result = await window.kiyeovoAPI.retryRelays();
+      if (!result.success) {
+        const message = result.error || 'Failed to retry relay reservations';
+        setRelayError(message);
+        toast.error(message);
+        return;
+      }
+
+      await refreshRelayNodes();
+      toast.success(`Relay retry complete (${result.connected}/${result.attempted})`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unexpected error occurred';
+      setRelayError(message);
+      toast.error(message);
+    } finally {
+      setIsRetryingRelays(false);
+    }
+  };
+
+  const handleAddBootstrapNode = async () => {
+    const normalizedAddress = newBootstrapAddress.trim();
     if (!normalizedAddress) return;
 
-    const alreadyExists = nodes.some(node => node.address === normalizedAddress);
-    if (alreadyExists) {
-      setNodesError('Bootstrap node already exists');
+    if (bootstrapNodes.some(node => node.address === normalizedAddress)) {
+      setBootstrapError('Bootstrap node already exists');
       return;
     }
 
-    setNodesError(null);
-
+    setBootstrapError(null);
     try {
       const result = await window.kiyeovoAPI.addBootstrapNode(normalizedAddress);
-
-      if (result.success) {
-        console.log('[UI] Bootstrap node added successfully');
-        const nodesResult = await window.kiyeovoAPI.getBootstrapNodes();
-        if (nodesResult.success) {
-          const fetchedNodes: BootstrapNode[] = nodesResult.nodes.map((node, index) => ({
-            id: `${index}`,
-            address: node.address,
-            connected: node.connected,
-          }));
-          setNodes(fetchedNodes);
-        }
-        setNewAddress("");
-      } else {
-        setNodesError(result.error || 'Failed to add bootstrap node');
+      if (!result.success) {
+        setBootstrapError(result.error || 'Failed to add bootstrap node');
+        return;
       }
+
+      await refreshBootstrapNodes();
+      setNewBootstrapAddress("");
     } catch (error) {
-      console.error('Failed to add bootstrap node:', error);
-      setNodesError(error instanceof Error ? error.message : 'Unexpected error occurred');
+      setBootstrapError(error instanceof Error ? error.message : 'Unexpected error occurred');
     }
   };
 
-  const handleRemoveNode = async (nodeId: string) => {
-    const node = nodes.find(n => n.id === nodeId);
-    if (!node) return;
+  const handleAddRelayNode = async () => {
+    const normalizedAddress = newRelayAddress.trim();
+    if (!normalizedAddress) return;
 
-    setNodesError(null);
+    if (relayNodes.some(node => node.address === normalizedAddress)) {
+      setRelayError('Relay node already exists');
+      return;
+    }
 
+    setRelayError(null);
     try {
-      const result = await window.kiyeovoAPI.removeBootstrapNode(node.address);
-
-      if (result.success) {
-        console.log('[UI] Bootstrap node removed successfully');
-        setNodes(nodes.filter(n => n.id !== nodeId));
-      } else {
-        setNodesError(result.error || 'Failed to remove bootstrap node');
+      const result = await window.kiyeovoAPI.addRelayNode(normalizedAddress);
+      if (!result.success) {
+        const message = result.error || 'Failed to add relay node';
+        setRelayError(message);
+        toast.error(message);
+        return;
       }
+
+      await refreshRelayNodes();
+      setNewRelayAddress("");
     } catch (error) {
-      console.error('Failed to remove bootstrap node:', error);
-      setNodesError(error instanceof Error ? error.message : 'Unexpected error occurred');
+      const message = error instanceof Error ? error.message : 'Unexpected error occurred';
+      setRelayError(message);
+      toast.error(message);
     }
   };
 
-  const handleCopy = (peerId: string) => {
-    setIsCopied(true);
-    navigator.clipboard.writeText(peerId);
-    setTimeout(() => {
-      setIsCopied(false);
-    }, 2000);
-  }
+  const handleRemoveBootstrapNode = async (address: string) => {
+    setBootstrapError(null);
+    try {
+      const result = await window.kiyeovoAPI.removeBootstrapNode(address);
+      if (!result.success) {
+        setBootstrapError(result.error || 'Failed to remove bootstrap node');
+        return;
+      }
 
-  const connectedCount = nodes.filter(n => n.connected).length;
+      await refreshBootstrapNodes();
+    } catch (error) {
+      setBootstrapError(error instanceof Error ? error.message : 'Unexpected error occurred');
+    }
+  };
+
+  const handleRemoveRelayNode = async (address: string) => {
+    setRelayError(null);
+    try {
+      const result = await window.kiyeovoAPI.removeRelayNode(address);
+      if (!result.success) {
+        const message = result.error || 'Failed to remove relay node';
+        setRelayError(message);
+        toast.error(message);
+        return;
+      }
+
+      await refreshRelayNodes();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unexpected error occurred';
+      setRelayError(message);
+      toast.error(message);
+    }
+  };
+
+  const handleCopy = (address: string) => {
+    setCopiedAddress(address);
+    navigator.clipboard.writeText(address);
+    setTimeout(() => {
+      setCopiedAddress((current) => (current === address ? null : current));
+    }, 2000);
+  };
+
+  const bootstrapConnectedCount = bootstrapNodes.filter((node) => node.connected).length;
+  const relayConnectedCount = relayNodes.filter((node) => node.connected).length;
+  const bootstrapEntries = bootstrapNodes.map((node) => ({
+    key: node.id,
+    address: node.address,
+    connected: node.connected,
+  }));
+  const relayEntries = relayNodes.map((node) => ({
+    key: node.address,
+    address: node.address,
+    connected: node.connected,
+  }));
+  const isFastMode = networkMode === 'fast';
+  const isRelayTab = activeTab === 'relays' && isFastMode;
+  const headerDescription = isConnected === null
+    ? "Connecting to the DHT network..."
+    : isConnected
+      ? (isRelayTab
+          ? `Connected to ${relayConnectedCount} relay node${relayConnectedCount !== 1 ? 's' : ''}`
+          : `Connected to ${bootstrapConnectedCount} bootstrap node${bootstrapConnectedCount !== 1 ? 's' : ''}`)
+      : "Not connected to the DHT network";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -169,121 +289,83 @@ const ConnectionStatusDialog = ({
             )}
             DHT Network Status
           </DialogTitle>
-          <DialogDescription>
-            {isConnected === null ? (
-              "Connecting to the DHT network..."
-            ) : isConnected ? (
-              `Connected to ${connectedCount} bootstrap node${connectedCount !== 1 ? 's' : ''}`
-            ) : "Not connected to the DHT network"
-            }
-          </DialogDescription>
+          <DialogDescription>{headerDescription}</DialogDescription>
         </DialogHeader>
 
         <DialogBody className="space-y-4">
-          {/* Node list */}
-          <div className="space-y-2">
-            {!!nodesError && <div className="p-4 rounded-md bg-destructive/10 border border-destructive/20">
-              <span className="text-sm text-destructive">{nodesError}</span>
-            </div>}
-            <label className="text-xs font-mono text-muted-foreground uppercase tracking-wider">
-              Bootstrap Nodes
-            </label>
-
-            {isLoadingNodes ? (
-              <div className="flex items-center justify-center p-4">
-                <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
-                <span className="ml-2 text-sm text-muted-foreground">Loading nodes...</span>
-              </div>
-            ) : nodes.length === 0 ? (
-              <div className="p-4 rounded-md bg-secondary/50 border border-border">
-                <span className="text-sm text-muted-foreground">No bootstrap nodes configured</span>
-              </div>
-            ) : (
-              <div className="space-y-2 max-h-48 overflow-y-auto">
-                {nodes.map((node) => (
-                  <div
-                    key={node.id}
-                    className="flex items-center gap-2 p-2 rounded-md bg-secondary/50 border border-border"
-                  >
-                    <div className={`w-2 h-2 rounded-full ${node.connected ? 'bg-success' : 'bg-muted-foreground'}`} />
-                    <span
-                      className="flex-1 text-sm font-mono text-foreground truncate"
-                      title={node.address}
-                    >
-                      {node.address}
-                    </span>
-                    <div>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => handleCopy(node.address)}
-                        className="h-7 w-7 text-muted-foreground"
-                      >
-                        {isCopied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => handleRemoveNode(node.id)}
-                        className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                      >
-                        <Trash2 className="w-3 h-3 hover:text-destructive" />
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Add new node */}
-          <div className="space-y-2">
-            <label className="text-xs font-mono text-muted-foreground uppercase tracking-wider">
-              Add Bootstrap Node
-            </label>
-            <div className="flex gap-2">
-              <Input
-                placeholder="Peer address"
-                value={newAddress}
-                onChange={(e) => setNewAddress(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleAddNode()}
-                className="flex-1"
-                parentClassName="flex-1"
+          {isFastMode ? (
+            <div className="relative grid grid-cols-2 border-b border-border">
+              <div
+                className="absolute bottom-0 h-[2px] w-1/2 bg-primary transition-transform duration-200 ease-in-out"
+                style={{ transform: activeTab === 'bootstrap' ? 'translateX(0)' : 'translateX(100%)' }}
               />
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={handleAddNode}
-                disabled={!newAddress.trim()}
+              <button
+                type="button"
+                onClick={() => setActiveTab('bootstrap')}
+                className={`cursor-pointer px-3 py-2 text-sm font-medium transition-colors ${
+                  activeTab === 'bootstrap' ? 'text-primary' : 'text-muted-foreground hover:text-foreground'
+                }`}
               >
-                <Plus className="w-4 h-4" />
-              </Button>
+                Bootstrap
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('relays')}
+                className={`px-3 py-2 text-sm font-medium transition-colors ${
+                  activeTab === 'relays'
+                    ? 'text-primary cursor-pointer'
+                    : 'text-muted-foreground hover:text-foreground cursor-pointer'
+                }`}
+              >
+                Relays
+              </button>
             </div>
-          </div>
+          ) : null}
 
-          {/* Retry Bootstrap Button */}
-          <div className="pt-2 border-t border-border">
-            <Button
-              variant="outline"
-              className="w-full"
-              onClick={handleRetryBootstrap}
-              disabled={isRetrying || isLoadingNodes}
-            >
-              {isRetrying ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Retrying...
-                </>
-              ) : (
-                <>
-                  <RefreshCw className="w-4 h-4 mr-2" />
-                  Retry Bootstrap Connection
-                </>
-              )}
-            </Button>
-          </div>
+          {!isRelayTab ? (
+            <ConnectionNodesTab
+              sectionLabel="Bootstrap Nodes"
+              addLabel="Add Bootstrap Node"
+              addPlaceholder="Peer address"
+              retryLabel="Retry Bootstrap Connection"
+              loadingLabel="Loading nodes..."
+              emptyLabel="No bootstrap nodes configured"
+              nodes={bootstrapEntries}
+              loading={isLoadingBootstrapNodes}
+              error={bootstrapError}
+              copiedAddress={copiedAddress}
+              newAddress={newBootstrapAddress}
+              retrying={isRetryingBootstrap}
+              retryDisabled={isRetryingBootstrap || isLoadingBootstrapNodes}
+              onNewAddressChange={setNewBootstrapAddress}
+              onAdd={handleAddBootstrapNode}
+              onRetry={handleRetryBootstrap}
+              onCopy={handleCopy}
+              onRemove={handleRemoveBootstrapNode}
+            />
+          ) : (
+            <ConnectionNodesTab
+              sectionLabel="Relay Nodes"
+              addLabel="Add Relay Node"
+              addPlaceholder="/ip4/1.2.3.4/tcp/4002/p2p/12D3Koo..."
+              retryLabel="Retry Relay Reservations"
+              loadingLabel="Loading relay nodes..."
+              emptyLabel="No relay nodes configured"
+              nodes={relayEntries}
+              loading={isLoadingRelayNodes}
+              error={relayError}
+              copiedAddress={copiedAddress}
+              newAddress={newRelayAddress}
+              retrying={isRetryingRelays}
+              retryDisabled={networkMode !== 'fast' || isRetryingRelays || isLoadingRelayNodes || relayNodes.length === 0}
+              onNewAddressChange={setNewRelayAddress}
+              onAdd={handleAddRelayNode}
+              onRetry={handleRetryRelays}
+              onCopy={handleCopy}
+              onRemove={handleRemoveRelayNode}
+            />
+          )}
 
-          {/* Status info */}
           <div className="pt-2 border-t border-border">
             <div className="flex items-center justify-between text-xs font-mono">
               <span className="text-muted-foreground">Network Status</span>
@@ -293,8 +375,14 @@ const ConnectionStatusDialog = ({
             </div>
             <div className="flex items-center justify-between text-xs font-mono mt-1">
               <span className="text-muted-foreground">Bootstrap Nodes Connected</span>
-              <span className="text-foreground">{connectedCount}</span>
+              <span className="text-foreground">{bootstrapConnectedCount}</span>
             </div>
+            {isFastMode ? (
+              <div className="flex items-center justify-between text-xs font-mono mt-1">
+                <span className="text-muted-foreground">Relay Nodes Connected</span>
+                <span className="text-foreground">{relayConnectedCount}/{relayNodes.length}</span>
+              </div>
+            ) : null}
           </div>
         </DialogBody>
       </DialogContent>

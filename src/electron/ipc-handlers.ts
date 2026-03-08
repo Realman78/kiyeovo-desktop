@@ -47,10 +47,6 @@ function parseRelayMultiaddrList(raw: string): string[] {
   );
 }
 
-function stripP2pSuffix(addr: string): string {
-  return addr.replace(/\/p2p\/[^/]+$/, '');
-}
-
 /**
  * Setup all IPC handlers for communication between renderer and main process
  */
@@ -462,6 +458,140 @@ function setupBootstrapHandlers(
     } catch (error) {
       console.error('[IPC] Failed to retry bootstrap:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to retry bootstrap connection' };
+    }
+  });
+
+  // Retry relay reservations (Fast mode)
+  ipcMain.handle(IPC_CHANNELS.RETRY_RELAYS, async () => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, attempted: 0, connected: 0, error: 'P2P core not initialized' };
+      }
+
+      if (p2pCore.networkMode !== NETWORK_MODES.FAST) {
+        return { success: false, attempted: 0, connected: 0, error: 'Relay retry is available only in Fast mode' };
+      }
+
+      console.log('[IPC] Retrying relay reservations...');
+      const result = await p2pCore.retryRelays();
+      console.log(`[IPC] Relay retry complete connected=${result.connected}/${result.attempted}`);
+      return { success: true, attempted: result.attempted, connected: result.connected, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to retry relay reservations:', error);
+      return {
+        success: false,
+        attempted: 0,
+        connected: 0,
+        error: error instanceof Error ? error.message : 'Failed to retry relay reservations',
+      };
+    }
+  });
+
+  // Get relay connectivity status (Fast mode relay list + current connected state)
+  ipcMain.handle(IPC_CHANNELS.GET_RELAY_STATUS, async () => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, nodes: [], error: 'P2P core not initialized' };
+      }
+
+      if (p2pCore.networkMode !== NETWORK_MODES.FAST) {
+        return { success: true, nodes: [], error: null };
+      }
+
+      const rawRelaySetting = p2pCore.database.getSetting(FAST_RELAY_MULTIADDRS_SETTING_KEY);
+      const relayAddresses = rawRelaySetting === null
+        ? DEFAULT_FAST_RELAY_MULTIADDRS
+        : parseRelayMultiaddrList(rawRelaySetting);
+
+      const connectedPeerIds = new Set(
+        p2pCore.node.getConnections().map((connection) => connection.remotePeer.toString()),
+      );
+
+      const nodes = relayAddresses.map((address) => {
+        const peerIdMatch = address.match(/\/p2p\/([^/]+)$/);
+        const peerId = peerIdMatch?.[1] ?? null;
+        const connected = peerId !== null && connectedPeerIds.has(peerId);
+        return { address, connected };
+      });
+
+      return { success: true, nodes, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to get relay status:', error);
+      return { success: false, nodes: [], error: error instanceof Error ? error.message : 'Failed to get relay status' };
+    }
+  });
+
+  // Add relay node
+  ipcMain.handle(IPC_CHANNELS.ADD_RELAY_NODE, async (_event, address: string) => {
+    try {
+      const p2pCore = getP2PCore();
+      const normalized = address.trim();
+      if (!normalized) {
+        return { success: false, error: 'Relay address cannot be empty' };
+      }
+
+      const ma = multiaddr(normalized);
+      if (!ma.getPeerId()) {
+        return { success: false, error: 'Relay multiaddr must include /p2p/<peerId>' };
+      }
+
+      withSettingsDatabase(getP2PCore, (db) => {
+        const stored = db.getSetting(FAST_RELAY_MULTIADDRS_SETTING_KEY);
+        const existing = stored === null
+          ? [...DEFAULT_FAST_RELAY_MULTIADDRS]
+          : parseRelayMultiaddrList(stored);
+
+        if (existing.includes(normalized)) {
+          throw new Error('Relay node already exists');
+        }
+
+        existing.push(normalized);
+        db.setSetting(FAST_RELAY_MULTIADDRS_SETTING_KEY, existing.join(','));
+      });
+
+      if (p2pCore && p2pCore.networkMode === NETWORK_MODES.FAST) {
+        try {
+          const relayRetry = await p2pCore.retryRelays();
+          console.log(
+            `[IPC] Relay add auto-apply complete connected=${relayRetry.connected}/${relayRetry.attempted}`,
+          );
+        } catch (retryError) {
+          const message = retryError instanceof Error ? retryError.message : String(retryError);
+          // Non-fatal: node is persisted and can be applied via manual retry later.
+          console.warn(`[IPC] Relay add auto-apply failed: ${message}`);
+        }
+      }
+
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to add relay node:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to add relay node' };
+    }
+  });
+
+  // Remove relay node
+  ipcMain.handle(IPC_CHANNELS.REMOVE_RELAY_NODE, async (_event, address: string) => {
+    try {
+      const normalized = address.trim();
+      if (!normalized) {
+        return { success: false, error: 'Relay address cannot be empty' };
+      }
+
+      withSettingsDatabase(getP2PCore, (db) => {
+        const stored = db.getSetting(FAST_RELAY_MULTIADDRS_SETTING_KEY);
+        const existing = stored === null
+          ? [...DEFAULT_FAST_RELAY_MULTIADDRS]
+          : parseRelayMultiaddrList(stored);
+        const next = existing.filter((entry) => entry !== normalized);
+        db.setSetting(FAST_RELAY_MULTIADDRS_SETTING_KEY, next.join(','));
+      });
+
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to remove relay node:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to remove relay node' };
     }
   });
 
@@ -1378,161 +1508,6 @@ function setupChatSettingsHandlers(
     } catch (error) {
       console.error('[IPC] Failed to set Tor settings:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to set Tor settings' };
-    }
-  });
-
-  ipcMain.handle(IPC_CHANNELS.GET_FAST_RELAY_SETTINGS, async () => {
-    try {
-      const settings = withSettingsDatabase(getP2PCore, (db) => {
-        const stored = db.getSetting(FAST_RELAY_MULTIADDRS_SETTING_KEY);
-        const multiaddrs = stored ?? DEFAULT_FAST_RELAY_MULTIADDRS.join(',');
-        return { multiaddrs };
-      });
-
-      return { success: true, settings, error: null };
-    } catch (error) {
-      console.error('[IPC] Failed to get fast relay settings:', error);
-      return { success: false, settings: null, error: error instanceof Error ? error.message : 'Failed to get fast relay settings' };
-    }
-  });
-
-  ipcMain.handle(IPC_CHANNELS.SET_FAST_RELAY_SETTINGS, async (_event, settings: {
-    multiaddrs: string;
-  }) => {
-    try {
-      const parsed = parseRelayMultiaddrList(settings.multiaddrs ?? '');
-      for (const addr of parsed) {
-        const ma = multiaddr(addr);
-        if (!ma.getPeerId()) {
-          return {
-            success: false,
-            normalizedMultiaddrs: '',
-            error: `Relay multiaddr must include /p2p/<peerId>: ${addr}`,
-          };
-        }
-      }
-
-      const normalizedMultiaddrs = parsed.join(',');
-      withSettingsDatabase(getP2PCore, (db) => {
-        db.setSetting(FAST_RELAY_MULTIADDRS_SETTING_KEY, normalizedMultiaddrs);
-      });
-
-      return { success: true, normalizedMultiaddrs, error: null };
-    } catch (error) {
-      console.error('[IPC] Failed to set fast relay settings:', error);
-      return {
-        success: false,
-        normalizedMultiaddrs: '',
-        error: error instanceof Error ? error.message : 'Failed to set fast relay settings'
-      };
-    }
-  });
-
-  ipcMain.handle(IPC_CHANNELS.TEST_FAST_RELAY_NODES, async (_event, settings: {
-    multiaddrs: string;
-  }) => {
-    try {
-      const p2pCore = getP2PCore();
-      if (!p2pCore) {
-        return { success: false, results: [], error: 'P2P core not initialized' };
-      }
-
-      const parsed = parseRelayMultiaddrList(settings.multiaddrs ?? '');
-      if (parsed.length === 0) {
-        return { success: false, results: [], error: 'No relay multiaddrs configured' };
-      }
-
-      for (const addr of parsed) {
-        const ma = multiaddr(addr);
-        if (!ma.getPeerId()) {
-          return {
-            success: false,
-            results: [],
-            error: `Relay multiaddr must include /p2p/<peerId>: ${addr}`,
-          };
-        }
-      }
-
-      const results = Array.from({ length: parsed.length }, (_v, idx) => ({
-        address: parsed[idx],
-        success: false,
-        error: null as string | null,
-        latencyMs: null as number | null,
-      }));
-
-      let cursor = 0;
-      const concurrency = Math.min(5, parsed.length);
-      const runWorker = async (): Promise<void> => {
-        while (cursor < parsed.length) {
-          const current = cursor++;
-          const addr = parsed[current];
-          const startedAt = Date.now();
-          try {
-            const requested = multiaddr(addr);
-            const requestedPeerId = requested.getPeerId();
-            const existingConnectionIds = requestedPeerId
-              ? new Set(
-                p2pCore.node
-                  .getConnections()
-                  .filter((conn) => conn.remotePeer.toString() === requestedPeerId)
-                  .map((conn) => conn.id)
-              )
-              : new Set<string>();
-
-            const conn = await p2pCore.node.dial(requested, {
-              signal: AbortSignal.timeout(10_000),
-            });
-
-            const requestedBaseAddr = stripP2pSuffix(requested.toString());
-            const actualBaseAddr = stripP2pSuffix(conn.remoteAddr.toString());
-            if (requestedBaseAddr !== actualBaseAddr) {
-              results[current] = {
-                address: addr,
-                success: false,
-                error: `dial resolved via different address (${conn.remoteAddr.toString()})`,
-                latencyMs: Date.now() - startedAt,
-              };
-              if (!existingConnectionIds.has(conn.id)) {
-                await conn.close().catch(() => {
-                  // ignore close errors
-                });
-              }
-              continue;
-            }
-
-            results[current] = {
-              address: addr,
-              success: true,
-              error: null,
-              latencyMs: Date.now() - startedAt,
-            };
-
-            // Avoid keeping extra test-only connections around.
-            if (!existingConnectionIds.has(conn.id)) {
-              await conn.close().catch(() => {
-                // ignore close errors
-              });
-            }
-          } catch (error) {
-            results[current] = {
-              address: addr,
-              success: false,
-              error: error instanceof Error ? error.message : String(error),
-              latencyMs: Date.now() - startedAt,
-            };
-          }
-        }
-      };
-
-      await Promise.all(Array.from({ length: concurrency }, () => runWorker()));
-      return { success: true, results, error: null };
-    } catch (error) {
-      console.error('[IPC] Failed to test fast relay nodes:', error);
-      return {
-        success: false,
-        results: [],
-        error: error instanceof Error ? error.message : 'Failed to test fast relay nodes',
-      };
     }
   });
 

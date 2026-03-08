@@ -655,16 +655,9 @@ export class MessageHandler {
 
   private async dialChatProtocolWithRelayFallback(targetPeerId: PeerId, context: string) {
     try {
-      const connection = await this.node.dial(targetPeerId);
-      const stream = await connection.newStream([CHAT_PROTOCOL], {
+      return await this.node.dialProtocol(targetPeerId, CHAT_PROTOCOL, {
         runOnLimitedConnection: true,
       });
-      const mode = connection.limits != null ? 'limited' : 'direct';
-      console.log(
-        `[TODO-DIAL-MODE][${context}] target=${targetPeerId.toString()} mode=${mode} remoteAddr=${connection.remoteAddr.toString()}`
-      );
-      console.log("Connection limits message sending", connection.limits);
-      return stream;
     } catch (directDialError: unknown) {
       if (this.database.getNetworkMode() !== NETWORK_MODES.FAST) {
         throw directDialError;
@@ -696,14 +689,9 @@ export class MessageHandler {
           }
 
           const circuitAddr = `${relayBase}/p2p-circuit/p2p/${targetPeer}`;
-          const connection = await this.node.dial(multiaddr(circuitAddr));
-          const stream = await connection.newStream([CHAT_PROTOCOL], {
+          const stream = await this.node.dialProtocol(multiaddr(circuitAddr), CHAT_PROTOCOL, {
             runOnLimitedConnection: true,
           });
-          const mode = connection.limits != null ? 'limited' : 'direct';
-          console.log(
-            `[TODO-DIAL-MODE][${context}] target=${targetPeer} mode=${mode} remoteAddr=${connection.remoteAddr.toString()} viaRelay=${relayBase}`
-          );
           console.log(`[DIAL][${context}] relay fallback succeeded target=${targetPeer} via=${relayBase}`);
           return stream;
         } catch (relayError: unknown) {

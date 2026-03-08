@@ -130,6 +130,18 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     retryBootstrap: async (): Promise<{ success: boolean; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.RETRY_BOOTSTRAP);
     },
+    retryRelays: async (): Promise<{ success: boolean; attempted: number; connected: number; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.RETRY_RELAYS);
+    },
+    getRelayStatus: async (): Promise<{ success: boolean; nodes: Array<{ address: string; connected: boolean }>; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.GET_RELAY_STATUS);
+    },
+    addRelayNode: async (address: string): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.ADD_RELAY_NODE, address);
+    },
+    removeRelayNode: async (address: string): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.REMOVE_RELAY_NODE, address);
+    },
     addBootstrapNode: async (address: string): Promise<{ success: boolean; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.ADD_BOOTSTRAP_NODE, address);
     },
@@ -210,32 +222,6 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
         dnsResolution: 'tor' | 'system';
     }): Promise<{ success: boolean; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.SET_TOR_SETTINGS, settings);
-    },
-
-    getFastRelaySettings: async (): Promise<{
-        success: boolean;
-        settings: {
-            multiaddrs: string;
-        } | null;
-        error: string | null;
-    }> => {
-        return ipcRenderer.invoke(IPC_CHANNELS.GET_FAST_RELAY_SETTINGS);
-    },
-
-    setFastRelaySettings: async (settings: {
-        multiaddrs: string;
-    }): Promise<{ success: boolean; normalizedMultiaddrs: string; error: string | null }> => {
-        return ipcRenderer.invoke(IPC_CHANNELS.SET_FAST_RELAY_SETTINGS, settings);
-    },
-
-    testFastRelayNodes: async (settings: {
-        multiaddrs: string;
-    }): Promise<{
-        success: boolean;
-        results: Array<{ address: string; success: boolean; error: string | null; latencyMs: number | null }>;
-        error: string | null;
-    }> => {
-        return ipcRenderer.invoke(IPC_CHANNELS.TEST_FAST_RELAY_NODES, settings);
     },
 
     getAppConfig: async (): Promise<{
