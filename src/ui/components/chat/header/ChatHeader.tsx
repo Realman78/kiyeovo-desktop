@@ -458,6 +458,7 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
   };
 
   const isGroup = chatType === 'group';
+  const isFetchingGroupUpdates = isGroup && activeChat?.isFetchingOffline === true;
   const groupStatusMessage = !isGroup ? null
     : groupStatus === 'awaiting_activation'
       ? 'Waiting for members to accept invites...'
@@ -492,7 +493,15 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
         </div>
       ) : null}
       <div>
-        <h3 className="font-medium text-foreground text-left">{username}</h3>
+        <h3 className="font-medium text-foreground text-left flex items-center gap-2">
+          <span>{username}</span>
+          {isFetchingGroupUpdates && (
+            <span className="inline-flex items-center gap-1 text-[11px] font-normal text-muted-foreground">
+              <span className="w-3 h-3 border-2 border-muted-foreground border-t-transparent rounded-full animate-spin" />
+              fetching group updates
+            </span>
+          )}
+        </h3>
         {isGroup ? (
           <div className="flex flex-col gap-0.5">
             <span className="text-xs text-muted-foreground truncate max-w-xs text-left" title={memberSummary}>

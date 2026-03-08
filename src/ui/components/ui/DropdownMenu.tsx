@@ -53,7 +53,7 @@ export const DropdownMenu: FC<DropdownMenuProps> = ({
         <div
           ref={menuRef}
           className={cn(
-            "absolute top-full mt-2 z-50 min-w-[12rem] rounded-md border border-border bg-popover p-1 shadow-md animate-in fade-in-0 zoom-in-95",
+            "absolute top-full mt-2 z-50 min-w-56 rounded-md border border-border bg-popover p-1 shadow-md animate-in fade-in-0 zoom-in-95",
             align === "end" && "right-0",
             align === "start" && "left-0",
             align === "center" && "left-1/2 -translate-x-1/2"
