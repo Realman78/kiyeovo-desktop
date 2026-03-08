@@ -27,7 +27,7 @@ import {
 } from './constants.js';
 import { filterOnionAddressesMapper } from './utils/miscellaneous.js';
 import { offlineMessageSelector, offlineMessageValidateUpdate, offlineMessageValidator } from './lib/offline-message-validator.js';
-import { groupOfflineMessageValidator, groupInfoLatestValidator, groupInfoVersionedValidator, groupOfflineMessageSelector, groupInfoLatestSelector, groupOfflineValidateUpdate, groupInfoLatestValidateUpdate, groupInfoVersionedValidateUpdate } from './lib/group/group-dht-validator.js';
+import { groupOfflineMessageValidator, groupInfoLatestValidator, groupInfoVersionedValidator, groupOfflineMessageSelector, groupInfoLatestSelector, groupInfoVersionedSelector, groupOfflineValidateUpdate, groupInfoLatestValidateUpdate, groupInfoVersionedValidateUpdate } from './lib/group/group-dht-validator.js';
 import {
   usernameRegistrationSelector,
   usernameRegistrationValidateUpdate,
@@ -161,6 +161,7 @@ async function createBootstrapNode(): Promise<ChatNode> {
           [modeRuntime.dhtNamespaceNames.username]: usernameRegistrationSelector,
           [modeRuntime.dhtNamespaceNames.groupOffline]: groupOfflineMessageSelector,
           [modeRuntime.dhtNamespaceNames.groupInfoLatest]: groupInfoLatestSelector,
+          [modeRuntime.dhtNamespaceNames.groupInfoVersion]: groupInfoVersionedSelector,
         },
         validateUpdate: async (key, existing, incoming) => {
           const keyStr = new TextDecoder().decode(key);

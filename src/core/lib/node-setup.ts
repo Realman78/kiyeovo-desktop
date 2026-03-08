@@ -22,7 +22,7 @@ import {
 import {
   groupOfflineMessageValidator, groupOfflineMessageSelector, groupOfflineValidateUpdate,
   groupInfoLatestValidator, groupInfoLatestSelector, groupInfoLatestValidateUpdate,
-  groupInfoVersionedValidator, groupInfoVersionedValidateUpdate,
+  groupInfoVersionedValidator, groupInfoVersionedSelector, groupInfoVersionedValidateUpdate,
 } from './group/group-dht-validator.js';
 import dotenv from 'dotenv';
 import {
@@ -411,6 +411,7 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
             [modeRuntime.dhtNamespaceNames.username]: usernameRegistrationSelector,
             [modeRuntime.dhtNamespaceNames.groupOffline]: groupOfflineMessageSelector,
             [modeRuntime.dhtNamespaceNames.groupInfoLatest]: groupInfoLatestSelector,
+            [modeRuntime.dhtNamespaceNames.groupInfoVersion]: groupInfoVersionedSelector,
           },
           validateUpdate: async (key, existing, incoming) => {
             const keyStr = new TextDecoder().decode(key);

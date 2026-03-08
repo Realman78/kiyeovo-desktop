@@ -232,54 +232,61 @@ export async function groupInfoLatestValidator(
   value: Uint8Array
 ): Promise<void> {
   const keyStr = new TextDecoder().decode(key);
+  console.log("started groupInfoLatestValidator for", keyStr)
 
-  if (!hasMatchingPrefix(keyStr, GROUP_INFO_LATEST_PREFIXES)) {
-    throw new Error('Invalid group info latest key prefix');
-  }
+  try {
+    if (!hasMatchingPrefix(keyStr, GROUP_INFO_LATEST_PREFIXES)) {
+      throw new Error('Invalid group info latest key prefix');
+    }
 
-  // ['', '<prefix-name>', groupId, creatorPubKey]
-  const parts = keyStr.split('/');
-  if (parts.length !== 4) {
-    throw new Error(`Invalid group info latest key format: expected 4 parts, got ${parts.length}`);
-  }
+    // ['', '<prefix-name>', groupId, creatorPubKey]
+    const parts = keyStr.split('/');
+    if (parts.length !== 4) {
+      throw new Error(`Invalid group info latest key format: expected 4 parts, got ${parts.length}`);
+    }
 
-  const pathGroupId = parts[2];
-  const creatorPubKeyBase64url = parts[3];
-  if (!pathGroupId || !creatorPubKeyBase64url) {
-    throw new Error('Missing groupId or creator public key in group info latest key');
-  }
+    const pathGroupId = parts[2];
+    const creatorPubKeyBase64url = parts[3];
+    if (!pathGroupId || !creatorPubKeyBase64url) {
+      throw new Error('Missing groupId or creator public key in group info latest key');
+    }
 
-  const creatorPubKey = fromBase64Url(creatorPubKeyBase64url);
-  if (creatorPubKey.length !== 32) {
-    throw new Error(`Invalid creator public key length: ${creatorPubKey.length}`);
-  }
+    const creatorPubKey = fromBase64Url(creatorPubKeyBase64url);
+    if (creatorPubKey.length !== 32) {
+      throw new Error(`Invalid creator public key length: ${creatorPubKey.length}`);
+    }
 
-  const record: GroupInfoLatest = JSON.parse(new TextDecoder().decode(value));
+    const record: GroupInfoLatest = JSON.parse(new TextDecoder().decode(value));
 
-  // Verify groupId in payload matches key path
-  if (record.groupId !== pathGroupId) {
-    throw new Error(`groupId mismatch: payload=${record.groupId}, keyPath=${pathGroupId}`);
-  }
-  if (!Number.isInteger(record.latestVersion) || record.latestVersion < 1) {
-    throw new Error(`Invalid latestVersion: ${String(record.latestVersion)}`);
-  }
-  if (typeof record.latestStateHash !== 'string' || record.latestStateHash.length === 0) {
-    throw new Error('Invalid latestStateHash');
-  }
-  if (!Number.isFinite(record.lastUpdated) || record.lastUpdated <= 0) {
-    throw new Error(`Invalid lastUpdated: ${String(record.lastUpdated)}`);
-  }
+    // Verify groupId in payload matches key path
+    if (record.groupId !== pathGroupId) {
+      throw new Error(`groupId mismatch: payload=${record.groupId}, keyPath=${pathGroupId}`);
+    }
+    if (!Number.isInteger(record.latestVersion) || record.latestVersion < 1) {
+      throw new Error(`Invalid latestVersion: ${String(record.latestVersion)}`);
+    }
+    if (typeof record.latestStateHash !== 'string' || record.latestStateHash.length === 0) {
+      throw new Error('Invalid latestStateHash');
+    }
+    if (!Number.isFinite(record.lastUpdated) || record.lastUpdated <= 0) {
+      throw new Error(`Invalid lastUpdated: ${String(record.lastUpdated)}`);
+    }
 
-  if (!record.creatorSignature) {
-    throw new Error('Missing creatorSignature');
-  }
+    if (!record.creatorSignature) {
+      throw new Error('Missing creatorSignature');
+    }
 
-  const { creatorSignature, ...payload } = record;
-  const payloadBytes = new TextEncoder().encode(JSON.stringify(payload));
-  const sigBytes = Buffer.from(creatorSignature, 'base64');
+    const { creatorSignature, ...payload } = record;
+    const payloadBytes = new TextEncoder().encode(JSON.stringify(payload));
+    const sigBytes = Buffer.from(creatorSignature, 'base64');
 
-  if (!ed25519.verify(sigBytes, payloadBytes, creatorPubKey)) {
-    throw new Error('Creator signature verification failed for group info latest');
+    if (!ed25519.verify(sigBytes, payloadBytes, creatorPubKey)) {
+      throw new Error('Creator signature verification failed for group info latest');
+    }
+    console.log("ACCEPTED: groupInfoLatestValidator", keyStr);
+  } catch (e) {
+    console.log("ERROR groupInfoLatestValidator", e);
+    throw e
   }
 }
 
@@ -350,65 +357,96 @@ export async function groupInfoVersionedValidator(
   value: Uint8Array
 ): Promise<void> {
   const keyStr = new TextDecoder().decode(key);
+  console.log("started groupInfoVersionedValidator for ", keyStr)
 
-  if (!hasMatchingPrefix(keyStr, GROUP_INFO_VERSION_PREFIXES)) {
-    throw new Error('Invalid group info versioned key prefix');
+  try {
+    if (!hasMatchingPrefix(keyStr, GROUP_INFO_VERSION_PREFIXES)) {
+      throw new Error('Invalid group info versioned key prefix');
+    }
+
+    // ['', '<prefix-name>', groupId, creatorPubKey, version]
+    const parts = keyStr.split('/');
+    if (parts.length !== 5) {
+      throw new Error(`Invalid group info versioned key format: expected 5 parts, got ${parts.length}`);
+    }
+
+    const pathGroupId = parts[2];
+    const creatorPubKeyBase64url = parts[3];
+    const versionStr = parts[4];
+    if (!pathGroupId || !creatorPubKeyBase64url || !versionStr) {
+      throw new Error('Missing required parts in group info versioned key');
+    }
+
+    const creatorPubKey = fromBase64Url(creatorPubKeyBase64url);
+    if (creatorPubKey.length !== 32) {
+      throw new Error(`Invalid creator public key length: ${creatorPubKey.length}`);
+    }
+
+    const record: GroupInfoVersioned = JSON.parse(new TextDecoder().decode(value));
+
+    // Verify groupId matches key path
+    if (record.groupId !== pathGroupId) {
+      throw new Error(`groupId mismatch: payload=${record.groupId}, keyPath=${pathGroupId}`);
+    }
+
+    // Version in payload must match version in key path
+    const pathVersion = parseInt(versionStr, 10);
+    if (!Number.isInteger(pathVersion) || pathVersion < 1) {
+      throw new Error(`Invalid version in key path: ${versionStr}`);
+    }
+    if (record.version !== pathVersion) {
+      throw new Error(`Version mismatch: key says ${versionStr}, payload says ${record.version}`);
+    }
+    if (!Number.isFinite(record.activatedAt) || record.activatedAt <= 0) {
+      throw new Error(`Invalid activatedAt: ${String(record.activatedAt)}`);
+    }
+    if (typeof record.prevVersionHash !== 'string') {
+      throw new Error('Invalid prevVersionHash');
+    }
+    if (typeof record.stateHash !== 'string' || record.stateHash.length === 0) {
+      throw new Error('Invalid stateHash');
+    }
+
+    if (!record.creatorSignature) {
+      throw new Error('Missing creatorSignature');
+    }
+
+    const { creatorSignature, ...payload } = record;
+    const payloadBytes = new TextEncoder().encode(JSON.stringify(payload));
+    const sigBytes = Buffer.from(creatorSignature, 'base64');
+
+    if (!ed25519.verify(sigBytes, payloadBytes, creatorPubKey)) {
+      throw new Error('Creator signature verification failed for group info versioned');
+    }
+    console.log("ACCEPTED: groupInfoVersionedValidator");
+  } catch (e) {
+    console.log("ERROR during groupInfoVersionedValidator");
+    console.log(e);
+    throw e
+  }
+}
+
+// --- Group info versioned selector ---
+// Keys are already version-specific and records are immutable for a given key.
+// Prefer the first decodable record to keep selection deterministic.
+export function groupInfoVersionedSelector(
+  _key: Uint8Array,
+  records: Uint8Array[]
+): number {
+  if (records.length <= 1) return 0;
+
+  for (let i = 0; i < records.length; i++) {
+    try {
+      const record = records[i];
+      if (!record) continue;
+      JSON.parse(new TextDecoder().decode(record)) as GroupInfoVersioned;
+      return i;
+    } catch {
+      continue;
+    }
   }
 
-  // ['', '<prefix-name>', groupId, creatorPubKey, version]
-  const parts = keyStr.split('/');
-  if (parts.length !== 5) {
-    throw new Error(`Invalid group info versioned key format: expected 5 parts, got ${parts.length}`);
-  }
-
-  const pathGroupId = parts[2];
-  const creatorPubKeyBase64url = parts[3];
-  const versionStr = parts[4];
-  if (!pathGroupId || !creatorPubKeyBase64url || !versionStr) {
-    throw new Error('Missing required parts in group info versioned key');
-  }
-
-  const creatorPubKey = fromBase64Url(creatorPubKeyBase64url);
-  if (creatorPubKey.length !== 32) {
-    throw new Error(`Invalid creator public key length: ${creatorPubKey.length}`);
-  }
-
-  const record: GroupInfoVersioned = JSON.parse(new TextDecoder().decode(value));
-
-  // Verify groupId matches key path
-  if (record.groupId !== pathGroupId) {
-    throw new Error(`groupId mismatch: payload=${record.groupId}, keyPath=${pathGroupId}`);
-  }
-
-  // Version in payload must match version in key path
-  const pathVersion = parseInt(versionStr, 10);
-  if (!Number.isInteger(pathVersion) || pathVersion < 1) {
-    throw new Error(`Invalid version in key path: ${versionStr}`);
-  }
-  if (record.version !== pathVersion) {
-    throw new Error(`Version mismatch: key says ${versionStr}, payload says ${record.version}`);
-  }
-  if (!Number.isFinite(record.activatedAt) || record.activatedAt <= 0) {
-    throw new Error(`Invalid activatedAt: ${String(record.activatedAt)}`);
-  }
-  if (typeof record.prevVersionHash !== 'string') {
-    throw new Error('Invalid prevVersionHash');
-  }
-  if (typeof record.stateHash !== 'string' || record.stateHash.length === 0) {
-    throw new Error('Invalid stateHash');
-  }
-
-  if (!record.creatorSignature) {
-    throw new Error('Missing creatorSignature');
-  }
-
-  const { creatorSignature, ...payload } = record;
-  const payloadBytes = new TextEncoder().encode(JSON.stringify(payload));
-  const sigBytes = Buffer.from(creatorSignature, 'base64');
-
-  if (!ed25519.verify(sigBytes, payloadBytes, creatorPubKey)) {
-    throw new Error('Creator signature verification failed for group info versioned');
-  }
+  return 0;
 }
 
 // --- Group info versioned validateUpdate ---
@@ -419,6 +457,7 @@ export async function groupInfoVersionedValidateUpdate(
   existing: Uint8Array,
   incoming: Uint8Array
 ): Promise<void> {
+  console.log("started groupInfoVersionedValidateUpdate");
   if (existing.length !== incoming.length) {
     throw new Error('stale record rejected');
   }
@@ -427,4 +466,5 @@ export async function groupInfoVersionedValidateUpdate(
       throw new Error('stale record rejected');
     }
   }
+  console.log("finished groupInfoVersionedValidateUpdate");
 }

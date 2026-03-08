@@ -113,7 +113,7 @@ export async function offlineMessageValidator(
     }
 
     // All validations passed - do nothing (success)
-    console.log(`DHT validator: accepted write to ${keyStr.slice(0, 40)}... with ${store.messages.length} messages`);
+    console.log(`DHT validator: accepted write to ${keyStr}... with ${store.messages.length} messages`);
 
   } catch (error: unknown) {
     generalErrorHandler(error, 'DHT offline message validation failed');
