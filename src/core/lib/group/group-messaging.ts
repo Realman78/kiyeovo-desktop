@@ -407,6 +407,7 @@ export class GroupMessaging {
         remoteAddr: string;
         direction: string;
         limited: string;
+        streams: string;
       }>>();
 
       for (const conn of connected) {
@@ -416,13 +417,22 @@ export class GroupMessaging {
           remoteAddr?: { toString: () => string };
           direction?: string;
           limits?: unknown;
+          streams?: Array<{ protocol?: string }>;
         };
+        const streamProtocols = Array.from(
+          new Set(
+            (connAny.streams ?? [])
+              .map((stream) => stream.protocol ?? 'unknown')
+              .filter(Boolean),
+          ),
+        );
         byPeer.push({
           remoteAddr: connAny.remoteAddr?.toString() ?? 'unknown',
           direction: connAny.direction ?? 'unknown',
           limited: connAny.limits == null
             ? 'none'
             : JSON.stringify(connAny.limits),
+          streams: streamProtocols.length > 0 ? streamProtocols.join(',') : 'none',
         });
         connectionByPeer.set(peer, byPeer);
       }
@@ -433,7 +443,7 @@ export class GroupMessaging {
           const peerConnections = connectionByPeer.get(peerId) ?? [];
           const connSummary = peerConnections.length > 0
             ? peerConnections
-              .map((c) => `${c.direction}:${c.remoteAddr}:limits=${c.limited}`)
+              .map((c) => `${c.direction}:${c.remoteAddr}:limits=${c.limited}:streams=${c.streams}`)
               .join('|')
             : 'none';
           const inSubscribers = topicSubscribers.includes(peerId);
