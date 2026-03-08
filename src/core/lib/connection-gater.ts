@@ -19,30 +19,22 @@ export function createConnectionGater(database: ChatDatabase): Partial<Connectio
       // Block inbound connections from blocked/unknown peers (after handshake)
       denyInboundEncryptedConnection: (peerId: PeerId) => {
         const peerIdStr = peerId.toString();
-        const shortPeer = peerIdStr.slice(-8);
-        const contactMode = database.getSetting('contact_mode') ?? 'unset';
 
         // Block if peer is explicitly blocked
         if (database.isBlocked(peerIdStr)) {
-          console.log(`[ConnectionGater][DIAG][INBOUND][DENY] peer=${shortPeer} reason=blocked_peer contactMode=${contactMode}`);
+          console.log(`[ConnectionGater] Blocked inbound connection from ${peerIdStr.slice(0, 8)}... (blocked peer)`);
           return true;
         }
 
         // Block unknown peers if contact mode is 'block'
-        if (contactMode === 'block') {
+        if (database.getSetting('contact_mode') === 'block') {
           const chat = database.getChatByPeerId(peerIdStr);
           if (chat === null) {
-            console.log(`[ConnectionGater][DIAG][INBOUND][DENY] peer=${shortPeer} reason=unknown_peer_in_block_mode contactMode=${contactMode}`);
+            console.log(`[ConnectionGater] Rejected unknown peer ${peerIdStr.slice(0, 8)}... (block mode)`);
             return true;
           }
-          console.log(
-            `[ConnectionGater][DIAG][INBOUND][ALLOW] peer=${shortPeer} reason=known_peer_in_block_mode ` +
-            `contactMode=${contactMode} chatId=${chat.id} chatType=${chat.type}`,
-          );
-          return false;
         }
 
-        console.log(`[ConnectionGater][DIAG][INBOUND][ALLOW] peer=${shortPeer} reason=mode_allows_unknown contactMode=${contactMode}`);
         return false;
       },
 

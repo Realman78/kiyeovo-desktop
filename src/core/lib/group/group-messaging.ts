@@ -1,5 +1,4 @@
 import { createHash, randomBytes, randomUUID } from 'crypto';
-import { peerIdFromString } from '@libp2p/peer-id';
 import { xchacha20poly1305 } from '@noble/ciphers/chacha';
 import { ed25519 } from '@noble/curves/ed25519';
 import type { ChatNode, MessageReceivedEvent, SendMessageResponse, StrippedMessage } from '../../types.js';
@@ -70,26 +69,6 @@ export class GroupMessaging {
   private readonly onPeerConnect = (): void => {
     this.scheduleReconcile(2000);
   };
-  private readonly onGossipsubGraft = (evt: Event): void => {
-    const detail = (evt as CustomEvent<unknown>).detail as
-      | { peerId?: string; topic?: string; direction?: string }
-      | undefined;
-    if (!detail || typeof detail.topic !== 'string') return;
-    const topicShort = `${detail.topic.slice(0, 16)}...`;
-    console.log(
-      `[GROUP-DIAG][MESH] event=graft topic=${topicShort} peer=${detail.peerId ?? 'unknown'} direction=${detail.direction ?? 'unknown'}`,
-    );
-  };
-  private readonly onGossipsubPrune = (evt: Event): void => {
-    const detail = (evt as CustomEvent<unknown>).detail as
-      | { peerId?: string; topic?: string; direction?: string }
-      | undefined;
-    if (!detail || typeof detail.topic !== 'string') return;
-    const topicShort = `${detail.topic.slice(0, 16)}...`;
-    console.log(
-      `[GROUP-DIAG][MESH] event=prune topic=${topicShort} peer=${detail.peerId ?? 'unknown'} direction=${detail.direction ?? 'unknown'}`,
-    );
-  };
 
   constructor(deps: GroupMessagingDeps) {
     this.deps = deps;
@@ -99,8 +78,6 @@ export class GroupMessaging {
     if (this.started) return;
     this.started = true;
     this.deps.node.services.pubsub.addEventListener('message', this.onPubsubMessage as EventListener);
-    this.deps.node.services.pubsub.addEventListener('gossipsub:graft', this.onGossipsubGraft as EventListener);
-    this.deps.node.services.pubsub.addEventListener('gossipsub:prune', this.onGossipsubPrune as EventListener);
     this.deps.node.addEventListener('peer:connect', this.onPeerConnect as EventListener);
     void this.reconcileSubscriptions();
     this.reconcileTimer = setInterval(() => {
@@ -116,8 +93,6 @@ export class GroupMessaging {
     this.started = false;
 
     this.deps.node.services.pubsub.removeEventListener('message', this.onPubsubMessage as EventListener);
-    this.deps.node.services.pubsub.removeEventListener('gossipsub:graft', this.onGossipsubGraft as EventListener);
-    this.deps.node.services.pubsub.removeEventListener('gossipsub:prune', this.onGossipsubPrune as EventListener);
     this.deps.node.removeEventListener('peer:connect', this.onPeerConnect as EventListener);
 
     if (this.reconcileTimer) {
@@ -278,7 +253,6 @@ export class GroupMessaging {
     }
     this.ensureTopicSubscription(ctx);
     console.log("topic subscription ensured", ctx);
-    await this.logGroupPubsubDiagnostics(ctx, participantPeers, 'pre_publish');
 
     const seq = this.deps.database.getNextSeqAndIncrement(groupId, ctx.keyVersion);
     const nonce = randomBytes(24);
@@ -309,9 +283,6 @@ export class GroupMessaging {
     const publishStartedAt = Date.now();
     const publishedOnline = await this.publishWithRetry(ctx, payloadBytes, `msgId=${signedMessage.messageId}`);
     const publishMs = Date.now() - publishStartedAt;
-    if (!publishedOnline) {
-      await this.logGroupPubsubDiagnostics(ctx, participantPeers, 'offline_fallback');
-    }
 
     let warning: string | null = publishedOnline
       ? null
@@ -389,95 +360,6 @@ export class GroupMessaging {
     );
 
     return response;
-  }
-
-  private async logGroupPubsubDiagnostics(
-    ctx: GroupContext,
-    participantPeers: string[],
-    phase: 'pre_publish' | 'offline_fallback',
-  ): Promise<void> {
-    try {
-      const shortTopic = `${ctx.topic.slice(0, 16)}...`;
-      const localTopics = this.deps.node.services.pubsub.getTopics();
-      const topicSubscribers = this.deps.node.services.pubsub
-        .getSubscribers(ctx.topic)
-        .map((peerId) => peerId.toString());
-      const connected = this.deps.node.getConnections();
-      const connectionByPeer = new Map<string, Array<{
-        remoteAddr: string;
-        direction: string;
-        limited: string;
-        streams: string;
-      }>>();
-
-      for (const conn of connected) {
-        const peer = conn.remotePeer.toString();
-        const byPeer = connectionByPeer.get(peer) ?? [];
-        const connAny = conn as unknown as {
-          remoteAddr?: { toString: () => string };
-          direction?: string;
-          limits?: unknown;
-          streams?: Array<{ protocol?: string }>;
-        };
-        const streamProtocols = Array.from(
-          new Set(
-            (connAny.streams ?? [])
-              .map((stream) => stream.protocol ?? 'unknown')
-              .filter(Boolean),
-          ),
-        );
-        byPeer.push({
-          remoteAddr: connAny.remoteAddr?.toString() ?? 'unknown',
-          direction: connAny.direction ?? 'unknown',
-          limited: connAny.limits == null
-            ? 'none'
-            : JSON.stringify(connAny.limits),
-          streams: streamProtocols.length > 0 ? streamProtocols.join(',') : 'none',
-        });
-        connectionByPeer.set(peer, byPeer);
-      }
-
-      const participantState = participantPeers
-        .filter((peerId) => peerId !== this.deps.myPeerId)
-        .map(async (peerId) => {
-          const peerConnections = connectionByPeer.get(peerId) ?? [];
-          const connSummary = peerConnections.length > 0
-            ? peerConnections
-              .map((c) => `${c.direction}:${c.remoteAddr}:limits=${c.limited}:streams=${c.streams}`)
-              .join('|')
-            : 'none';
-          const inSubscribers = topicSubscribers.includes(peerId);
-          let knownAddrs = 'none';
-          let supportsPubsub = 'unknown';
-          try {
-            const peerData = await this.deps.node.peerStore.get(peerIdFromString(peerId));
-            const addrs = (peerData.addresses ?? []).map((entry) => entry.multiaddr.toString());
-            knownAddrs = addrs.length > 0 ? addrs.join('|') : 'none';
-            const protocols = peerData.protocols ?? [];
-            supportsPubsub = protocols.some((protocol) => protocol.includes('meshsub')) ? 'yes' : 'no';
-          } catch {
-            knownAddrs = 'peerstore_miss';
-            supportsPubsub = 'peerstore_miss';
-          }
-
-          return `${peerId.slice(-8)}(subs=${inSubscribers ? 'yes' : 'no'},pubsub=${supportsPubsub},knownAddrs=${knownAddrs},conns=${peerConnections.length},${connSummary})`;
-        });
-      const participantStateResolved = await Promise.all(participantState);
-      const participantStateText = participantStateResolved
-        .join(' ; ');
-
-      console.log(
-        `[GROUP-DIAG][PUBSUB] phase=${phase} group=${ctx.groupId.slice(0, 8)} keyVersion=${ctx.keyVersion} topic=${shortTopic} ` +
-        `localSub=${localTopics.includes(ctx.topic)} localTopics=${localTopics.length} ` +
-        `subscribers=${topicSubscribers.map((peer) => peer.slice(-8)).join(',') || 'none'} ` +
-        `participants=${participantStateText || 'none'}`
-      );
-    } catch (error: unknown) {
-      const reason = error instanceof Error ? error.message : String(error);
-      console.warn(
-        `[GROUP-DIAG][PUBSUB] phase=${phase} group=${ctx.groupId.slice(0, 8)} failed_to_collect=${reason}`,
-      );
-    }
   }
 
   async retryOfflineBackup(chatId: number, messageId: string): Promise<void> {
