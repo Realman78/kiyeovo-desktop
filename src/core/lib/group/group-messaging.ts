@@ -485,7 +485,7 @@ export class GroupMessaging {
       void (async () => {
         const startedAt = Date.now();
         try {
-          const result = await this.deps.groupOfflineManager.checkGroupOfflineMessages([chatId]);
+          const result = await this.deps.groupOfflineManager.checkGroupOfflineMessages([chatId], { mode: 'nudge' });
           const unread = Array.from(result.unreadFromChats.values()).reduce((sum, count) => sum + count, 0);
           console.log(
             `[GROUP-MSG][REKEY-FETCH][DONE] group=${groupId} chatId=${chatId} checked=${result.checkedChatIds.length} unread=${unread} took=${Date.now() - startedAt}ms`,

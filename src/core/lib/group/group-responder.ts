@@ -82,13 +82,9 @@ export class GroupResponder {
       return;
     }
 
-    // Check if we already have this group.
-    // If local state is terminal (removed/left/invite_expired), keep archived chat intact
-    // and only add a fresh invite notification.
     const existing = database.getChatByGroupId(invite.groupId);
     if (existing) {
-      // `left` normally deletes the chat row, but we keep it here as a defensive
-      // compatibility guard for legacy/manual DB states.
+      // `left` normally deletes the chat row, but just in case
       const canReactivate =
         existing.group_status === 'removed'
         || existing.group_status === 'left'

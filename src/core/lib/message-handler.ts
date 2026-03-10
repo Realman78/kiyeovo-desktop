@@ -33,6 +33,7 @@ import { GroupCreator } from './group/group-creator.js';
 import { GroupResponder } from './group/group-responder.js';
 import { GroupMessaging } from './group/group-messaging.js';
 import { GroupOfflineManager } from './group/group-offline-manager.js';
+import type { GroupOfflineCheckOptions } from './group/group-offline-manager.js';
 import { GroupAckRepublisher } from './group/group-ack-republisher.js';
 import { GroupInfoRepublisher } from './group/group-info-republisher.js';
 import { dialProtocolWithRelayFallback } from './protocol-dialer.js';
@@ -434,7 +435,7 @@ export class MessageHandler {
         `[NUDGE][GROUP-CHECK][START] peer=${remoteId.slice(-8)} chatId=${chatId} group=${groupId.slice(0, 8)} ` +
         `isRetry=${isRetry} allowRetry=${allowRetry}`,
       );
-      const { checkedChatIds, unreadFromChats } = await this.checkGroupOfflineMessages([chatId]);
+      const { checkedChatIds, unreadFromChats } = await this.checkGroupOfflineMessages([chatId], { mode: 'nudge' });
       const unread = unreadFromChats.get(chatId) ?? 0;
       const hasNewData = unread > 0;
       console.log(
@@ -496,7 +497,7 @@ export class MessageHandler {
           `[GROUP-OFFLINE][STATE-CATCHUP][START] chatId=${chatId} group=${groupId.slice(0, 8)} ` +
           `trigger=${reason} targetKeyVersion=${targetKeyVersion} preCheckVersion=${preCheckVersion}`,
         );
-        const { checkedChatIds, unreadFromChats, gapWarnings } = await this.checkGroupOfflineMessages([chatId]);
+        const { checkedChatIds, unreadFromChats, gapWarnings } = await this.checkGroupOfflineMessages([chatId], { mode: 'nudge' });
         const unread = unreadFromChats.get(chatId) ?? 0;
         console.log(
           `[GROUP-OFFLINE][STATE-CATCHUP][DONE] chatId=${chatId} group=${groupId.slice(0, 8)} ` +
@@ -1025,13 +1026,13 @@ export class MessageHandler {
     }
   }
 
-  async checkGroupOfflineMessages(chatIds?: number[]): Promise<{
+  async checkGroupOfflineMessages(chatIds?: number[], options?: GroupOfflineCheckOptions): Promise<{
     checkedChatIds: number[];
     unreadFromChats: Map<number, number>;
     gapWarnings: GroupOfflineGapWarning[];
   }> {
     try {
-      return await this.groupOfflineManager.checkGroupOfflineMessages(chatIds);
+      return await this.groupOfflineManager.checkGroupOfflineMessages(chatIds, options);
     } catch (error: unknown) {
       generalErrorHandler(error, '[GROUP-OFFLINE] Failed to check group offline messages');
       return { checkedChatIds: [], unreadFromChats: new Map(), gapWarnings: [] };
@@ -1140,7 +1141,6 @@ export class MessageHandler {
       `[OFFLINE][CHECK][START] run=${runId} scope=${chatIds ? `chat_ids:${chatIds.join(',')}` : 'default'}`,
     );
 
-    // Get bucket info for reading: secret + peer's signing public key
     const bucketInfoList: OfflineReadBucketInfoAny[] = chatIds
       ? this.database.getOfflineReadBucketInfoForChats(chatIds)
       : this.database.getOfflineReadBucketInfo(this.getChatsToCheckForOfflineMessages());
@@ -1151,17 +1151,17 @@ export class MessageHandler {
       return {checkedChatIds: [], unreadFromChats: new Map()};
     }
 
-    // Construct read bucket keys (uses peer's pubkey to read their messages)
+    // TODO what is the point of checkedChats?
     const readBuckets: Array<{ chatId?: number; key: string; peerPubKey: string; peerId: string; lastReadTimestamp: number }> = [];
     const checkedChats: number[] = [];
 
     for (const info of bucketInfoList) {
-      // Standard construction works for both ECDH-derived and random secrets
       const readBucketKey = this.keyExchange.constructReadBucketKey(
         info.offline_bucket_secret,
         info.signing_public_key
       );
       if (!readBucketKey.startsWith(this.expectedOfflineBucketPrefix)) {
+        // TODO remove after testing
         const chatIdForLog = hasChatId(info) ? String(info.chat_id) : 'n/a';
         console.warn(
           `[MODE-GUARD][REJECT][offline_lookup] run=${runId} chatId=${chatIdForLog} peer=${info.peer_id} ` +
@@ -1172,22 +1172,18 @@ export class MessageHandler {
 
       const chatId = hasChatId(info) ? info.chat_id : undefined;
 
+      const bucket = {
+        key: readBucketKey,
+        peerPubKey: info.signing_public_key,
+        peerId: info.peer_id,
+        lastReadTimestamp: info.offline_last_read_timestamp,
+        ...(chatId !== undefined && { chatId })
+      };
+      
+      readBuckets.push(bucket);
+      
       if (chatId !== undefined) {
-        readBuckets.push({
-          chatId,
-          key: readBucketKey,
-          peerPubKey: info.signing_public_key,
-          peerId: info.peer_id,
-          lastReadTimestamp: info.offline_last_read_timestamp
-        });
         checkedChats.push(chatId);
-      } else {
-        readBuckets.push({
-          key: readBucketKey,
-          peerPubKey: info.signing_public_key,
-          peerId: info.peer_id,
-          lastReadTimestamp: info.offline_last_read_timestamp
-        });
       }
     }
 
@@ -1206,8 +1202,11 @@ export class MessageHandler {
     }
 
     console.log(`Found ${store.messages.length} offline direct message(s)`);
+
+    // extract unique messages per bucket
     const byBucket = new Map<string, number>();
     const uniquePerBucket = new Map<string, Set<string>>();
+
     for (const msg of store.messages) {
       const bucket = msg.bucket_key ?? 'unknown';
       byBucket.set(bucket, (byBucket.get(bucket) ?? 0) + 1);
@@ -1216,6 +1215,8 @@ export class MessageHandler {
       }
       uniquePerBucket.get(bucket)!.add(msg.id);
     }
+
+    // TODO remove duplicates logging after testing
     for (const [bucket, count] of byBucket.entries()) {
       const uniqueCount = uniquePerBucket.get(bucket)?.size ?? 0;
       const duplicates = count - uniqueCount;
@@ -1231,9 +1232,14 @@ export class MessageHandler {
     let processedCount = 0;
 
     const unreadFromChats: Map<number, number> = new Map();
+    const userIdentity = this.usernameRegistry.getUserIdentity();
+    if (!userIdentity) {
+      throw new Error("No user identity available")
+    }
 
     for (const msg of store.messages) {
       if (!msg.bucket_key) continue;
+      // TODO this is probably redundant since we check this above
       if (!msg.bucket_key.startsWith(this.expectedOfflineBucketPrefix)) {
         console.warn(
           `[MODE-GUARD][REJECT][offline_lookup] run=${runId} reason=message_bucket_prefix_mismatch ` +
@@ -1242,12 +1248,6 @@ export class MessageHandler {
         continue;
       }
       try {
-        const userIdentity = this.usernameRegistry.getUserIdentity();
-        if (!userIdentity) {
-          console.log(`Skipping message - no user identity available`);
-          continue;
-        }
-
         const bucketInfo = readBuckets.find(b => b.key === msg.bucket_key);
         if (!bucketInfo) {
           console.log(`Skipping message - unknown bucket key`);
@@ -1292,6 +1292,7 @@ export class MessageHandler {
 
         // Process ACK if included - clear acknowledged messages from our bucket
         if (senderInfo.offline_ack_timestamp) {
+          // TODO this is already in "pripazi" file, but im gonna say it again - dht.put here is not necesserry
           // eslint-disable-next-line no-await-in-loop
           await this.processOfflineAck(senderInfo.peer_id, senderInfo.offline_ack_timestamp);
         }
@@ -1302,30 +1303,28 @@ export class MessageHandler {
           decryptedContent = MessageEncryption.decryptOfflineMessage(msg, userIdentity.offlinePrivateKey);
         }
 
-        // Check if this is a group control message
+        // Check if this is a group control message - should we await this or let it process in bg?
         // eslint-disable-next-line no-await-in-loop
         const groupResult = await this.tryRouteGroupControlMessage(decryptedContent, senderInfo);
         if (groupResult === 'retry') {
-          // Handler failed — skip saving as text, skip advancing timestamp so it is retried next check
           console.log(
-            `[OFFLINE][MSG][GROUP] run=${runId} msgId=${msg.id} from=${senderInfo.peer_id.slice(-8)} result=retry`,
+            `[OFFLINE][MSG][GROUP] run=${runId} msgId=${msg.id} from=${senderInfo.username} result=retry`,
           );
           continue;
         }
         if (groupResult === 'handled') {
-          // Advance timestamp so we don't re-process, but don't save as a regular message
+          // Advance timestamp so we don't re-process
           const currentMax = maxTimestampPerPeer.get(bucketInfo.peerId) ?? 0;
           if (msg.timestamp > currentMax) {
             maxTimestampPerPeer.set(bucketInfo.peerId, msg.timestamp);
           }
           console.log(
-            `[OFFLINE][MSG][GROUP] run=${runId} msgId=${msg.id} from=${senderInfo.peer_id.slice(-8)} result=handled`,
+            `[OFFLINE][MSG][GROUP] run=${runId} msgId=${msg.id} from=${senderInfo.username} result=handled`,
           );
           continue;
         }
+        
         // 'not_group': fall through to regular message handling
-
-        // Regular text message — save to database
         // eslint-disable-next-line no-await-in-loop
         const msgChatId = await this.saveOfflineMessageToDatabase(msg, senderInfo, decryptedContent);
         const unreadCount = unreadFromChats.get(msgChatId) ?? 0;
@@ -1548,8 +1547,7 @@ export class MessageHandler {
   }
 
   /**
-   * Attempts to parse decrypted content as a group control message and route it
-   * to the appropriate handler (GroupCreator or GroupResponder).
+   * Attempts to parse decrypted content as a group control message
    * Returns 'handled' if processed OK, 'retry' if it was a group message but failed (no timestamp advance),
    * or 'not_group' if this is a regular text message.
    */
@@ -1561,7 +1559,6 @@ export class MessageHandler {
     try {
       parsed = JSON.parse(decryptedContent);
     } catch {
-      // Not JSON — regular text message
       return 'not_group';
     }
 
@@ -1572,9 +1569,10 @@ export class MessageHandler {
     // Check if this is a known group message type
     const groupTypes = Object.values(GroupMessageType) as string[];
     if (!groupTypes.includes(type)) return 'not_group';
+    // TODO also remove after testing
     const groupMeta = this.describeParsedGroupMessage(parsed as Record<string, unknown>);
     console.log(
-      `[GROUP][TRACE][ROUTE][IN] from=${senderInfo.peer_id.slice(-8)} ${groupMeta}`,
+      `[GROUP][TRACE][ROUTE][IN] from=${senderInfo.username} ${groupMeta}`,
     );
 
     const userIdentity = this.usernameRegistry.getUserIdentity();

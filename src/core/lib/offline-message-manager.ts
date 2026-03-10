@@ -56,12 +56,11 @@ export class OfflineMessageManager {
         node: ChatNode,
         bucketKey: string,
         message: OfflineMessage,
-        signingPrivateKey: Uint8Array,  // Ed25519 private key for signing store
-        database: ChatDatabase          // Local database for caching
+        signingPrivateKey: Uint8Array,
+        database: ChatDatabase
     ): Promise<void> {
         return OfflineMessageManager.withBucketMutationLock(bucketKey, async () => {
             try {
-                // Read from local database instead of DHT
                 const local = database.getOfflineSentMessages(bucketKey);
                 const messages: OfflineMessage[] = OfflineMessageManager.filterExpiredMessages(local.messages);
                 let version = local.version;

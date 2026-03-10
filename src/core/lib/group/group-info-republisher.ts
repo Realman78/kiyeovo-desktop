@@ -74,6 +74,12 @@ export class GroupInfoRepublisher {
 
           this.deps.database.updateGroupKeyStateHash(pending.group_id, pending.key_version, parsed.versionedRecord.stateHash);
           if (pending.key_version > 1) {
+            this.deps.database.upsertGroupEpochBoundaries(
+              pending.group_id,
+              pending.key_version - 1,
+              parsed.versionedRecord.senderSeqBoundaries ?? {},
+              'creator_republish',
+            );
             this.deps.database.markGroupKeyUsedUntil(pending.group_id, pending.key_version - 1, Date.now());
           }
           this.deps.database.removePendingGroupInfoPublish(pending.group_id, pending.key_version);

@@ -141,7 +141,7 @@ export function ConfigurationDialog({ open, onOpenChange }: ConfigurationDialogP
                 }
               />
               <p className="text-xs text-muted-foreground">
-                How many chats to check for offline messages each time (1-50)
+                How many chats to check for offline messages on startup (1-50) - bigger is slower
               </p>
             </div>
 

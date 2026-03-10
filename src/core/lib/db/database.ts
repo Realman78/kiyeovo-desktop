@@ -201,6 +201,15 @@ export interface GroupSenderSeq {
     next_seq: number
 }
 
+export interface GroupEpochBoundary {
+    group_id: string
+    key_version: number
+    sender_peer_id: string
+    boundary_seq: number
+    source: string
+    updated_at: string
+}
+
 export class ChatDatabase {
     private db: Database.Database;
     private dbPath: string;
@@ -564,6 +573,19 @@ export class ChatDatabase {
                 key_version INTEGER NOT NULL,
                 sender_peer_id TEXT NOT NULL,
                 highest_seq INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (group_id, key_version, sender_peer_id)
+            )
+        `);
+
+        // Group epoch boundaries — finalized sender seq cutoffs for a closed key epoch
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS group_epoch_boundaries (
+                group_id TEXT NOT NULL,
+                key_version INTEGER NOT NULL,
+                sender_peer_id TEXT NOT NULL,
+                boundary_seq INTEGER NOT NULL DEFAULT 0,
+                source TEXT NOT NULL DEFAULT 'local_rotation',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (group_id, key_version, sender_peer_id)
             )
         `);
@@ -2007,10 +2029,13 @@ export class ChatDatabase {
 
     deleteGroupKeyHistory(groupId: string): void {
         this.db.prepare('DELETE FROM group_key_history WHERE group_id = ?').run(groupId);
+        this.db.prepare('DELETE FROM group_epoch_boundaries WHERE group_id = ?').run(groupId);
     }
 
     deleteGroupKeyHistoryForEpoch(groupId: string, keyVersion: number): void {
         this.db.prepare('DELETE FROM group_key_history WHERE group_id = ? AND key_version = ?')
+            .run(groupId, keyVersion);
+        this.db.prepare('DELETE FROM group_epoch_boundaries WHERE group_id = ? AND key_version = ?')
             .run(groupId, keyVersion);
     }
 
@@ -2260,6 +2285,86 @@ export class ChatDatabase {
             .run(groupId, keyVersion);
     }
 
+    // --- Group epoch boundaries (finalized per-sender seq cutoffs for old epochs) ---
+
+    upsertGroupEpochBoundary(
+        groupId: string,
+        keyVersion: number,
+        senderPeerId: string,
+        boundarySeq: number,
+        source = 'local_rotation',
+    ): void {
+        this.db.prepare(`
+            INSERT INTO group_epoch_boundaries (group_id, key_version, sender_peer_id, boundary_seq, source, updated_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(group_id, key_version, sender_peer_id) DO UPDATE SET
+                boundary_seq = MAX(boundary_seq, excluded.boundary_seq),
+                source = excluded.source,
+                updated_at = CURRENT_TIMESTAMP
+        `).run(groupId, keyVersion, senderPeerId, boundarySeq, source);
+    }
+
+    upsertGroupEpochBoundaries(
+        groupId: string,
+        keyVersion: number,
+        boundaries: Record<string, number>,
+        source = 'local_rotation',
+    ): void {
+        const entries = Object.entries(boundaries);
+        if (entries.length === 0) return;
+
+        const stmt = this.db.prepare(`
+            INSERT INTO group_epoch_boundaries (group_id, key_version, sender_peer_id, boundary_seq, source, updated_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(group_id, key_version, sender_peer_id) DO UPDATE SET
+                boundary_seq = MAX(boundary_seq, excluded.boundary_seq),
+                source = excluded.source,
+                updated_at = CURRENT_TIMESTAMP
+        `);
+
+        const txn = this.db.transaction((rows: Array<[string, number]>) => {
+            for (const [senderPeerId, boundarySeq] of rows) {
+                if (!senderPeerId) continue;
+                const normalized = Number.isFinite(boundarySeq) ? Math.max(0, Math.floor(boundarySeq)) : 0;
+                stmt.run(groupId, keyVersion, senderPeerId, normalized, source);
+            }
+        });
+        txn(entries);
+    }
+
+    getGroupEpochBoundaries(groupId: string, keyVersion: number): Record<string, number> {
+        const rows = this.db.prepare(`
+            SELECT sender_peer_id, boundary_seq
+            FROM group_epoch_boundaries
+            WHERE group_id = ? AND key_version = ?
+        `).all(groupId, keyVersion) as Array<{ sender_peer_id: string; boundary_seq: number }>;
+
+        const result: Record<string, number> = {};
+        for (const row of rows) {
+            result[row.sender_peer_id] = row.boundary_seq;
+        }
+        return result;
+    }
+
+    getAllGroupEpochBoundaries(groupId: string, keyVersion: number): GroupEpochBoundary[] {
+        const stmt = this.db.prepare(`
+            SELECT *
+            FROM group_epoch_boundaries
+            WHERE group_id = ? AND key_version = ?
+            ORDER BY sender_peer_id ASC
+        `);
+        return stmt.all(groupId, keyVersion) as GroupEpochBoundary[];
+    }
+
+    deleteGroupEpochBoundaries(groupId: string): void {
+        this.db.prepare('DELETE FROM group_epoch_boundaries WHERE group_id = ?').run(groupId);
+    }
+
+    deleteGroupEpochBoundariesForEpoch(groupId: string, keyVersion: number): void {
+        this.db.prepare('DELETE FROM group_epoch_boundaries WHERE group_id = ? AND key_version = ?')
+            .run(groupId, keyVersion);
+    }
+
     // --- Group chat column helpers ---
 
     updateChatStatus(chatId: number, status: string): void {
@@ -2395,6 +2500,7 @@ export class ChatDatabase {
         const deleteOfflineCursorsStmt = this.db.prepare('DELETE FROM group_offline_cursors WHERE group_id = ?');
         const deleteSenderSeqStmt = this.db.prepare('DELETE FROM group_sender_seq WHERE group_id = ?');
         const deleteMemberSeqStmt = this.db.prepare('DELETE FROM group_member_seq WHERE group_id = ?');
+        const deleteEpochBoundariesStmt = this.db.prepare('DELETE FROM group_epoch_boundaries WHERE group_id = ?');
         const deleteOfflineSentStmt = this.db.prepare('DELETE FROM group_offline_sent_messages WHERE bucket_key LIKE ?');
 
         const txn = this.db.transaction((cId: number, gId: string) => {
@@ -2403,6 +2509,7 @@ export class ChatDatabase {
             deleteOfflineCursorsStmt.run(gId);
             deleteSenderSeqStmt.run(gId);
             deleteMemberSeqStmt.run(gId);
+            deleteEpochBoundariesStmt.run(gId);
             deleteOfflineSentStmt.run(`${groupOfflineBucketPrefix}/${gId}/%`);
         });
 

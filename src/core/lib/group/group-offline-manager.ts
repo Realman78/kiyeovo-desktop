@@ -54,6 +54,12 @@ interface CachedVersionMetaEntry {
   cachedAt: number;
 }
 
+interface CachedMissingStoreEntry {
+  until: number;
+  reason: 'no_record' | 'dht_error';
+  cachedAt: number;
+}
+
 interface GroupChatCheckResult {
   processed: boolean;
   completed: boolean;
@@ -71,6 +77,12 @@ interface EpochPruneDecision {
   reason: string;
 }
 
+export type GroupOfflineCheckMode = 'periodic' | 'nudge';
+
+export interface GroupOfflineCheckOptions {
+  mode?: GroupOfflineCheckMode;
+}
+
 export interface GroupOfflineCheckResult {
   checkedChatIds: number[];
   unreadFromChats: Map<number, number>;
@@ -83,11 +95,15 @@ export class GroupOfflineManager {
   private readonly groupInfoVersionPrefix: string;
   private readonly bucketMutationQueues = new Map<string, Promise<void>>();
   private readonly localStoreCache = new Map<string, CachedStoreEntry>();
+  private readonly missingStoreCache = new Map<string, CachedMissingStoreEntry>();
   private readonly versionMetaCache = new Map<string, CachedVersionMetaEntry>();
   private readonly groupCheckInFlight = new Map<string, Promise<GroupChatCheckResult>>();
   private lastCleanupAt = 0;
   private offlineCheckRunCounter = 0;
   private cleanupInFlight: Promise<void> | null = null;
+  private static readonly MISSING_STORE_CACHE_TTL_MS = 60_000;
+  private static readonly MISSING_STORE_DHT_ERROR_TTL_MS = 15_000;
+  private static readonly MISSING_STORE_CACHE_MAX_ENTRIES = 1024;
 
   constructor(deps: GroupOfflineManagerDeps) {
     this.deps = deps;
@@ -215,7 +231,9 @@ export class GroupOfflineManager {
     });
   }
 
-  async checkGroupOfflineMessages(chatIds?: number[]): Promise<GroupOfflineCheckResult> {
+  async checkGroupOfflineMessages(chatIds?: number[], options?: GroupOfflineCheckOptions): Promise<GroupOfflineCheckResult> {
+    const mode: GroupOfflineCheckMode = options?.mode ?? 'periodic';
+    // TODO remove after testing
     const runId = ++this.offlineCheckRunCounter;
     const runStart = Date.now();
     this.pruneLocalCaches();
@@ -225,7 +243,7 @@ export class GroupOfflineManager {
     const targetChats = this.resolveTargetChats(chatIds);
     console.log(
       `[GROUP-OFFLINE][TIMING][RUN:${runId}] start targetChats=${targetChats.length} ` +
-      `chatIds=${targetChats.map((c) => c.id).join(',') || 'none'}`
+      `chatIds=${targetChats.map((c) => c.id).join(',') || 'none'} mode=${mode}`
     );
 
     if (Date.now() - this.lastCleanupAt >= GROUP_OFFLINE_CLEANUP_INTERVAL_MS) {
@@ -249,7 +267,7 @@ export class GroupOfflineManager {
 
     for (const chat of targetChats) {
       const chatStart = Date.now();
-      const result = await this.runGroupCheckWithSingleFlight(chat);
+      const result = await this.runGroupCheckWithSingleFlight(chat, mode);
       const processed = result.processed;
 
       if (result.unreadAdded > 0) {
@@ -309,33 +327,35 @@ export class GroupOfflineManager {
     return groups.filter(c => wanted.has(c.id));
   }
 
-  private async runGroupCheckWithSingleFlight(chat: Chat): Promise<GroupChatCheckResult> {
+  private async runGroupCheckWithSingleFlight(chat: Chat, mode: GroupOfflineCheckMode): Promise<GroupChatCheckResult> {
     if (!chat.group_id) {
       return { processed: false, completed: false, unreadAdded: 0, gapWarnings: [] };
     }
 
-    const existing = this.groupCheckInFlight.get(chat.group_id);
+    const inFlightKey = `${chat.group_id}:${mode}`;
+    const existing = this.groupCheckInFlight.get(inFlightKey);
     if (existing) {
       console.log(
-        `[GROUP-OFFLINE][TIMING][CHAT:${chat.id}] reusing in-flight check for group=${chat.group_id.slice(0, 8)}`
+        `[GROUP-OFFLINE][TIMING][CHAT:${chat.id}] reusing in-flight check for group=${chat.group_id.slice(0, 8)} mode=${mode}`
       );
       return existing;
     }
 
     let checkPromise!: Promise<GroupChatCheckResult>;
-    checkPromise = this.checkGroupChat(chat)
+    checkPromise = this.checkGroupChat(chat, mode)
       .finally(() => {
-        if (this.groupCheckInFlight.get(chat.group_id!) === checkPromise) {
-          this.groupCheckInFlight.delete(chat.group_id!);
+        if (this.groupCheckInFlight.get(inFlightKey) === checkPromise) {
+          this.groupCheckInFlight.delete(inFlightKey);
         }
       });
 
-    this.groupCheckInFlight.set(chat.group_id, checkPromise);
+    this.groupCheckInFlight.set(inFlightKey, checkPromise);
     return checkPromise;
   }
 
   private async checkGroupChat(
     chat: Chat,
+    mode: GroupOfflineCheckMode,
   ): Promise<GroupChatCheckResult> {
     if (!chat.group_id) return { processed: false, completed: false, unreadAdded: 0, gapWarnings: [] };
     const chatStart = Date.now();
@@ -347,8 +367,9 @@ export class GroupOfflineManager {
     const history = this.deps.database.getGroupKeyHistory(chat.group_id)
       .filter(h => h.key_version <= (chat.key_version ?? 0))
       .sort((a, b) => a.key_version - b.key_version);
+    const scopedHistory = this.selectHistoryForMode(history, chat.key_version ?? 0, mode);
 
-    for (const epoch of history) {
+    for (const epoch of scopedHistory) {
       epochsProcessed++;
       const epochStart = Date.now();
       const metaStart = Date.now();
@@ -360,9 +381,7 @@ export class GroupOfflineManager {
         );
       }
       const metaKeyVersion = this.resolveEpochBoundaryMetaVersion(chat, epoch.key_version);
-      const versionMeta = metaKeyVersion === null
-        ? null
-        : await this.getVersionMeta(chat, metaKeyVersion);
+      const versionMeta = await this.getEpochBoundaryMeta(chat, epoch.key_version, metaKeyVersion);
       const metaMs = Date.now() - metaStart;
       const skipDecision = this.evaluateEpochSkipDecision(chat, epoch, versionMeta);
       if (skipDecision.skip) {
@@ -399,7 +418,10 @@ export class GroupOfflineManager {
       const storesFetchStart = Date.now();
       const senderStores = await Promise.all(senderDescriptors.map(async (desc) => ({
         ...desc,
-        store: await this.getLatestStore(desc.bucketKey),
+        store: await this.getLatestStore(
+          desc.bucketKey,
+          mode === 'periodic' && epoch.key_version < (currentKeyVersion - 1),
+        ),
       })));
       const storesFetchMs = Date.now() - storesFetchStart;
 
@@ -584,6 +606,35 @@ export class GroupOfflineManager {
     };
   }
 
+  private selectHistoryForMode(
+    history: Array<{ key_version: number; used_until: number | null }>,
+    currentKeyVersion: number,
+    mode: GroupOfflineCheckMode,
+  ): Array<{ key_version: number; used_until: number | null }> {
+    if (mode !== 'nudge') return history;
+    if (history.length === 0) return history;
+
+    const selected = new Set<number>();
+    const currentEpoch = history.find((epoch) => epoch.key_version === currentKeyVersion) ?? history[history.length - 1];
+    if (currentEpoch) {
+      selected.add(currentEpoch.key_version);
+    }
+
+    const previousEpoch = [...history]
+      .reverse()
+      .find((epoch) => epoch.key_version < (currentEpoch?.key_version ?? currentKeyVersion));
+    if (previousEpoch && this.isEpochEligibleForNudge(previousEpoch)) {
+      selected.add(previousEpoch.key_version);
+    }
+
+    return history.filter((epoch) => selected.has(epoch.key_version));
+  }
+
+  private isEpochEligibleForNudge(epoch: { key_version: number; used_until: number | null }): boolean {
+    if (epoch.used_until === null) return true;
+    return Date.now() < epoch.used_until + GROUP_ROTATION_GRACE_WINDOW_MS;
+  }
+
   private async getVersionMeta(chat: Chat, keyVersion: number): Promise<GroupOfflineVersionMeta | null> {
     if (!chat.group_id || !chat.group_creator_peer_id) return null;
     const cacheKey = `${chat.group_id}:${keyVersion}`;
@@ -689,16 +740,26 @@ export class GroupOfflineManager {
     };
   }
 
-  private async getLatestStore(bucketKey: string): Promise<GroupOfflineStore | null> {
+  private async getLatestStore(bucketKey: string, allowMissingStoreCache = false): Promise<GroupOfflineStore | null> {
     console.log("checking bucket", bucketKey);
     const startedAt = Date.now();
-    const cached = this.getCachedStore(bucketKey);
-    if (cached) {
-      console.log(
-        `[GROUP-OFFLINE][TIMING][STORE] bucket=*${bucketKey.slice(-10)} cacheHit=true took=${Date.now() - startedAt}ms`
-      );
-      return cached;
-    }
+    // TODO research if it should be enabled back
+    // const cached = this.getCachedStore(bucketKey);
+    // if (cached) {
+    //   console.log(
+    //     `[GROUP-OFFLINE][TIMING][STORE] bucket=*${bucketKey.slice(-10)} cacheHit=true took=${Date.now() - startedAt}ms`
+    //   );
+    //   return cached;
+    // }
+    // if (allowMissingStoreCache) {
+    //   const missing = this.getCachedMissingStore(bucketKey);
+    //   if (missing) {
+    //     console.log(
+    //       `[GROUP-OFFLINE][TIMING][STORE] bucket=*${bucketKey.slice(-10)} cacheHit=missing reason=${missing.reason} took=${Date.now() - startedAt}ms`
+    //     );
+    //     return null;
+    //   }
+    // }
 
     const key = new TextEncoder().encode(bucketKey);
     let best: GroupOfflineStore | null = null;
@@ -725,6 +786,9 @@ export class GroupOfflineManager {
         }
       }
     } catch {
+      if (allowMissingStoreCache) {
+        this.setCachedMissingStore(bucketKey, 'dht_error');
+      }
       console.log(
         `[GROUP-OFFLINE][TIMING][STORE] bucket=*${bucketKey.slice(-10)} cacheHit=false dhtError=true ` +
         `valueEvents=${valueEvents} took=${Date.now() - startedAt}ms`
@@ -734,6 +798,9 @@ export class GroupOfflineManager {
 
     if (best) {
       this.setCachedStore(bucketKey, best);
+      this.missingStoreCache.delete(bucketKey);
+    } else if (allowMissingStoreCache) {
+      this.setCachedMissingStore(bucketKey, 'no_record');
     }
     console.log(
       `[GROUP-OFFLINE][TIMING][STORE] bucket=*${bucketKey.slice(-10)} cacheHit=false hasStore=${!!best} ` +
@@ -743,12 +810,10 @@ export class GroupOfflineManager {
   }
 
   private async putStore(bucketKey: string, store: GroupOfflineStore): Promise<void> {
-    const startedAt = Date.now();
     const key = new TextEncoder().encode(bucketKey);
     const payload = Buffer.from(JSON.stringify(store), 'utf8');
-    const compressStartedAt = Date.now();
     const compressed = await gzipAsync(payload);
-    const compressMs = Date.now() - compressStartedAt;
+
     if (compressed.length > GROUP_OFFLINE_STORE_MAX_COMPRESSED_BYTES) {
       throw new Error(
         `Group offline store too large (${compressed.length}B > ${GROUP_OFFLINE_STORE_MAX_COMPRESSED_BYTES}B)`,
@@ -757,29 +822,17 @@ export class GroupOfflineManager {
 
     let successCount = 0;
     let eventCount = 0;
-    let firstPeerResponseMs: number | null = null;
-    const putStartedAt = Date.now();
+
     for await (const event of this.deps.node.services.dht.put(key, compressed) as AsyncIterable<QueryEvent>) {
       eventCount++;
-      if (event.name === 'PEER_RESPONSE') {
-        successCount++;
-        if (firstPeerResponseMs === null) {
-          firstPeerResponseMs = Date.now() - putStartedAt;
-        }
-      }
+      if (event.name === 'PEER_RESPONSE') successCount++;
     }
-    const putMs = Date.now() - putStartedAt;
-    const totalMs = Date.now() - startedAt;
-    console.log(
-      `[GROUP-OFFLINE][TIMING][PUT] bucket=*${bucketKey.slice(-10)} ` +
-      `payload=${payload.length}B gz=${compressed.length}B compressMs=${compressMs} ` +
-      `putMs=${putMs} firstPeerMs=${firstPeerResponseMs ?? -1} peerResponses=${successCount} ` +
-      `events=${eventCount} totalMs=${totalMs}`
-    );
+    console.log(`[GROUP-OFFLINE][TIMING][PUT] bucket=${bucketKey}`);
 
     if (successCount === 0) {
       throw new Error('Failed to store group offline message: no successful DHT peers');
     }
+    this.missingStoreCache.delete(bucketKey);
   }
 
   private isStoreTooLargeError(error: unknown): boolean {
@@ -895,6 +948,28 @@ export class GroupOfflineManager {
     return candidate <= currentKeyVersion ? candidate : null;
   }
 
+  private async getEpochBoundaryMeta(
+    chat: Chat,
+    epochKeyVersion: number,
+    metaKeyVersion: number | null,
+  ): Promise<GroupOfflineVersionMeta | null> {
+    if (!chat.group_id) return null;
+
+    const localBoundaries = this.deps.database.getGroupEpochBoundaries(chat.group_id, epochKeyVersion);
+    if (Object.keys(localBoundaries).length > 0) {
+      return {
+        members: [],
+        senderSeqBoundaries: localBoundaries,
+      };
+    }
+
+    if (metaKeyVersion === null) {
+      return null;
+    }
+
+    return this.getVersionMeta(chat, metaKeyVersion);
+  }
+
   private getLocalKnownEpochSenders(chat: Chat, keyVersion: number): string[] {
     if (!chat.group_id) return [];
 
@@ -966,9 +1041,33 @@ export class GroupOfflineManager {
 
   private setCachedStore(bucketKey: string, store: GroupOfflineStore): void {
     this.localStoreCache.set(bucketKey, { store, cachedAt: Date.now() });
+    this.missingStoreCache.delete(bucketKey);
     this.pruneLocalCaches();
   }
 
+  private getCachedMissingStore(bucketKey: string): CachedMissingStoreEntry | null {
+    const entry = this.missingStoreCache.get(bucketKey);
+    if (!entry) return null;
+    if (Date.now() >= entry.until) {
+      this.missingStoreCache.delete(bucketKey);
+      return null;
+    }
+    return entry;
+  }
+
+  private setCachedMissingStore(bucketKey: string, reason: 'no_record' | 'dht_error'): void {
+    const ttl = reason === 'dht_error'
+      ? GroupOfflineManager.MISSING_STORE_DHT_ERROR_TTL_MS
+      : GroupOfflineManager.MISSING_STORE_CACHE_TTL_MS;
+    this.missingStoreCache.set(bucketKey, {
+      until: Date.now() + ttl,
+      reason,
+      cachedAt: Date.now(),
+    });
+    this.pruneLocalCaches();
+  }
+
+  // TODO shold we remove this cache for versoinMeta and localStore?
   private pruneLocalCaches(): void {
     const now = Date.now();
     for (const [bucketKey, entry] of this.localStoreCache.entries()) {
@@ -979,6 +1078,11 @@ export class GroupOfflineManager {
     for (const [metaKey, entry] of this.versionMetaCache.entries()) {
       if (now - entry.cachedAt > GROUP_OFFLINE_LOCAL_CACHE_TTL_MS) {
         this.versionMetaCache.delete(metaKey);
+      }
+    }
+    for (const [bucketKey, entry] of this.missingStoreCache.entries()) {
+      if (now >= entry.until) {
+        this.missingStoreCache.delete(bucketKey);
       }
     }
 
@@ -992,6 +1096,11 @@ export class GroupOfflineManager {
       if (!oldest) break;
       this.versionMetaCache.delete(oldest);
     }
+    while (this.missingStoreCache.size > GroupOfflineManager.MISSING_STORE_CACHE_MAX_ENTRIES) {
+      const oldest = this.missingStoreCache.keys().next().value;
+      if (!oldest) break;
+      this.missingStoreCache.delete(oldest);
+    }
   }
 
   private async cleanupExpiredBuckets(chats: Chat[]): Promise<void> {
@@ -1004,10 +1113,17 @@ export class GroupOfflineManager {
         .filter((h) => h.key_version <= (chat.key_version ?? 0))
         .sort((a, b) => a.key_version - b.key_version);
 
+      // TODO why are we doing this one by one? They dont overlap
+      // also, Im thinking a lot about pruning the old key versions more aggresively, but if someone
+      // who has not been online for a long time logs on and tries to send a message before his offline
+      // group key_version got updated, it could end up in the old buckets. What if we block sending until 
+      // everything is fetched? or what if we fetch the latest state and then write to that bucket and let
+      // the catching up process in the background
       for (const epoch of history) {
         const bucketKey = `${this.groupOfflineBucketPrefix}/${chat.group_id}/${epoch.key_version}/${ownPubKeyBase64url}`;
         await this.withBucketMutationLock(bucketKey, async () => {
-          const existing = this.getCachedStore(bucketKey) ?? await this.getLatestStore(bucketKey);
+          // const existing = this.getCachedStore(bucketKey) ?? await this.getLatestStore(bucketKey);
+          const existing = await this.getLatestStore(bucketKey);
           if (!existing || existing.messages.length === 0) return;
 
           const liveMessages = this.filterLiveMessages(existing.messages, now);
@@ -1041,9 +1157,7 @@ export class GroupOfflineManager {
         continue;
       }
       const metaKeyVersion = this.resolveEpochBoundaryMetaVersion(chat, epoch.key_version);
-      const versionMeta = metaKeyVersion === null
-        ? null
-        : await this.getVersionMeta(chat, metaKeyVersion);
+      const versionMeta = await this.getEpochBoundaryMeta(chat, epoch.key_version, metaKeyVersion);
       const pruneDecision = this.evaluateEpochPruneDecision(chat, epoch, versionMeta);
       if (!pruneDecision.prune) {
         console.log(
@@ -1077,6 +1191,11 @@ export class GroupOfflineManager {
     for (const bucketKey of this.localStoreCache.keys()) {
       if (bucketKey.startsWith(bucketPrefix)) {
         this.localStoreCache.delete(bucketKey);
+      }
+    }
+    for (const bucketKey of this.missingStoreCache.keys()) {
+      if (bucketKey.startsWith(bucketPrefix)) {
+        this.missingStoreCache.delete(bucketKey);
       }
     }
     console.log(

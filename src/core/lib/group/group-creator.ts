@@ -252,7 +252,7 @@ export class GroupCreator {
 
       const roundResults = await Promise.all(batch.map(async (peerId): Promise<GroupInviteDelivery> => {
         const inviteId = randomUUID();
-        const expiresAt = now + GROUP_INVITE_LIFETIME;
+        const expiresAt = now + GROUP_INVITE_LIFETIME; // TODO what if it expires?
         const invitee = database.getUserByPeerId(peerId);
         const username = invitee?.username || peerId;
 
@@ -272,13 +272,13 @@ export class GroupCreator {
         // Store in pending ACKs first, then send
         database.insertPendingAck(groupId, peerId, 'GROUP_INVITE', JSON.stringify(signedInvite));
         console.log(
-          `[GROUP][TRACE][INVITE][CREATE] group=${groupId} inviteId=${inviteId} to=${peerId.slice(-8)} pendingSaved=true expiresAt=${expiresAt}`,
+          `[GROUP][TRACE][INVITE][CREATE] group=${groupId} inviteId=${inviteId} to=${username} expiresAt=${expiresAt}`,
         );
 
         try {
           await this.sendControlMessageToPeer(peerId, signedInvite);
           console.log(
-            `[GROUP][TRACE][INVITE][SENT] group=${groupId} inviteId=${inviteId} to=${peerId.slice(-8)}`,
+            `[GROUP][TRACE][INVITE][SENT] group=${groupId} inviteId=${inviteId} to=${username}`,
           );
           return { peerId, username, status: 'sent' };
         } catch (error: unknown) {
@@ -1129,6 +1129,12 @@ export class GroupCreator {
       }
     }
 
+    // Persist finalized boundaries for previous epoch locally.
+    // Creator DB is authoritative for its own rotations; DHT is for distribution.
+    if (prevVersion >= 1 && Object.keys(senderSeqBoundaries).length > 0) {
+      database.upsertGroupEpochBoundaries(groupId, prevVersion, senderSeqBoundaries, 'creator_rotation');
+    }
+
     const versionedPayload: Omit<GroupInfoVersioned, 'creatorSignature' | 'stateHash'> = {
       groupId,
       version: keyVersion,
@@ -1381,7 +1387,7 @@ export class GroupCreator {
     const lastAckSent = database.getOfflineLastAckSentByPeerId(peerId);
     const shouldSendAck = lastReadTimestamp > lastAckSent;
     console.log(
-      `[GROUP][TRACE][SEND] to=${peerId.slice(-8)} bucket=*${bucketTag} shouldAck=${shouldSendAck} ackTs=${shouldSendAck ? lastReadTimestamp : 0} ${this.describeControlMessage(message)}`,
+      `[GROUP][TRACE][SEND] to=${user.username} bucket=*${bucketTag} shouldAck=${shouldSendAck} ackTs=${shouldSendAck ? lastReadTimestamp : 0} ${this.describeControlMessage(message)}`,
     );
 
     const offlineMessage = OfflineMessageManager.createOfflineMessage(
@@ -1413,6 +1419,7 @@ export class GroupCreator {
     nudgeGroupRefetchIfKnownGroup(this.deps, peerId, message);
   }
 
+  // TODO remove here and on responder
   private describeControlMessage(message: object): string {
     const m = message as Record<string, unknown>;
     const type = typeof m.type === 'string' ? m.type : 'unknown';
