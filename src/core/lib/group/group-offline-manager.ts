@@ -107,7 +107,7 @@ export class GroupOfflineManager {
 
   constructor(deps: GroupOfflineManagerDeps) {
     this.deps = deps;
-    const runtime = getNetworkModeRuntime(this.deps.database.getNetworkMode());
+    const runtime = getNetworkModeRuntime(this.deps.database.getSessionNetworkMode());
     this.groupOfflineBucketPrefix = runtime.config.dhtNamespaces.groupOffline;
     this.groupInfoVersionPrefix = runtime.config.dhtNamespaces.groupInfoVersion;
   }

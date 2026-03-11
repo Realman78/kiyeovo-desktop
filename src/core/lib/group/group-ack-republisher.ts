@@ -1,4 +1,4 @@
-import type { ChatNode, GroupChatActivatedEvent, GroupMembersUpdatedEvent } from '../../types.js';
+import type { ChatNode, GroupChatActivatedEvent, GroupMembersUpdatedEvent, NetworkMode } from '../../types.js';
 import { GROUP_INVITE_LIFETIME } from '../../constants.js';
 import { generalErrorHandler } from '../../utils/general-error.js';
 import type { ChatDatabase, GroupPendingAck } from '../db/database.js';
@@ -9,6 +9,7 @@ import { GroupResponder } from './group-responder.js';
 interface GroupAckRepublisherDeps {
   node: ChatNode;
   database: ChatDatabase;
+  networkMode: NetworkMode;
   usernameRegistry: UsernameRegistry;
   onGroupChatActivated: (data: GroupChatActivatedEvent) => void;
   onGroupMembersUpdated: (data: GroupMembersUpdatedEvent) => void;
@@ -29,7 +30,7 @@ export class GroupAckRepublisher {
     if (this.inFlight) return;
     this.inFlight = true;
     try {
-      const pendingAcks = this.deps.database.getAllPendingAcks();
+      const pendingAcks = this.deps.database.getAllPendingAcks(this.deps.networkMode);
       if (pendingAcks.length === 0) return;
       const connectedPeers = this.deps.node.getConnections().length;
       console.log(
@@ -75,9 +76,14 @@ export class GroupAckRepublisher {
               pending.group_id,
               pending.target_peer_id,
               pending.message_type,
+              this.deps.networkMode,
             );
             if (pending.message_type === 'GROUP_INVITE') {
-              this.deps.database.removeInviteDeliveryAcksForMember(pending.group_id, pending.target_peer_id);
+              this.deps.database.removeInviteDeliveryAcksForMember(
+                pending.group_id,
+                pending.target_peer_id,
+                this.deps.networkMode,
+              );
             }
             if (pendingAction.reason === 'invalid_payload' || pendingAction.reason === 'invalid_type') removedInvalid++;
             if (pendingAction.reason === 'invite_expired' || pendingAction.reason === 'response_expired') removedExpired++;
@@ -125,6 +131,7 @@ export class GroupAckRepublisher {
             pending.group_id,
             pending.target_peer_id,
             pending.message_type,
+            this.deps.networkMode,
           );
           rePublished++;
           console.log(
@@ -180,7 +187,7 @@ export class GroupAckRepublisher {
       return { action: 'remove', reason: 'invite_expired' };
     }
 
-    const chat = this.deps.database.getChatByGroupId(pending.group_id);
+    const chat = this.deps.database.getChatByGroupId(pending.group_id, this.deps.networkMode);
     const myPeerId = this.deps.node.peerId.toString();
     if (!chat || chat.created_by !== myPeerId) {
       return { action: 'remove', reason: !chat ? 'group_missing' : 'not_creator' };
@@ -193,7 +200,14 @@ export class GroupAckRepublisher {
       return { action: 'remove', reason: 'target_already_member' };
     }
 
-    if (this.deps.database.isInviteDeliveryAckReceived(pending.group_id, pending.target_peer_id, inviteId)) {
+    if (
+      this.deps.database.isInviteDeliveryAckReceived(
+        pending.group_id,
+        pending.target_peer_id,
+        inviteId,
+        this.deps.networkMode,
+      )
+    ) {
       return { action: 'skip', reason: 'invite_delivered' };
     }
     return { action: 'republish' };
@@ -208,7 +222,7 @@ export class GroupAckRepublisher {
       return { action: 'remove', reason: 'response_expired' };
     }
 
-    const chat = this.deps.database.getChatByGroupId(pending.group_id);
+    const chat = this.deps.database.getChatByGroupId(pending.group_id, this.deps.networkMode);
     if (!chat) return { action: 'remove', reason: 'group_missing' };
     if (chat.group_status === 'invite_expired' || chat.group_status === 'left' || chat.group_status === 'removed') {
       return { action: 'remove', reason: 'group_missing' };
@@ -231,7 +245,7 @@ export class GroupAckRepublisher {
       }
     }
 
-    const chat = this.deps.database.getChatByGroupId(pending.group_id);
+    const chat = this.deps.database.getChatByGroupId(pending.group_id, this.deps.networkMode);
     const myPeerId = this.deps.node.peerId.toString();
     if (!chat || chat.created_by !== myPeerId) {
       return { action: 'remove', reason: !chat ? 'group_missing' : 'not_creator' };
@@ -253,7 +267,7 @@ export class GroupAckRepublisher {
       return { action: 'remove', reason: 'invalid_payload' };
     }
 
-    const chat = this.deps.database.getChatByGroupId(pending.group_id);
+    const chat = this.deps.database.getChatByGroupId(pending.group_id, this.deps.networkMode);
     const myPeerId = this.deps.node.peerId.toString();
     if (!chat || chat.created_by !== myPeerId) {
       return { action: 'remove', reason: !chat ? 'group_missing' : 'not_creator' };

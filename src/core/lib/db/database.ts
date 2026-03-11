@@ -13,6 +13,7 @@ import {
     DEFAULT_NETWORK_MODE,
     FAST_RELAY_MULTIADDRS_INITIALIZED_SETTING_KEY,
     FAST_RELAY_MULTIADDRS_SETTING_KEY,
+    NETWORK_MODES,
     NETWORK_MODE_SETTING_KEY,
     PENDING_KEY_EXCHANGE_EXPIRATION,
     getNetworkModeRuntime,
@@ -34,12 +35,14 @@ export interface Notification {
     notification_type: 'group_invitation' // TODO: since we have only one type of notification, maybe a simplification is needed
     notification_data: string // JSON string
     bucket_key: string
+    network_mode: NetworkMode
     status?: 'pending' | 'accepted' | 'rejected' | 'expired' // Only for group_invitation
     created_at: Date
 }
 
 export interface Chat {
     id: number
+    network_mode: NetworkMode
     type: 'direct' | 'group'
     name: string
     created_by: string
@@ -142,6 +145,7 @@ export interface LoginAttempt {
 export interface BootstrapNode {
     id: number
     address: string
+    network_mode: NetworkMode
     connected: boolean
     created_at: Date
     updated_at: Date
@@ -168,6 +172,7 @@ export interface GroupOfflineCursor {
 export interface GroupPendingAck {
     group_id: string
     target_peer_id: string
+    network_mode: NetworkMode
     message_type: AckMessageType
     message_payload: string
     created_at: string
@@ -177,6 +182,7 @@ export interface GroupPendingAck {
 export interface GroupPendingInfoPublish {
     group_id: string
     key_version: number
+    network_mode: NetworkMode
     versioned_dht_key: string
     versioned_payload: string
     latest_dht_key: string
@@ -192,6 +198,7 @@ export interface GroupInviteDeliveryAck {
     group_id: string
     target_peer_id: string
     invite_id: string
+    network_mode: NetworkMode
     created_at: string
 }
 
@@ -213,6 +220,7 @@ export interface GroupEpochBoundary {
 export class ChatDatabase {
     private db: Database.Database;
     private dbPath: string;
+    private readonly sessionNetworkMode: NetworkMode;
 
     constructor(dbPath: string) {
         this.dbPath = dbPath;
@@ -235,6 +243,7 @@ export class ChatDatabase {
             this.db.pragma('foreign_keys = ON');
 
             this.initializeTables();
+            this.sessionNetworkMode = this.getNetworkMode();
             this.createIndexes();
 
             // Check database integrity on startup
@@ -246,8 +255,10 @@ export class ChatDatabase {
     }
 
     private mapChatRow(row: any): Chat {
+        const mode = isNetworkMode(row.network_mode) ? row.network_mode : DEFAULT_NETWORK_MODE;
         return {
             ...row,
+            network_mode: mode,
             created_at: new Date(row.created_at),
             updated_at: new Date(row.updated_at),
             trusted_out_of_band: Boolean(row.trusted_out_of_band),
@@ -279,6 +290,7 @@ export class ChatDatabase {
         this.db.exec(`
             CREATE TABLE IF NOT EXISTS chats (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                network_mode TEXT NOT NULL DEFAULT '${DEFAULT_NETWORK_MODE}' CHECK(network_mode IN ('${NETWORK_MODES.FAST}','${NETWORK_MODES.ANONYMOUS}')),
                 name TEXT NOT NULL,
                 type TEXT NOT NULL CHECK(type IN ('direct','group')),
                 created_by TEXT NOT NULL,
@@ -352,6 +364,7 @@ export class ChatDatabase {
         this.db.exec(`
             CREATE TABLE IF NOT EXISTS notifications (
                 id TEXT PRIMARY KEY NOT NULL,
+                network_mode TEXT NOT NULL DEFAULT '${DEFAULT_NETWORK_MODE}' CHECK(network_mode IN ('${NETWORK_MODES.FAST}','${NETWORK_MODES.ANONYMOUS}')),
                 notification_type TEXT NOT NULL CHECK(notification_type IN ('group_invitation')),
                 notification_data TEXT NOT NULL, -- JSON string
                 bucket_key TEXT NOT NULL,
@@ -471,9 +484,11 @@ export class ChatDatabase {
             CREATE TABLE IF NOT EXISTS bootstrap_nodes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 address TEXT NOT NULL,
+                network_mode TEXT NOT NULL DEFAULT '${DEFAULT_NETWORK_MODE}' CHECK(network_mode IN ('${NETWORK_MODES.FAST}','${NETWORK_MODES.ANONYMOUS}')),
                 connected INTEGER NOT NULL DEFAULT 0,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(address, network_mode)
             )
         `);
 
@@ -481,7 +496,10 @@ export class ChatDatabase {
         const bootstrapInitialized = this.db.prepare('SELECT value FROM settings WHERE key = ?').get('bootstrap_nodes_initialized');
         if (!bootstrapInitialized) {
             for (const node of DEFAULT_BOOTSTRAP_NODES) {
-                this.db.prepare('INSERT INTO bootstrap_nodes (address, connected) VALUES (?, ?)').run(node, 0);
+                const mode = node.includes('/onion')
+                    ? NETWORK_MODES.ANONYMOUS
+                    : NETWORK_MODES.FAST;
+                this.db.prepare('INSERT INTO bootstrap_nodes (address, network_mode, connected) VALUES (?, ?, ?)').run(node, mode, 0);
             }
             this.db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('bootstrap_nodes_initialized', 'true');
         }
@@ -517,11 +535,12 @@ export class ChatDatabase {
             CREATE TABLE IF NOT EXISTS group_pending_acks (
                 group_id TEXT NOT NULL,
                 target_peer_id TEXT NOT NULL,
+                network_mode TEXT NOT NULL DEFAULT '${DEFAULT_NETWORK_MODE}' CHECK(network_mode IN ('${NETWORK_MODES.FAST}','${NETWORK_MODES.ANONYMOUS}')),
                 message_type TEXT NOT NULL CHECK(message_type IN ('GROUP_INVITE', 'GROUP_INVITE_RESPONSE', 'GROUP_WELCOME', 'GROUP_STATE_UPDATE', 'GROUP_KICK')),
                 message_payload TEXT NOT NULL,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 last_published_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (group_id, target_peer_id, message_type)
+                PRIMARY KEY (group_id, target_peer_id, message_type, network_mode)
             )
         `);
 
@@ -530,6 +549,7 @@ export class ChatDatabase {
             CREATE TABLE IF NOT EXISTS group_pending_info_publishes (
                 group_id TEXT NOT NULL,
                 key_version INTEGER NOT NULL,
+                network_mode TEXT NOT NULL DEFAULT '${DEFAULT_NETWORK_MODE}' CHECK(network_mode IN ('${NETWORK_MODES.FAST}','${NETWORK_MODES.ANONYMOUS}')),
                 versioned_dht_key TEXT NOT NULL,
                 versioned_payload TEXT NOT NULL,
                 latest_dht_key TEXT NOT NULL,
@@ -539,7 +559,7 @@ export class ChatDatabase {
                 last_error TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (group_id, key_version)
+                PRIMARY KEY (group_id, key_version, network_mode)
             )
         `);
 
@@ -551,8 +571,9 @@ export class ChatDatabase {
                 group_id TEXT NOT NULL,
                 target_peer_id TEXT NOT NULL,
                 invite_id TEXT NOT NULL,
+                network_mode TEXT NOT NULL DEFAULT '${DEFAULT_NETWORK_MODE}' CHECK(network_mode IN ('${NETWORK_MODES.FAST}','${NETWORK_MODES.ANONYMOUS}')),
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (group_id, target_peer_id, invite_id)
+                PRIMARY KEY (group_id, target_peer_id, invite_id, network_mode)
             )
         `);
 
@@ -589,6 +610,8 @@ export class ChatDatabase {
                 PRIMARY KEY (group_id, key_version, sender_peer_id)
             )
         `);
+
+        this.ensureModeScopedColumns();
     }
 
     private createIndexes(): void {
@@ -602,17 +625,22 @@ export class ChatDatabase {
       CREATE INDEX IF NOT EXISTS idx_participants_peer ON chat_participants(peer_id);
       CREATE INDEX IF NOT EXISTS idx_messages_conv_created ON messages(chat_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_notifications_mode_created_at ON notifications(network_mode, created_at DESC);
 
       -- Indexes for cleanup queries
       CREATE INDEX IF NOT EXISTS idx_failed_key_exchanges_timestamp ON failed_key_exchanges(timestamp);
       CREATE INDEX IF NOT EXISTS idx_notifications_status_created ON notifications(status, created_at);
+      CREATE INDEX IF NOT EXISTS idx_notifications_mode_status_created ON notifications(network_mode, status, created_at);
 
       -- Group indexes
       CREATE INDEX IF NOT EXISTS idx_group_key_history_group ON group_key_history(group_id);
-      CREATE INDEX IF NOT EXISTS idx_group_pending_acks_group ON group_pending_acks(group_id);
-      CREATE INDEX IF NOT EXISTS idx_group_pending_info_next_retry ON group_pending_info_publishes(next_retry_at);
-      CREATE INDEX IF NOT EXISTS idx_group_invite_delivery_acks_group ON group_invite_delivery_acks(group_id);
-      CREATE INDEX IF NOT EXISTS idx_chats_group_id ON chats(group_id);
+      CREATE INDEX IF NOT EXISTS idx_group_pending_acks_group_mode ON group_pending_acks(group_id, network_mode);
+      CREATE INDEX IF NOT EXISTS idx_group_pending_info_mode_next_retry ON group_pending_info_publishes(network_mode, next_retry_at);
+      CREATE INDEX IF NOT EXISTS idx_group_invite_delivery_acks_group_mode ON group_invite_delivery_acks(group_id, network_mode);
+      CREATE INDEX IF NOT EXISTS idx_chats_group_id_mode ON chats(group_id, network_mode);
+      CREATE INDEX IF NOT EXISTS idx_chats_mode_updated ON chats(network_mode, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_bootstrap_nodes_mode ON bootstrap_nodes(network_mode);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_bootstrap_nodes_unique_addr_mode ON bootstrap_nodes(address, network_mode);
         `);
     }
 
@@ -645,6 +673,32 @@ export class ChatDatabase {
                 throw error;
             }
         }
+    }
+
+    private ensureModeScopedColumns(): void {
+        this.ensureColumnExists('chats', 'network_mode', `TEXT NOT NULL DEFAULT '${DEFAULT_NETWORK_MODE}'`);
+        this.ensureColumnExists('notifications', 'network_mode', `TEXT NOT NULL DEFAULT '${DEFAULT_NETWORK_MODE}'`);
+        this.ensureColumnExists('bootstrap_nodes', 'network_mode', `TEXT NOT NULL DEFAULT '${DEFAULT_NETWORK_MODE}'`);
+        this.ensureColumnExists('group_pending_acks', 'network_mode', `TEXT NOT NULL DEFAULT '${DEFAULT_NETWORK_MODE}'`);
+        this.ensureColumnExists('group_pending_info_publishes', 'network_mode', `TEXT NOT NULL DEFAULT '${DEFAULT_NETWORK_MODE}'`);
+        this.ensureColumnExists('group_invite_delivery_acks', 'network_mode', `TEXT NOT NULL DEFAULT '${DEFAULT_NETWORK_MODE}'`);
+        this.db.prepare(`UPDATE bootstrap_nodes SET network_mode = ? WHERE address LIKE '%/onion%'`).run(NETWORK_MODES.ANONYMOUS);
+        this.db.prepare(`UPDATE bootstrap_nodes SET network_mode = ? WHERE address NOT LIKE '%/onion%'`).run(NETWORK_MODES.FAST);
+    }
+
+    private ensureColumnExists(table: string, column: string, definition: string): void {
+        try {
+            this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+        } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            if (!msg.toLowerCase().includes('duplicate column name')) {
+                throw error;
+            }
+        }
+    }
+
+    private getActiveNetworkMode(mode?: NetworkMode): NetworkMode {
+        return mode ?? this.sessionNetworkMode;
     }
 
     // Helper method to retry database operations
@@ -900,6 +954,10 @@ export class ChatDatabase {
         return DEFAULT_NETWORK_MODE;
     }
 
+    getSessionNetworkMode(): NetworkMode {
+        return this.sessionNetworkMode;
+    }
+
     // Contact attempt operations (silent mode logging)
     logContactAttempt(attempt: Omit<ContactAttempt, 'id' | 'created_at'>): number {
         const stmt = this.db.prepare(`
@@ -1038,8 +1096,8 @@ export class ChatDatabase {
 
     cleanupExpiredNotifications(olderThanDays: number = 30): void {
         const cutoffTime = new Date(Date.now() - (olderThanDays * 24 * 60 * 60 * 1000)).toISOString();
-        const stmt = this.db.prepare(`DELETE FROM notifications WHERE status IN ('accepted', 'rejected', 'expired') AND created_at < ?`);
-        const result = stmt.run(cutoffTime);
+        const stmt = this.db.prepare(`DELETE FROM notifications WHERE network_mode = ? AND status IN ('accepted', 'rejected', 'expired') AND created_at < ?`);
+        const result = stmt.run(this.getActiveNetworkMode(), cutoffTime);
         if (result.changes > 0) {
             console.log(`[CLEANUP] Removed ${result.changes} old notification records`);
         }
@@ -1051,22 +1109,24 @@ export class ChatDatabase {
     }
 
     // Chat operations
-    async createChat(chat: Omit<Chat, 'id' | 'updated_at'> & { participants: string[] }): Promise<number> {
+    async createChat(chat: Omit<Chat, 'id' | 'updated_at' | 'network_mode'> & { participants: string[] }): Promise<number> {
         return this.retryOperation(() => {
             console.log(`Creating chat: created_by=${chat.created_by}, participants=${chat.participants}`);
             const createdByUser = this.db.prepare('SELECT peer_id FROM users WHERE peer_id = ?').get(chat.created_by);
             if (!createdByUser) {
                 throw new Error(`User with peer_id '${chat.created_by}' not found in database`);
             }
+            const mode = this.getActiveNetworkMode();
 
             this.db.exec('BEGIN TRANSACTION');
             const stmt = this.db.prepare(`
-                INSERT INTO chats (created_by, type, name, offline_bucket_secret, notifications_bucket_key, status, group_id, group_key, permanent_key, trusted_out_of_band, group_creator_peer_id, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO chats (network_mode, created_by, type, name, offline_bucket_secret, notifications_bucket_key, status, group_id, group_key, permanent_key, trusted_out_of_band, group_creator_peer_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `);
 
             const createdAt = chat.created_at instanceof Date ? chat.created_at.toISOString() : chat.created_at;
             const result = stmt.run(
+                mode,
                 chat.created_by,
                 chat.type,
                 chat.type === 'group' ? chat.name : chat.created_by,
@@ -1100,9 +1160,10 @@ export class ChatDatabase {
     getAllChats(): Chat[] {
         const stmt = this.db.prepare(`
             SELECT * FROM chats
+            WHERE network_mode = ?
             ORDER BY updated_at DESC
         `);
-        const rows = stmt.all() as any[];
+        const rows = stmt.all(this.getActiveNetworkMode()) as any[];
 
         if (!rows) return [];
         return rows.map(row => this.mapChatRow(row));
@@ -1116,9 +1177,10 @@ export class ChatDatabase {
             FROM chats c
             LEFT JOIN chat_participants cp ON c.id = cp.chat_id AND c.type = 'direct' AND cp.peer_id != ?
             LEFT JOIN users u ON cp.peer_id = u.peer_id
+            WHERE c.network_mode = ?
             ORDER BY c.updated_at DESC
         `);
-        const rows = stmt.all(myPeerId) as any[];
+        const rows = stmt.all(myPeerId, this.getActiveNetworkMode()) as any[];
 
         if (!rows) return [];
         return rows.map(row => ({
@@ -1154,9 +1216,10 @@ export class ChatDatabase {
                 ORDER BY timestamp DESC
                 LIMIT 1
             )
+            WHERE c.network_mode = ?
             ORDER BY c.updated_at DESC
         `);
-        const rows = stmt.all(myPeerId) as any[];
+        const rows = stmt.all(myPeerId, this.getActiveNetworkMode()) as any[];
 
         if (!rows) return [];
         return rows.map(row => ({
@@ -1197,9 +1260,9 @@ export class ChatDatabase {
                 ORDER BY timestamp DESC
                 LIMIT 1
             )
-            WHERE c.id = ?
+            WHERE c.id = ? AND c.network_mode = ?
         `);
-        const row = stmt.get(myPeerId, chatId) as any;
+        const row = stmt.get(myPeerId, chatId, this.getActiveNetworkMode()) as any;
 
         if (!row) return null;
         return {
@@ -1213,27 +1276,27 @@ export class ChatDatabase {
         };
     }
 
-    getChats(chatIds: number[]): Chat[] {
+    getChats(chatIds: number[], mode?: NetworkMode): Chat[] {
         if (chatIds.length === 0) return [];
-        const stmt = this.db.prepare(`SELECT * FROM chats WHERE id IN (${chatIds.map(() => '?').join(',')})`);
-        const rows = stmt.all(...chatIds) as any[];
+        const stmt = this.db.prepare(`SELECT * FROM chats WHERE id IN (${chatIds.map(() => '?').join(',')}) AND network_mode = ?`);
+        const rows = stmt.all(...chatIds, this.getActiveNetworkMode(mode)) as any[];
 
         if (!rows) return [];
         return rows.map(row => this.mapChatRow(row));
     }
 
     getChatByName(name: string, type: 'direct' | 'group' = 'group'): Chat | null {
-        const stmt = this.db.prepare('SELECT * FROM chats WHERE name = ? AND type = ?');
-        const row = stmt.get(name, type) as any;
+        const stmt = this.db.prepare('SELECT * FROM chats WHERE name = ? AND type = ? AND network_mode = ?');
+        const row = stmt.get(name, type, this.getActiveNetworkMode()) as any;
 
         if (!row) return null;
 
         return this.mapChatRow(row);
     }
 
-    getChatByGroupId(groupId: string): Chat | null {
-        const stmt = this.db.prepare('SELECT * FROM chats WHERE group_id = ?');
-        const row = stmt.get(groupId) as any;
+    getChatByGroupId(groupId: string, mode?: NetworkMode): Chat | null {
+        const stmt = this.db.prepare('SELECT * FROM chats WHERE group_id = ? AND network_mode = ?');
+        const row = stmt.get(groupId, this.getActiveNetworkMode(mode)) as any;
 
         if (!row) return null;
 
@@ -1246,18 +1309,18 @@ export class ChatDatabase {
     }
 
     deleteChatByGroupId(groupId: string): void {
-        const stmt = this.db.prepare('DELETE FROM chats WHERE group_id = ?');
-        stmt.run(groupId);
+        const stmt = this.db.prepare('DELETE FROM chats WHERE group_id = ? AND network_mode = ?');
+        stmt.run(groupId, this.getActiveNetworkMode());
     }
 
     getAllGroupChats(limit: number = 1000): Chat[] {
         const stmt = this.db.prepare(`
             SELECT * FROM chats
-            WHERE type = 'group'
+            WHERE type = 'group' AND network_mode = ?
             ORDER BY updated_at DESC
             LIMIT ?
         `);
-        const rows = stmt.all(limit) as any[];
+        const rows = stmt.all(this.getActiveNetworkMode(), limit) as any[];
 
         if (!rows) return [];
 
@@ -1267,11 +1330,11 @@ export class ChatDatabase {
     getAllPendingGroupChatsCreatedByMe(myPeerId: string, limit: number = 100): Chat[] {
         const stmt = this.db.prepare(`
             SELECT * FROM chats
-            WHERE type = 'group' AND status = 'pending' AND created_by = ?
+            WHERE type = 'group' AND status = 'pending' AND created_by = ? AND network_mode = ?
             ORDER BY created_at DESC
             LIMIT ?
         `);
-        const rows = stmt.all(myPeerId, limit) as any[];
+        const rows = stmt.all(myPeerId, this.getActiveNetworkMode(), limit) as any[];
 
         if (!rows) return [];
 
@@ -1320,24 +1383,24 @@ export class ChatDatabase {
     }
 
     // get chat by peer id - for single direct chat
-    getChatByPeerId(otherPeerId: string): Chat | null {
+    getChatByPeerId(otherPeerId: string, mode?: NetworkMode): Chat | null {
         const stmt = this.db.prepare('SELECT * FROM chat_participants WHERE peer_id = ?');
         const rows = stmt.all(otherPeerId) as ChatParticipant[];
         const chatIds = rows.map((row: ChatParticipant) => row.chat_id);
 
-        const chats = this.getChats(chatIds);
+        const chats = this.getChats(chatIds, mode);
         return chats.find((chat: Chat) => chat.type === 'direct') ?? null;
     }
 
     getAllOfflineBucketSecrets(includeGroupChats: boolean = true, limit: number = 25): string[] {
-        let query = 'SELECT offline_bucket_secret FROM chats';
+        let query = 'SELECT offline_bucket_secret FROM chats WHERE network_mode = ?';
         if (!includeGroupChats) {
-            query += " WHERE type = 'direct'";
+            query += " AND type = 'direct'";
         }
         query += ' ORDER BY updated_at DESC LIMIT ?';
 
         const stmt = this.db.prepare(query);
-        const rows = stmt.all(limit) as { offline_bucket_secret: string }[];
+        const rows = stmt.all(this.getActiveNetworkMode(), limit) as { offline_bucket_secret: string }[];
         return rows.map(row => row.offline_bucket_secret);
     }
 
@@ -1353,13 +1416,14 @@ export class ChatDatabase {
             JOIN chat_participants cp ON c.id = cp.chat_id
             JOIN users u ON cp.peer_id = u.peer_id
             WHERE c.type = 'direct'
+            AND c.network_mode = ?
             AND cp.peer_id != c.created_by
             AND cp.peer_id NOT IN (SELECT peer_id FROM blocked_peers)
             ORDER BY c.updated_at DESC
             LIMIT ?
         `;
         const stmt = this.db.prepare(query);
-        return stmt.all(limit) as Array<{
+        return stmt.all(this.getActiveNetworkMode(), limit) as Array<{
             offline_bucket_secret: string;
             peer_id: string;
             signing_public_key: string;
@@ -1384,11 +1448,12 @@ export class ChatDatabase {
             JOIN users u ON cp.peer_id = u.peer_id
             WHERE c.id IN (${placeholders})
             AND c.type = 'direct'
+            AND c.network_mode = ?
             AND cp.peer_id != c.created_by
             AND cp.peer_id NOT IN (SELECT peer_id FROM blocked_peers)
         `;
         const stmt = this.db.prepare(query);
-        return stmt.all(...chatIds) as Array<{
+        return stmt.all(...chatIds, this.getActiveNetworkMode()) as Array<{
             chat_id: number;
             offline_bucket_secret: string;
             peer_id: string;
@@ -1398,14 +1463,14 @@ export class ChatDatabase {
     }
 
     getAllNotificationsBucketKeys(): string[] {
-        const stmt = this.db.prepare('SELECT notifications_bucket_key FROM chats');
-        const rows = stmt.all() as Chat[];
+        const stmt = this.db.prepare('SELECT notifications_bucket_key FROM chats WHERE network_mode = ?');
+        const rows = stmt.all(this.getActiveNetworkMode()) as Chat[];
         return rows.map(row => row.notifications_bucket_key);
     }
 
     getGroupNotificationBuckerKeysNotCreatedBy(ownerPeerId: string): string[] {
-        const stmt = this.db.prepare(`SELECT notifications_bucket_key FROM chats WHERE type = 'group' AND created_by != ?`);
-        const rows = stmt.all(ownerPeerId) as Chat[];
+        const stmt = this.db.prepare(`SELECT notifications_bucket_key FROM chats WHERE type = 'group' AND created_by != ? AND network_mode = ?`);
+        const rows = stmt.all(ownerPeerId, this.getActiveNetworkMode()) as Chat[];
         return rows.map(row => row.notifications_bucket_key);
     }
 
@@ -1417,9 +1482,9 @@ export class ChatDatabase {
             SELECT DISTINCT c.notifications_bucket_key 
             FROM chats c
             JOIN chat_participants cp ON c.id = cp.chat_id
-            WHERE c.type = 'direct' AND cp.peer_id IN (${placeholders})
+            WHERE c.type = 'direct' AND c.network_mode = ? AND cp.peer_id IN (${placeholders})
         `);
-        const rows = stmt.all(...peerIds) as { notifications_bucket_key: string }[];
+        const rows = stmt.all(this.getActiveNetworkMode(), ...peerIds) as { notifications_bucket_key: string }[];
         return rows.map((row: { notifications_bucket_key: string }) => row.notifications_bucket_key);
     }
 
@@ -1721,20 +1786,22 @@ export class ChatDatabase {
 
         if (chatId) {
             stmt = this.db.prepare(`
-                SELECT * FROM messages 
-                WHERE chat_id = ? AND content LIKE ?
+                SELECT m.* FROM messages m
+                JOIN chats c ON c.id = m.chat_id
+                WHERE m.chat_id = ? AND m.content LIKE ? AND c.network_mode = ?
                 ORDER BY timestamp DESC 
                 LIMIT 100
             `);
-            params = [chatId, `%${query}%`];
+            params = [chatId, `%${query}%`, this.getActiveNetworkMode()];
         } else {
             stmt = this.db.prepare(`
-                SELECT * FROM messages 
-                WHERE content LIKE ?
+                SELECT m.* FROM messages m
+                JOIN chats c ON c.id = m.chat_id
+                WHERE m.content LIKE ? AND c.network_mode = ?
                 ORDER BY timestamp DESC 
                 LIMIT 100
             `);
-            params = [`%${query}%`];
+            params = [`%${query}%`, this.getActiveNetworkMode()];
         }
 
         const rows = stmt.all(...params) as any[];
@@ -1791,27 +1858,32 @@ export class ChatDatabase {
     }
 
     // Notification operations
-    createNotification(notification: Omit<Notification, 'created_at'>): string {
-        const stmt = this.db.prepare('INSERT INTO notifications (id, notification_type, notification_data, bucket_key, status) VALUES (?, ?, ?, ?, ?)');
-        stmt.run(notification.id, notification.notification_type, notification.notification_data, notification.bucket_key, notification.status || 'pending');
+    createNotification(notification: Omit<Notification, 'created_at' | 'network_mode'>): string {
+        const mode = this.getActiveNetworkMode();
+        const stmt = this.db.prepare('INSERT INTO notifications (id, network_mode, notification_type, notification_data, bucket_key, status) VALUES (?, ?, ?, ?, ?, ?)');
+        stmt.run(notification.id, mode, notification.notification_type, notification.notification_data, notification.bucket_key, notification.status || 'pending');
         return notification.id;
     }
 
-    updateNotificationStatus(notificationId: string, status: 'pending' | 'accepted' | 'rejected' | 'expired'): void {
-        const stmt = this.db.prepare('UPDATE notifications SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
-        stmt.run(status, notificationId);
+    updateNotificationStatus(
+        notificationId: string,
+        status: 'pending' | 'accepted' | 'rejected' | 'expired',
+        mode?: NetworkMode,
+    ): void {
+        const stmt = this.db.prepare('UPDATE notifications SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND network_mode = ?');
+        stmt.run(status, notificationId, this.getActiveNetworkMode(mode));
     }
 
     getNotificationById(notificationId: string): Notification | null {
-        const stmt = this.db.prepare('SELECT * FROM notifications WHERE id = ?');
-        const row = stmt.get(notificationId) as any;
+        const stmt = this.db.prepare('SELECT * FROM notifications WHERE id = ? AND network_mode = ?');
+        const row = stmt.get(notificationId, this.getActiveNetworkMode()) as any;
         if (!row) return null;
         return row as Notification;
     }
 
     getNotificationsByBucketKey(bucketKey: string): Notification[] {
-        const stmt = this.db.prepare('SELECT * FROM notifications WHERE bucket_key = ?');
-        const rows = stmt.all(bucketKey) as any[];
+        const stmt = this.db.prepare('SELECT * FROM notifications WHERE bucket_key = ? AND network_mode = ?');
+        const rows = stmt.all(bucketKey, this.getActiveNetworkMode()) as any[];
         return rows.map(row => ({
             ...row,
             created_at: new Date(row.created_at)
@@ -1819,8 +1891,8 @@ export class ChatDatabase {
     }
 
     getAllNotifications(): Notification[] {
-        const stmt = this.db.prepare('SELECT * FROM notifications ORDER BY created_at DESC');
-        const rows = stmt.all() as any[];
+        const stmt = this.db.prepare('SELECT * FROM notifications WHERE network_mode = ? ORDER BY created_at DESC');
+        const rows = stmt.all(this.getActiveNetworkMode()) as any[];
         return rows.map(row => ({
             ...row,
             created_at: new Date(row.created_at)
@@ -1829,35 +1901,36 @@ export class ChatDatabase {
 
     // Bootstrap nodes operations
     getBootstrapNodes(): { address: string; connected: boolean }[] {
-        const stmt = this.db.prepare('SELECT address, connected FROM bootstrap_nodes');
-        const rows = stmt.all() as { address: string; connected: number }[];
+        const stmt = this.db.prepare('SELECT address, connected FROM bootstrap_nodes WHERE network_mode = ?');
+        const rows = stmt.all(this.getActiveNetworkMode()) as { address: string; connected: number }[];
         return rows.map(row => ({ address: row.address, connected: Boolean(row.connected) }));
     }
 
     updateBootstrapNodeStatus(address: string, connected: boolean): void {
-        const stmt = this.db.prepare('UPDATE bootstrap_nodes SET connected = ?, updated_at = CURRENT_TIMESTAMP WHERE address = ?');
-        stmt.run(connected ? 1 : 0, address);
+        const stmt = this.db.prepare('UPDATE bootstrap_nodes SET connected = ?, updated_at = CURRENT_TIMESTAMP WHERE address = ? AND network_mode = ?');
+        stmt.run(connected ? 1 : 0, address, this.getActiveNetworkMode());
     }
 
     clearAllBootstrapNodeStatus(): void {
-        const stmt = this.db.prepare('UPDATE bootstrap_nodes SET connected = 0, updated_at = CURRENT_TIMESTAMP');
-        stmt.run();
+        const stmt = this.db.prepare('UPDATE bootstrap_nodes SET connected = 0, updated_at = CURRENT_TIMESTAMP WHERE network_mode = ?');
+        stmt.run(this.getActiveNetworkMode());
     }
 
     removeBootstrapNode(address: string): void {
-        const stmt = this.db.prepare('DELETE FROM bootstrap_nodes WHERE address = ?');
-        stmt.run(address);
+        const stmt = this.db.prepare('DELETE FROM bootstrap_nodes WHERE address = ? AND network_mode = ?');
+        stmt.run(address, this.getActiveNetworkMode());
     }
 
     addBootstrapNode(address: string): void {
-        const existsStmt = this.db.prepare('SELECT 1 FROM bootstrap_nodes WHERE address = ? LIMIT 1');
-        const exists = existsStmt.get(address) as { 1: number } | undefined;
+        const mode = this.getActiveNetworkMode();
+        const existsStmt = this.db.prepare('SELECT 1 FROM bootstrap_nodes WHERE address = ? AND network_mode = ? LIMIT 1');
+        const exists = existsStmt.get(address, mode) as { 1: number } | undefined;
         if (exists) {
             throw new Error('Bootstrap node already exists');
         }
 
-        const stmt = this.db.prepare('INSERT INTO bootstrap_nodes (address, connected) VALUES (?, 0)');
-        stmt.run(address);
+        const stmt = this.db.prepare('INSERT INTO bootstrap_nodes (address, network_mode, connected) VALUES (?, ?, 0)');
+        stmt.run(address, mode);
     }
 
     // Check if database is healthy
@@ -2095,44 +2168,46 @@ export class ChatDatabase {
 
     // --- Group pending ACKs ---
 
-    insertPendingAck(groupId: string, targetPeerId: string, messageType: AckMessageType, payload: string): void {
+    insertPendingAck(groupId: string, targetPeerId: string, messageType: AckMessageType, payload: string, mode?: NetworkMode): void {
+        const activeMode = this.getActiveNetworkMode(mode);
         const stmt = this.db.prepare(`
-            INSERT INTO group_pending_acks (group_id, target_peer_id, message_type, message_payload)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(group_id, target_peer_id, message_type) DO UPDATE SET
+            INSERT INTO group_pending_acks (group_id, target_peer_id, message_type, network_mode, message_payload)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(group_id, target_peer_id, message_type, network_mode) DO UPDATE SET
                 message_payload = excluded.message_payload,
                 last_published_at = CURRENT_TIMESTAMP
         `);
-        stmt.run(groupId, targetPeerId, messageType, payload);
+        stmt.run(groupId, targetPeerId, messageType, activeMode, payload);
     }
 
-    removePendingAck(groupId: string, targetPeerId: string, messageType: AckMessageType): void {
-        const stmt = this.db.prepare('DELETE FROM group_pending_acks WHERE group_id = ? AND target_peer_id = ? AND message_type = ?');
-        stmt.run(groupId, targetPeerId, messageType);
+    removePendingAck(groupId: string, targetPeerId: string, messageType: AckMessageType, mode?: NetworkMode): void {
+        const stmt = this.db.prepare('DELETE FROM group_pending_acks WHERE group_id = ? AND target_peer_id = ? AND message_type = ? AND network_mode = ?');
+        stmt.run(groupId, targetPeerId, messageType, this.getActiveNetworkMode(mode));
     }
 
-    removePendingAcksForMember(groupId: string, targetPeerId: string): void {
-        const stmt = this.db.prepare('DELETE FROM group_pending_acks WHERE group_id = ? AND target_peer_id = ?');
-        stmt.run(groupId, targetPeerId);
+    removePendingAcksForMember(groupId: string, targetPeerId: string, mode?: NetworkMode): void {
+        const stmt = this.db.prepare('DELETE FROM group_pending_acks WHERE group_id = ? AND target_peer_id = ? AND network_mode = ?');
+        stmt.run(groupId, targetPeerId, this.getActiveNetworkMode(mode));
     }
 
-    removePendingAcksForGroup(groupId: string): void {
-        this.db.prepare('DELETE FROM group_pending_acks WHERE group_id = ?').run(groupId);
+    removePendingAcksForGroup(groupId: string, mode?: NetworkMode): void {
+        this.db.prepare('DELETE FROM group_pending_acks WHERE group_id = ? AND network_mode = ?')
+            .run(groupId, this.getActiveNetworkMode(mode));
     }
 
-    getAllPendingAcks(): GroupPendingAck[] {
-        const stmt = this.db.prepare('SELECT * FROM group_pending_acks');
-        return stmt.all() as GroupPendingAck[];
+    getAllPendingAcks(mode?: NetworkMode): GroupPendingAck[] {
+        const stmt = this.db.prepare('SELECT * FROM group_pending_acks WHERE network_mode = ?');
+        return stmt.all(this.getActiveNetworkMode(mode)) as GroupPendingAck[];
     }
 
-    getPendingAcksForGroup(groupId: string): GroupPendingAck[] {
-        const stmt = this.db.prepare('SELECT * FROM group_pending_acks WHERE group_id = ?');
-        return stmt.all(groupId) as GroupPendingAck[];
+    getPendingAcksForGroup(groupId: string, mode?: NetworkMode): GroupPendingAck[] {
+        const stmt = this.db.prepare('SELECT * FROM group_pending_acks WHERE group_id = ? AND network_mode = ?');
+        return stmt.all(groupId, this.getActiveNetworkMode(mode)) as GroupPendingAck[];
     }
 
-    updatePendingAckLastPublished(groupId: string, targetPeerId: string, messageType: AckMessageType): void {
-        const stmt = this.db.prepare('UPDATE group_pending_acks SET last_published_at = CURRENT_TIMESTAMP WHERE group_id = ? AND target_peer_id = ? AND message_type = ?');
-        stmt.run(groupId, targetPeerId, messageType);
+    updatePendingAckLastPublished(groupId: string, targetPeerId: string, messageType: AckMessageType, mode?: NetworkMode): void {
+        const stmt = this.db.prepare('UPDATE group_pending_acks SET last_published_at = CURRENT_TIMESTAMP WHERE group_id = ? AND target_peer_id = ? AND message_type = ? AND network_mode = ?');
+        stmt.run(groupId, targetPeerId, messageType, this.getActiveNetworkMode(mode));
     }
 
     // --- Group info pending publishes ---
@@ -2146,13 +2221,15 @@ export class ChatDatabase {
         latestPayload: string,
         nextRetryAt: number,
         lastError?: string | null,
+        mode?: NetworkMode,
     ): void {
+        const activeMode = this.getActiveNetworkMode(mode);
         const stmt = this.db.prepare(`
             INSERT INTO group_pending_info_publishes (
-                group_id, key_version, versioned_dht_key, versioned_payload, latest_dht_key, latest_payload, attempts, next_retry_at, last_error
+                group_id, key_version, network_mode, versioned_dht_key, versioned_payload, latest_dht_key, latest_payload, attempts, next_retry_at, last_error
             )
-            VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
-            ON CONFLICT(group_id, key_version) DO UPDATE SET
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+            ON CONFLICT(group_id, key_version, network_mode) DO UPDATE SET
                 versioned_dht_key = excluded.versioned_dht_key,
                 versioned_payload = excluded.versioned_payload,
                 latest_dht_key = excluded.latest_dht_key,
@@ -2161,60 +2238,60 @@ export class ChatDatabase {
                 last_error = excluded.last_error,
                 updated_at = CURRENT_TIMESTAMP
         `);
-        stmt.run(groupId, keyVersion, versionedDhtKey, versionedPayload, latestDhtKey, latestPayload, nextRetryAt, lastError ?? null);
+        stmt.run(groupId, keyVersion, activeMode, versionedDhtKey, versionedPayload, latestDhtKey, latestPayload, nextRetryAt, lastError ?? null);
     }
 
-    markPendingGroupInfoPublishAttempt(groupId: string, keyVersion: number, nextRetryAt: number, lastError: string): void {
+    markPendingGroupInfoPublishAttempt(groupId: string, keyVersion: number, nextRetryAt: number, lastError: string, mode?: NetworkMode): void {
         const stmt = this.db.prepare(`
             UPDATE group_pending_info_publishes
             SET attempts = attempts + 1,
                 next_retry_at = ?,
                 last_error = ?,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE group_id = ? AND key_version = ?
+            WHERE group_id = ? AND key_version = ? AND network_mode = ?
         `);
-        stmt.run(nextRetryAt, lastError, groupId, keyVersion);
+        stmt.run(nextRetryAt, lastError, groupId, keyVersion, this.getActiveNetworkMode(mode));
     }
 
-    removePendingGroupInfoPublish(groupId: string, keyVersion: number): void {
-        this.db.prepare('DELETE FROM group_pending_info_publishes WHERE group_id = ? AND key_version = ?')
-            .run(groupId, keyVersion);
+    removePendingGroupInfoPublish(groupId: string, keyVersion: number, mode?: NetworkMode): void {
+        this.db.prepare('DELETE FROM group_pending_info_publishes WHERE group_id = ? AND key_version = ? AND network_mode = ?')
+            .run(groupId, keyVersion, this.getActiveNetworkMode(mode));
     }
 
-    getDuePendingGroupInfoPublishes(nowMs: number, limit = 50): GroupPendingInfoPublish[] {
+    getDuePendingGroupInfoPublishes(nowMs: number, limit = 50, mode?: NetworkMode): GroupPendingInfoPublish[] {
         const stmt = this.db.prepare(`
             SELECT * FROM group_pending_info_publishes
-            WHERE next_retry_at <= ?
+            WHERE next_retry_at <= ? AND network_mode = ?
             ORDER BY next_retry_at ASC
             LIMIT ?
         `);
-        return stmt.all(nowMs, limit) as GroupPendingInfoPublish[];
+        return stmt.all(nowMs, this.getActiveNetworkMode(mode), limit) as GroupPendingInfoPublish[];
     }
 
-    markInviteDeliveryAckReceived(groupId: string, targetPeerId: string, inviteId: string): void {
+    markInviteDeliveryAckReceived(groupId: string, targetPeerId: string, inviteId: string, mode?: NetworkMode): void {
         const stmt = this.db.prepare(`
-            INSERT OR IGNORE INTO group_invite_delivery_acks (group_id, target_peer_id, invite_id)
-            VALUES (?, ?, ?)
+            INSERT OR IGNORE INTO group_invite_delivery_acks (group_id, target_peer_id, invite_id, network_mode)
+            VALUES (?, ?, ?, ?)
         `);
-        stmt.run(groupId, targetPeerId, inviteId);
+        stmt.run(groupId, targetPeerId, inviteId, this.getActiveNetworkMode(mode));
     }
 
-    isInviteDeliveryAckReceived(groupId: string, targetPeerId: string, inviteId: string): boolean {
+    isInviteDeliveryAckReceived(groupId: string, targetPeerId: string, inviteId: string, mode?: NetworkMode): boolean {
         const stmt = this.db.prepare(`
             SELECT 1
             FROM group_invite_delivery_acks
-            WHERE group_id = ? AND target_peer_id = ? AND invite_id = ?
+            WHERE group_id = ? AND target_peer_id = ? AND invite_id = ? AND network_mode = ?
         `);
-        const row = stmt.get(groupId, targetPeerId, inviteId);
+        const row = stmt.get(groupId, targetPeerId, inviteId, this.getActiveNetworkMode(mode));
         return row !== undefined;
     }
 
-    removeInviteDeliveryAcksForMember(groupId: string, targetPeerId: string): void {
+    removeInviteDeliveryAcksForMember(groupId: string, targetPeerId: string, mode?: NetworkMode): void {
         const stmt = this.db.prepare(`
             DELETE FROM group_invite_delivery_acks
-            WHERE group_id = ? AND target_peer_id = ?
+            WHERE group_id = ? AND target_peer_id = ? AND network_mode = ?
         `);
-        stmt.run(groupId, targetPeerId);
+        stmt.run(groupId, targetPeerId, this.getActiveNetworkMode(mode));
     }
 
     // --- Group sender sequence ---
@@ -2438,8 +2515,9 @@ export class ChatDatabase {
             WHERE type = 'group'
               AND status = 'active'
               AND group_status = 'rekeying'
+              AND network_mode = ?
               AND (key_version > 0 OR permanent_key IS NOT NULL)
-        `).run();
+        `).run(this.getActiveNetworkMode());
 
         return Number(result.changes ?? 0);
     }
@@ -2486,7 +2564,9 @@ export class ChatDatabase {
     }
 
     resetGroupRuntimeForReinvite(chatId: number, groupId: string): void {
-        const groupOfflineBucketPrefix = getNetworkModeRuntime(this.getNetworkMode()).config.dhtNamespaces.groupOffline;
+        const modeRow = this.db.prepare('SELECT network_mode FROM chats WHERE id = ?').get(chatId) as { network_mode?: unknown } | undefined;
+        const mode = isNetworkMode(modeRow?.network_mode) ? modeRow.network_mode : this.getActiveNetworkMode();
+        const groupOfflineBucketPrefix = getNetworkModeRuntime(mode).config.dhtNamespaces.groupOffline;
         const clearChatRuntimeStmt = this.db.prepare(`
             UPDATE chats
             SET permanent_key = NULL,

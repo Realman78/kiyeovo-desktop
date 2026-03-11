@@ -98,7 +98,7 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
   sendStatus(`Database initialized at: ${dbPath}`, 'database');
 
   // U1: load persisted network mode before node initialization.
-  const networkMode = database.getNetworkMode();
+  const networkMode = database.getSessionNetworkMode();
   sendStatus(`Loaded network mode: ${networkMode}`, 'database');
 
   // Store Tor configuration in database for node-setup to read

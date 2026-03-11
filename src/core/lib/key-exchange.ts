@@ -62,7 +62,7 @@ export class KeyExchange {
     this.onContactRequestReceived = onContactRequestReceived;
     this.onChatCreated = onChatCreated;
     this.onKeyExchangeFailed = onKeyExchangeFailed;
-    const modeConfig = getNetworkModeRuntime(database.getNetworkMode()).config;
+    const modeConfig = getNetworkModeRuntime(database.getSessionNetworkMode()).config;
     this.offlineBucketPrefix = modeConfig.dhtNamespaces.offline;
     this.chatProtocol = modeConfig.chatProtocol;
   }

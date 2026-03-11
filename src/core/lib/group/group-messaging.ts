@@ -74,7 +74,7 @@ export class GroupMessaging {
 
   constructor(deps: GroupMessagingDeps) {
     this.deps = deps;
-    this.buildPubsubTopic = getNetworkModeRuntime(this.deps.database.getNetworkMode()).buildPubsubTopic;
+    this.buildPubsubTopic = getNetworkModeRuntime(this.deps.database.getSessionNetworkMode()).buildPubsubTopic;
   }
 
   start(): void {

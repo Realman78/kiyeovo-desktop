@@ -42,7 +42,7 @@ export async function dialProtocolWithRelayFallback(
     context,
   } = params;
 
-  const networkMode = database.getNetworkMode();
+  const networkMode = database.getSessionNetworkMode();
   const modeConfig = getNetworkModeConfig(networkMode);
   const expectedProtocolPrefix = `${modeConfig.protocolName}/`;
   if (!protocol.startsWith(expectedProtocolPrefix)) {

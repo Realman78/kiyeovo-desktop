@@ -1,4 +1,4 @@
-import type { ChatNode } from '../../types.js';
+import type { ChatNode, NetworkMode } from '../../types.js';
 import {
   GROUP_INFO_REPUBLISH_MAX_ATTEMPTS,
   GROUP_INFO_REPUBLISH_RETRY_BASE_DELAY,
@@ -12,6 +12,7 @@ import { putJsonToDHT } from './group-dht-publish.js';
 interface GroupInfoRepublisherDeps {
   node: ChatNode;
   database: ChatDatabase;
+  networkMode: NetworkMode;
 }
 
 export class GroupInfoRepublisher {
@@ -27,7 +28,7 @@ export class GroupInfoRepublisher {
     this.inFlight = true;
     try {
       const now = Date.now();
-      const due = this.deps.database.getDuePendingGroupInfoPublishes(now, 100);
+      const due = this.deps.database.getDuePendingGroupInfoPublishes(now, 100, this.deps.networkMode);
       if (due.length === 0) return;
       const connectedPeers = this.deps.node.getConnections().length;
       if (connectedPeers === 0) {
@@ -50,7 +51,11 @@ export class GroupInfoRepublisher {
           );
           const pruneReason = this.getPruneReason(pending);
           if (pruneReason) {
-            this.deps.database.removePendingGroupInfoPublish(pending.group_id, pending.key_version);
+            this.deps.database.removePendingGroupInfoPublish(
+              pending.group_id,
+              pending.key_version,
+              this.deps.networkMode,
+            );
             if (pruneReason === 'attempt_cap') removedCapped++;
             else removedStale++;
             console.log(
@@ -61,7 +66,11 @@ export class GroupInfoRepublisher {
 
           const parsed = this.parsePendingPayloads(pending);
           if (!parsed) {
-            this.deps.database.removePendingGroupInfoPublish(pending.group_id, pending.key_version);
+            this.deps.database.removePendingGroupInfoPublish(
+              pending.group_id,
+              pending.key_version,
+              this.deps.networkMode,
+            );
             removedInvalid++;
             console.log(
               `[GROUP-INFO][ITEM][REMOVE] group=${pending.group_id} keyVersion=${pending.key_version} reason=invalid_payload`,
@@ -82,7 +91,11 @@ export class GroupInfoRepublisher {
             );
             this.deps.database.markGroupKeyUsedUntil(pending.group_id, pending.key_version - 1, Date.now());
           }
-          this.deps.database.removePendingGroupInfoPublish(pending.group_id, pending.key_version);
+          this.deps.database.removePendingGroupInfoPublish(
+            pending.group_id,
+            pending.key_version,
+            this.deps.networkMode,
+          );
           published++;
           console.log(
             `[GROUP-INFO][ITEM][DONE] group=${pending.group_id} keyVersion=${pending.key_version} ` +
@@ -99,6 +112,7 @@ export class GroupInfoRepublisher {
             pending.key_version,
             nextRetryAt,
             errorText,
+            this.deps.networkMode,
           );
           console.warn(
             `[GROUP-INFO][ITEM][RETRY_SCHEDULED] group=${pending.group_id} keyVersion=${pending.key_version} ` +
@@ -160,7 +174,7 @@ export class GroupInfoRepublisher {
       return 'attempt_cap';
     }
 
-    const chat = this.deps.database.getChatByGroupId(pending.group_id);
+    const chat = this.deps.database.getChatByGroupId(pending.group_id, this.deps.networkMode);
     if (!chat || chat.type !== 'group') {
       return 'group_missing';
     }

@@ -66,7 +66,7 @@ export class FileHandler {
     this.onFileTransferComplete = onFileTransferComplete;
     this.onFileTransferFailed = onFileTransferFailed;
     this.onPendingFileReceived = onPendingFileReceived;
-    this.fileTransferProtocol = getNetworkModeRuntime(this.database.getNetworkMode()).config.fileTransferProtocol;
+    this.fileTransferProtocol = getNetworkModeRuntime(this.database.getSessionNetworkMode()).config.fileTransferProtocol;
     const expiredCount = this.database.expirePendingFileOffers(FILE_ACCEPTANCE_TIMEOUT);
     if (expiredCount > 0) {
       console.log(`[FileHandler] Expired ${expiredCount} pending file offer(s) on startup`);

@@ -108,7 +108,8 @@ export class MessageHandler {
     this.onOfflineMessagesFetchComplete = onOfflineMessagesFetchComplete;
     this.keyExchange = new KeyExchange(node, usernameRegistry, this.sessionManager, database, onKeyExchangeSent, onContactRequestReceived, onChatCreated, onKeyExchangeFailed);
     this.fileHandler = new FileHandler(node, this, database, onFileTransferProgress, onFileTransferComplete, onFileTransferFailed, onPendingFileReceived);
-    const modeConfig = getNetworkModeRuntime(database.getNetworkMode()).config;
+    const sessionNetworkMode = database.getSessionNetworkMode();
+    const modeConfig = getNetworkModeRuntime(sessionNetworkMode).config;
     this.bucketNudgeProtocol = modeConfig.bucketNudgeProtocol;
     this.chatProtocol = modeConfig.chatProtocol;
     this.expectedOfflineBucketPrefix = `${modeConfig.dhtNamespaces.offline}/`;
@@ -136,6 +137,7 @@ export class MessageHandler {
     this.groupAckRepublisher = new GroupAckRepublisher({
       node: this.node,
       database: this.database,
+      networkMode: sessionNetworkMode,
       usernameRegistry: this.usernameRegistry,
       onGroupChatActivated: this.onGroupChatActivated,
       onGroupMembersUpdated: this.onGroupMembersUpdated,
@@ -144,6 +146,7 @@ export class MessageHandler {
     this.groupInfoRepublisher = new GroupInfoRepublisher({
       node: this.node,
       database: this.database,
+      networkMode: sessionNetworkMode,
     });
     const recoveredRekeying = this.database.recoverRekeyingGroupsOnStartup();
     if (recoveredRekeying > 0) {

@@ -121,7 +121,7 @@ function logFastCircuitState(node: ChatNode): void {
 }
 
 export async function dialConfiguredFastRelays(node: ChatNode, database: ChatDatabase): Promise<FastRelayDialResult> {
-  const networkMode = database.getNetworkMode();
+  const networkMode = database.getSessionNetworkMode();
   if (networkMode !== NETWORK_MODES.FAST) {
     return {
       attempted: 0,
@@ -219,7 +219,7 @@ function getTorConfigFromSettings(database: ChatDatabase): ReturnType<typeof get
   const base = getTorConfig();
   const get = (key: string) => database.getSetting(key);
 
-  const networkMode = database.getNetworkMode();
+  const networkMode = database.getSessionNetworkMode();
   const socksHost = get('tor_socks_host');
   const socksPort = get('tor_socks_port');
   const connectionTimeout = get('tor_connection_timeout');
@@ -249,7 +249,7 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
     const privateKey = userIdentity.getLibp2pPrivateKey();
 
     const listenAddress = `/ip4/0.0.0.0/tcp/${port}`;
-    const networkMode = database.getNetworkMode();
+    const networkMode = database.getSessionNetworkMode();
     const isAnonymousMode = networkMode === NETWORK_MODES.ANONYMOUS;
     const modeConfig = getNetworkModeConfig(networkMode);
     const modeRuntime = getNetworkModeRuntime(networkMode);
@@ -462,7 +462,7 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
 export async function connectToBootstrap(node: ChatNode, database: ChatDatabase): Promise<void> {
   database.clearAllBootstrapNodeStatus();
 
-  const networkMode = database.getNetworkMode();
+  const networkMode = database.getSessionNetworkMode();
   const bootstrapEnvKey = NETWORK_MODE_BOOTSTRAP_ENV_KEYS[networkMode];
   const filterByMode = (values: string[]) => {
     if (networkMode === NETWORK_MODES.ANONYMOUS) {

@@ -34,7 +34,7 @@ export class UsernameRegistry {
   constructor(node: ChatNode, database: ChatDatabase) {
     this.node = node;
     this.database = database;
-    this.usernameDhtPrefix = getNetworkModeRuntime(database.getNetworkMode()).config.dhtNamespaces.username;
+    this.usernameDhtPrefix = getNetworkModeRuntime(database.getSessionNetworkMode()).config.dhtNamespaces.username;
   }
 
   async initialize(userIdentity: EncryptedUserIdentity, onRestoreUsername: (username: string) => void): Promise<void> {

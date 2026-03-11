@@ -45,7 +45,7 @@ export class GroupResponder {
 
   constructor(deps: GroupResponderDeps) {
     this.deps = deps;
-    const runtime = getNetworkModeRuntime(this.deps.database.getNetworkMode());
+    const runtime = getNetworkModeRuntime(this.deps.database.getSessionNetworkMode());
     this.directOfflineBucketPrefix = runtime.config.dhtNamespaces.offline;
     this.groupOfflineBucketPrefix = runtime.config.dhtNamespaces.groupOffline;
     this.groupInfoLatestPrefix = runtime.config.dhtNamespaces.groupInfoLatest;
