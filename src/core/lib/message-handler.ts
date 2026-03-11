@@ -681,9 +681,13 @@ export class MessageHandler {
     keyExchangeOccurred: boolean
   }> {
     const initialUserProvided = initialUser !== undefined;
-    let user = initialUserProvided
-      ? initialUser
-      : this.database.getUserByPeerIdThenUsername(targetUsernameOrPeerId);
+    let user: User | null;
+    if (initialUserProvided) {
+      user = initialUser;
+    } else {
+      const dbUser = this.database.getUserByPeerIdThenUsername(targetUsernameOrPeerId);
+      user = dbUser && this.database.getChatByPeerId(dbUser.peer_id) ? dbUser : null;
+    }
     let targetPeerId: PeerId;
     let keyExchangeOccurred = false;
 
@@ -693,11 +697,15 @@ export class MessageHandler {
       }
 
       try {
-        const userRegistration = await this.usernameRegistry.lookup(targetUsernameOrPeerId);
+        let isPeerId = false;
+        try { peerIdFromString(targetUsernameOrPeerId); isPeerId = true; } catch { /* username */ }
+        const userRegistration = isPeerId
+          ? await this.usernameRegistry.lookupByPeerId(targetUsernameOrPeerId)
+          : await this.usernameRegistry.lookup(targetUsernameOrPeerId);
         targetPeerId = peerIdFromString(userRegistration.peerID);
       } catch (lookupErr: unknown) {
         const lookupErrorText = lookupErr instanceof Error ? lookupErr.message : String(lookupErr);
-        if (lookupErrorText === ERRORS.USERNAME_NOT_FOUND) {
+        if (lookupErrorText === ERRORS.USERNAME_NOT_FOUND || lookupErrorText === 'Peer ID not found in DHT') {
           throw new Error(`User '${targetUsernameOrPeerId}' not found`);
         }
         throw new Error(`Failed to resolve user '${targetUsernameOrPeerId}': ${lookupErrorText}`);
@@ -792,7 +800,8 @@ export class MessageHandler {
   async sendMessage(targetUsernameOrPeerId: string, message: string): Promise<SendMessageResponse> {
     let user: User | null = null;
     try {
-      const initialUser = this.database.getUserByPeerIdThenUsername(targetUsernameOrPeerId);
+      const dbUser = this.database.getUserByPeerIdThenUsername(targetUsernameOrPeerId);
+      const initialUser = dbUser && this.database.getChatByPeerId(dbUser.peer_id) ? dbUser : null;
       const hadUserAtStart = !!initialUser;
       const hadConnectionBefore = initialUser
         ? this.node.getConnections().some(conn => conn.remotePeer.toString() === initialUser.peer_id)
@@ -883,7 +892,10 @@ export class MessageHandler {
         if (shouldFallbackOffline) {
           console.log(`Trying to send offline message to ${targetUsernameOrPeerId}`);
           // Use user from key exchange if available, otherwise query database
-          user ??= this.database.getUserByPeerIdThenUsername(targetUsernameOrPeerId);
+          if (!user) {
+            const dbUser = this.database.getUserByPeerIdThenUsername(targetUsernameOrPeerId);
+            user = dbUser && this.database.getChatByPeerId(dbUser.peer_id) ? dbUser : null;
+          }
           if (!user) throw new Error('User not found in database');
 
           // Get the shared secret part of the bucket key
