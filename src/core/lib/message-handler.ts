@@ -894,7 +894,10 @@ export class MessageHandler {
           // Use user from key exchange if available, otherwise query database
           if (!user) {
             const dbUser = this.database.getUserByPeerIdThenUsername(targetUsernameOrPeerId);
-            user = dbUser && this.database.getChatByPeerId(dbUser.peer_id) ? dbUser : null;
+            if (dbUser && !this.database.getChatByPeerId(dbUser.peer_id)) {
+              throw new Error(`${targetUsernameOrPeerId} is offline — no conversation established yet`);
+            }
+            user = dbUser ?? null;
           }
           if (!user) throw new Error('User not found in database');
 
