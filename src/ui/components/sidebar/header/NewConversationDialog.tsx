@@ -34,10 +34,10 @@ const NewConversationDialog = ({ open, onOpenChange, onNewConversation, backendE
 
   const validateUsername = (value: string) => {
     if (value.length < 3) {
-      return "Username must be at least 3 characters";
+      return "Username/PeerID must be at least 3 characters";
     }
-    if (value.length > 32) {
-      return "Username must be less than 32 characters";
+    if (value.length > 100) {
+      return "Username must be less than 100 characters";
     }
     if (!/^[a-zA-Z0-9_]+$/.test(value)) {
       return "Only letters, numbers, and underscores allowed";

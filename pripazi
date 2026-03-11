@@ -22,6 +22,10 @@ Still “startup blocked” (by design) until the user submits; but at least it 
 
 1.0.1 zac se ponekad password ne auto-filla?
 
+1.0.2 kada se bootstrap ugasi i na klijentu pise OFFLINE, bootstrap jos uvik ima zelenu tockicu
+
+ux improvement - dodaj switch mode u settingse
+
 1.0.2 Chad accepts group invitation from Alice. Alice sends welcome and propagates the notification that Chad joined to other group members. however, Chad did not receive the WELCOME message so he never ACK-ed it. Chad is not in the group from his POV, but everyone else sees that he is. of course, when chad restarts the app, this works, so maybe it is not an issue since chad will read the messages from the group offline bucket
 1.1
 I joined with a user and while the joining was happening, Alice (creator) was sending messages, but Chad did not receive them in real time, only when I checked missed messages. Alice error: [GROUP-MSG] Retrying publish for group=c883e511-02a7-4f23-9df9-4f495c094c44 after retryable error: PublishError.NoPeersSubscribedToTopic (attempt1Ms=1)
