@@ -88,6 +88,7 @@ export interface GroupStateUpdate {
   roster: GroupRosterEntry[];
   event: GroupMembershipEvent;
   targetPeerId: string; // who joined/left/was kicked
+  isResync?: boolean; // true when creator resends current snapshot after direct-link re-establishment
   messageId: string;
   signature: string;
 }

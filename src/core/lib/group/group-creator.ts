@@ -975,6 +975,78 @@ export class GroupCreator {
     await this.sendControlMessageToPeer(targetPeerId, parsed);
   }
 
+  async resendCurrentStateToPeer(groupId: string, targetPeerId: string, reason: string): Promise<void> {
+    const { database, myPeerId } = this.deps;
+    const chat = database.getChatByGroupId(groupId);
+    if (!chat) {
+      throw new Error(`Group ${groupId} not found`);
+    }
+    if (chat.group_creator_peer_id !== myPeerId) {
+      throw new Error(`Not group creator for ${groupId}`);
+    }
+    if ((chat.key_version ?? 0) <= 0) {
+      throw new Error(`Group ${groupId} has no active key version`);
+    }
+
+    const participants = database.getChatParticipants(chat.id);
+    const participantIds = participants.map((participant) => participant.peer_id);
+    if (!participantIds.includes(targetPeerId)) {
+      console.log(
+        `[GROUP][TRACE][STATE_RESYNC][SKIP] group=${groupId} peer=${targetPeerId.slice(-8)} reason=not_participant`,
+      );
+      return;
+    }
+
+    const keyVersion = chat.key_version!;
+    const groupKey = database.getGroupKeyForEpoch(groupId, keyVersion);
+    if (!groupKey) {
+      throw new Error(`Missing group key for ${groupId} v${keyVersion}`);
+    }
+
+    const roster = this.buildRoster(participantIds);
+    const user = database.getUserByPeerId(targetPeerId);
+    if (!user) {
+      throw new Error(`User ${targetPeerId} not found`);
+    }
+
+    const recipientPubKeyPem = Buffer.from(user.offline_public_key, 'base64').toString();
+    const encryptedGroupKey = publicEncrypt(
+      recipientPubKeyPem,
+      Buffer.from(groupKey, 'base64'),
+    ).toString('base64');
+
+    const update: Omit<GroupStateUpdate, 'signature'> = {
+      type: GroupMessageType.GROUP_STATE_UPDATE,
+      groupId,
+      keyVersion,
+      timestamp: Date.now(),
+      encryptedGroupKey,
+      roster,
+      // Event is intentionally informational when isResync=true; responder skips membership system text.
+      event: 'join',
+      targetPeerId,
+      isResync: true,
+      messageId: randomUUID(),
+    };
+
+    const signature = this.sign(update);
+    const signedUpdate: GroupStateUpdate = { ...update, signature };
+
+    database.insertPendingAck(groupId, targetPeerId, 'GROUP_STATE_UPDATE', JSON.stringify(signedUpdate));
+    try {
+      await this.sendControlMessageToPeer(targetPeerId, signedUpdate);
+      console.log(
+        `[GROUP][TRACE][STATE_RESYNC][SEND] group=${groupId} peer=${targetPeerId.slice(-8)} keyVersion=${keyVersion} reason=${reason}`,
+      );
+    } catch (error: unknown) {
+      const errorReason = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[GROUP][TRACE][STATE_RESYNC][QUEUE_RETRY] group=${groupId} peer=${targetPeerId.slice(-8)} keyVersion=${keyVersion} reason=${reason} error=${errorReason}`,
+      );
+      throw error;
+    }
+  }
+
   private async sendGroupStateUpdate(
     groupId: string,
     keyVersion: number,

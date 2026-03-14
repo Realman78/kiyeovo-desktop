@@ -529,6 +529,24 @@ export class MessageHandler {
 
   private handleDirectLinkReset(peerId: string): void {
     const myPeerId = this.node.peerId.toString();
+    const userIdentity = this.usernameRegistry.getUserIdentity();
+    const myUser = this.database.getUserByPeerId(myPeerId);
+    const myUsername = myUser?.username || `user_${myPeerId.slice(-8)}`;
+    const creator = userIdentity
+      ? new GroupCreator({
+        node: this.node,
+        database: this.database,
+        userIdentity,
+        myPeerId,
+        myUsername,
+        onGroupMembersUpdated: this.onGroupMembersUpdated,
+        onMessageReceived: this.onMessageReceived,
+        nudgeGroupRefetch: this.nudgePeerGroupRefetch.bind(this),
+        onRegisterPrevEpochGrace: (groupId: string, keyVersion: number) => {
+          this.groupMessaging.registerGraceContextForEpoch(groupId, keyVersion);
+        },
+      })
+      : null;
     const groupChats = this.database.getAllGroupChats();
 
     for (const chat of groupChats) {
@@ -541,9 +559,20 @@ export class MessageHandler {
 
       if (chat.group_creator_peer_id === myPeerId) {
         console.log(
-          `[DIRECT-RESET][NUDGE] peer=${peerId.slice(-8)} group=${chat.group_id.slice(0, 8)} reason=creator_local`,
+          `[DIRECT-RESET][STATE_RESYNC] peer=${peerId.slice(-8)} group=${chat.group_id.slice(0, 8)} reason=creator_local`,
         );
-        this.nudgePeerGroupRefetch(peerId, chat.group_id);
+        if (!creator) {
+          console.warn(
+            `[DIRECT-RESET][STATE_RESYNC][SKIP] peer=${peerId.slice(-8)} group=${chat.group_id.slice(0, 8)} reason=missing_identity`,
+          );
+        } else {
+          void creator.resendCurrentStateToPeer(chat.group_id, peerId, 'direct_link_reset').catch((error: unknown) => {
+            generalErrorHandler(
+              error,
+              `[DIRECT-RESET] Failed creator state resync peer=${peerId.slice(-8)} group=${chat.group_id?.slice(0, 8)}`,
+            );
+          });
+        }
       }
 
       if (chat.group_creator_peer_id === peerId) {

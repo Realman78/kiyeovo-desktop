@@ -598,22 +598,30 @@ export class GroupResponder {
     if (chat.group_status !== 'active' || chat.status !== 'active') {
       this.deps.onGroupChatActivated?.({ chatId: chat.id });
     }
-    this.deps.onGroupMembersUpdated?.({
-      chatId: chat.id,
-      groupId: update.groupId,
-      memberPeerId: update.targetPeerId,
-    });
-    await this.appendMembershipSystemMessage(
-      chat.id,
-      update.groupId,
-      update.keyVersion,
-      update.event,
-      update.targetPeerId,
-      update.roster.find((entry) => entry.peerId === update.targetPeerId)?.username,
-      creatorPeerId,
-      creator.username,
-      update.timestamp,
-    );
+    if (!update.isResync) {
+      this.deps.onGroupMembersUpdated?.({
+        chatId: chat.id,
+        groupId: update.groupId,
+        memberPeerId: update.targetPeerId,
+      });
+    }
+    if (!update.isResync) {
+      await this.appendMembershipSystemMessage(
+        chat.id,
+        update.groupId,
+        update.keyVersion,
+        update.event,
+        update.targetPeerId,
+        update.roster.find((entry) => entry.peerId === update.targetPeerId)?.username,
+        creatorPeerId,
+        creator.username,
+        update.timestamp,
+      );
+    } else {
+      console.log(
+        `[GROUP][TRACE][STATE_UPDATE][RESYNC_APPLY] group=${update.groupId} msgId=${update.messageId} keyVersion=${update.keyVersion}`,
+      );
+    }
 
     await this.sendControlAck(
       creatorPeerId,
