@@ -555,6 +555,18 @@ export class MessageHandler {
     }
   }
 
+  private scheduleCreatorGroupCatchupForPeer(peerId: string, reason: string): void {
+    const groupChats = this.database.getAllGroupChats();
+    for (const chat of groupChats) {
+      if (!chat.group_id) continue;
+      if (chat.group_creator_peer_id !== peerId) continue;
+      console.log(
+        `[GROUP-OFFLINE][STATE-CATCHUP][RELINK] peer=${peerId.slice(-8)} chatId=${chat.id} group=${chat.group_id.slice(0, 8)} reason=${reason}`,
+      );
+      this.scheduleGroupStateUpdateCatchup(chat.id, chat.group_id, reason);
+    }
+  }
+
   private async runQueuedGroupStateCatchup(chatId: number): Promise<void> {
     while (true) {
       const pending = this.groupStateCatchupPending.get(chatId);
@@ -887,6 +899,10 @@ export class MessageHandler {
         initialUser
       );
       user = resolvedUser;
+
+      if (keyExchangeOccurred && !hadUserAtStart) {
+        this.scheduleCreatorGroupCatchupForPeer(targetPeerId.toString(), 'direct_relink_creator');
+      }
 
       // Check if we need to send an ACK for offline messages we've read
       const lastReadTimestamp = this.database.getOfflineLastReadTimestampByPeerId(targetPeerId.toString());

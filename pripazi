@@ -29,7 +29,11 @@ Still “startup blocked” (by design) until the user submits; but at least it 
 1.0.4 delete user & chat, ako si creator nemores ih vise izbacit iz tog chata
 Je li prva poruka u direct conversationu ne enkriptirana??
 
-ux improvement - dodaj switch mode u settingse
+1.0.5 promijeni ikonu aplikacije ovisno o modu
+
+1.0.6 dodaj debounce na inpute
+
+ux improvement - dodaj switch mode o quit app u settingse
 
 1.0.2 Chad accepts group invitation from Alice. Alice sends welcome and propagates the notification that Chad joined to other group members. however, Chad did not receive the WELCOME message so he never ACK-ed it. Chad is not in the group from his POV, but everyone else sees that he is. of course, when chad restarts the app, this works, so maybe it is not an issue since chad will read the messages from the group offline bucket
 1.1
@@ -55,6 +59,7 @@ If one invite send fails mid-loop, IPC returns failure even though earlier invit
 
 2.75 if Alice set the expiration to Thursday and she isnt online from wendesday to Saturday, what stops Bob from accepting the invite on Friday and just setting the timestamp (in the acceptance message) to a timestamp from Thursday when it wasnt expired? Alice will log in on Saturday and see the invitation timestamp is from Thursday. But wait, the invitation will be in the offline bucket -> does the bucket provide the actual timestamp of when the message arrived? if yes, then that could work. If no, maybe we can add logic to the validator that checks if the timestamp being put into the DHT is less than 60 seconds apart from the current timestamp (to account for latency) 
 
+2.8.0 [NUDGE][SEND_FAIL] peer=fz9zYUjU group=32398e08 reason=Remote closed connection during opening -> 2 korisnika u isto vrime prihvate, skuzi zac se jedan aktivira puno kasnije
 
 2.8 BITNA OPTIMIZIACIJA: in clearAcknowledgedMessages, why dont we just remove "await OfflineMessageManager.putToDHT(node, bucketKey, signedStore);" ? the line 287 already saves to database. that means that the next time we go to send a message, we will just be sending the cleanMessages + new message
  - Claude je potvrdil da je dobra
