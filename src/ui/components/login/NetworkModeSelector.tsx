@@ -12,11 +12,11 @@ type NetworkModeSelectorProps = {
 const MODE_COPY: Record<NetworkMode, { title: string; description: string }> = {
   fast: {
     title: 'Fast Mode',
-    description: 'Low latency, more stable. Voice & video calls enabled TODO check. Weaker anonymity than Tor.',
+    description: 'Fast mode: uses your Fast identity (separate peer ID). Low latency and stable routing.',
   },
   anonymous: {
     title: 'Anonymous Mode',
-    description: 'Routes traffic through Tor. Stronger anonymity, high latency, stability depends on Tor.',
+    description: 'Anonymous mode: uses your Anonymous identity (separate peer ID). Routes traffic through Tor.',
   },
 };
 

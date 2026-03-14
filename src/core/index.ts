@@ -114,8 +114,9 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
 
   // Load or create encrypted user identity
   sendStatus('Loading user identity...', 'identity');
-  const userIdentity = await EncryptedUserIdentity.loadOrCreateEncrypted(
+  const userIdentity = await EncryptedUserIdentity.loadOrCreateEncryptedForMode(
     database,
+    networkMode,
     config.passwordPrompt,
     sendStatus
   );
