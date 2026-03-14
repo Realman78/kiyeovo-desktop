@@ -408,7 +408,7 @@ export function PasswordPrompt({
                   type="button"
                   className="text-sm text-muted-foreground underline hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:no-underline cursor-pointer"
                   onClick={() => setShowModeSwitchDialog(true)}
-                  disabled={isSubmitting || isLocked || isSwitchingNetworkMode}
+                  disabled={isSubmitting || isSwitchingNetworkMode}
                   >
                   Switch to {targetModeLabel} Mode
                 </button>
