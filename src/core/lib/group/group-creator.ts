@@ -10,6 +10,7 @@ import { toBase64Url } from '../base64url.js';
 import {
   GROUP_INVITE_LIFETIME,
   GROUP_MAX_MEMBERS,
+  GROUP_REINVITE_COOLDOWN_MS,
   GROUP_INFO_REPUBLISH_RETRY_BASE_DELAY,
   GROUP_ROTATION_IO_CONCURRENCY,
   getNetworkModeRuntime,
@@ -63,6 +64,7 @@ export interface GroupCreateResult {
 
 export class GroupCreator {
   private deps: GroupCreatorDeps;
+  private static reinviteCooldowns = new Map<string, number>();
   private readonly directOfflineBucketPrefix: string;
   private readonly groupOfflineBucketPrefix: string;
   private readonly groupInfoLatestPrefix: string;
@@ -235,6 +237,66 @@ export class GroupCreator {
 
     const inviteDeliveries = await this.sendGroupInvites(chat.group_id, chat.name, allowedTargets);
     return [...inviteDeliveries, ...skipped, ...overflowDeliveries];
+  }
+
+  async reinviteUserToExistingGroup(chatId: number, peerId: string): Promise<GroupInviteDelivery> {
+    const { database, myPeerId } = this.deps;
+    const chat = database.getChatByIdWithUsernameAndLastMsg(chatId, myPeerId);
+    if (!chat || chat.type !== 'group' || !chat.group_id) {
+      throw new Error('Group chat not found');
+    }
+    if (chat.created_by !== myPeerId) {
+      throw new Error('Only the group creator can re-invite users');
+    }
+    if (chat.status !== 'active' || chat.group_status !== 'active') {
+      throw new Error(`Cannot re-invite users while group status is ${chat.group_status ?? chat.status}`);
+    }
+
+    const cooldownKey = `${chat.group_id}:${peerId}`;
+    const now = Date.now();
+    const lastReinviteAt = GroupCreator.reinviteCooldowns.get(cooldownKey) ?? 0;
+    const elapsed = now - lastReinviteAt;
+    if (elapsed < GROUP_REINVITE_COOLDOWN_MS) {
+      const waitMs = GROUP_REINVITE_COOLDOWN_MS - elapsed;
+      const waitSeconds = Math.ceil(waitMs / 1000);
+      throw new Error(`Re-invite cooldown active. Try again in ${waitSeconds}s`);
+    }
+
+    const pendingInvite = database.getPendingAcksForGroup(chat.group_id).some(
+      (ack) => ack.message_type === 'GROUP_INVITE' && ack.target_peer_id === peerId,
+    );
+    if (!pendingInvite) {
+      throw new Error('No pending invite for this user');
+    }
+
+    database.removePendingAck(chat.group_id, peerId, 'GROUP_INVITE');
+    GroupCreator.reinviteCooldowns.set(cooldownKey, now);
+    const deliveries = await this.inviteUsersToExistingGroup(chatId, [peerId]);
+    return deliveries[0] ?? {
+      peerId,
+      username: database.getUserByPeerId(peerId)?.username || peerId,
+      status: 'queued_for_retry',
+      reason: 'Re-invite queued for retry',
+    };
+  }
+
+  async republishPendingInvitesForPeer(groupId: string, targetPeerId: string): Promise<number> {
+    const pendingInvites = this.deps.database
+      .getPendingAcksForGroup(groupId)
+      .filter(
+        (pending) =>
+          pending.message_type === 'GROUP_INVITE' &&
+          pending.target_peer_id === targetPeerId,
+      );
+
+    let republished = 0;
+    for (const pendingInvite of pendingInvites) {
+      // eslint-disable-next-line no-await-in-loop
+      await this.republishPendingControl(targetPeerId, pendingInvite.message_payload);
+      this.deps.database.updatePendingAckLastPublished(groupId, targetPeerId, 'GROUP_INVITE');
+      republished++;
+    }
+    return republished;
   }
 
   private async sendGroupInvites(groupId: string, groupName: string, invitedPeerIds: string[]): Promise<GroupInviteDelivery[]> {

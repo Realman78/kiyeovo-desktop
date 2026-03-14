@@ -1739,6 +1739,28 @@ function setupGroupHandlers(
     }
   });
 
+  ipcMain.handle(IPC_CHANNELS.REINVITE_USER_TO_GROUP, async (_event, chatId: number, peerId: string) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, inviteDelivery: null, error: 'P2P core not initialized' };
+      }
+
+      const username = p2pCore.usernameRegistry.getCurrentUsername();
+      if (!username) {
+        return { success: false, inviteDelivery: null, error: 'No username registered' };
+      }
+
+      const creator = buildGroupCreator(p2pCore, username);
+      const inviteDelivery = await creator.reinviteUserToExistingGroup(chatId, peerId);
+      console.log(`[IPC] Re-invited user ${peerId} for group chat=${chatId}`);
+      return { success: true, inviteDelivery, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to re-invite user to group:', error);
+      return { success: false, inviteDelivery: null, error: error instanceof Error ? error.message : 'Failed to re-invite user to group' };
+    }
+  });
+
   ipcMain.handle(IPC_CHANNELS.GET_GROUP_MEMBERS, async (_event, chatId: number) => {
     try {
       const p2pCore = getP2PCore();

@@ -555,9 +555,32 @@ export class MessageHandler {
       const isParticipant = this.database
         .getChatParticipants(chat.id)
         .some((participant) => participant.peer_id === peerId);
-      if (!isParticipant) continue;
+      const hasPendingInvite = this.database
+        .getPendingAcksForGroup(chat.group_id)
+        .some((pending) => pending.message_type === 'GROUP_INVITE' && pending.target_peer_id === peerId);
+      if (!isParticipant && !hasPendingInvite) continue;
 
       if (chat.group_creator_peer_id === myPeerId) {
+        if (hasPendingInvite && creator) {
+          console.log(
+            `[DIRECT-RESET][INVITE_REPUBLISH] peer=${peerId.slice(-8)} group=${chat.group_id.slice(0, 8)} reason=creator_local`,
+          );
+          void creator.republishPendingInvitesForPeer(chat.group_id, peerId).then((count) => {
+            if (count > 0) {
+              console.log(
+                `[DIRECT-RESET][INVITE_REPUBLISH][DONE] peer=${peerId.slice(-8)} group=${chat.group_id?.slice(0, 8)} count=${count}`,
+              );
+            }
+          }).catch((error: unknown) => {
+            generalErrorHandler(
+              error,
+              `[DIRECT-RESET] Failed invite re-publish peer=${peerId.slice(-8)} group=${chat.group_id?.slice(0, 8)}`,
+            );
+          });
+        }
+
+        if (!isParticipant) continue;
+
         console.log(
           `[DIRECT-RESET][STATE_RESYNC] peer=${peerId.slice(-8)} group=${chat.group_id.slice(0, 8)} reason=creator_local`,
         );

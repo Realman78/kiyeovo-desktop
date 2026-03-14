@@ -282,6 +282,28 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
     await fetchGroupMembers();
   };
 
+  const handleReinviteUser = async (targetPeerId: string): Promise<{ success: boolean; error?: string }> => {
+    if (!chatId) {
+      return { success: false, error: 'Group chat not found' };
+    }
+    try {
+      const result = await window.kiyeovoAPI.reinviteUserToGroup(chatId, targetPeerId);
+      if (!result.success) {
+        const error = result.error || 'Failed to re-invite user';
+        toast.error(error);
+        return { success: false, error };
+      }
+      const targetUsername = groupMembers.find((m) => m.peerId === targetPeerId)?.username ?? targetPeerId;
+      toast.success(`Re-invited ${targetUsername}`);
+      await fetchGroupMembers();
+      return { success: true };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Failed to re-invite user';
+      toast.error(errorMessage);
+      return { success: false, error: errorMessage };
+    }
+  };
+
   const handleCheckMissedGroupMessages = async () => {
     if (!chatId) return;
     setDropdownOpen(false);
@@ -479,6 +501,9 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
     peerId: member.peerId,
     reason: member.status === 'pending' ? 'Invite pending' : 'Already in group',
   }));
+  const pendingInvitePeers = groupMembers
+    .filter((member) => member.status === 'pending')
+    .map((member) => ({ peerId: member.peerId, username: member.username }));
   const kickableMembers = groupMembers.filter((member) => member.status === 'confirmed');
 
   return <div className={`${showGroupStateMessage ? 'h-20' : 'h-16'} px-6 flex items-center justify-between border-b border-border ${activeChat?.status === 'pending' ? "" : "bg-card/50"}`}>
@@ -657,8 +682,10 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
             chatId={chatId}
             groupName={username}
             disabledPeers={disabledInvitePeers}
+            pendingInvitePeers={pendingInvitePeers}
             maxSelectable={availableInviteSlots}
             onSuccess={handleInviteUsersSuccess}
+            onReinvite={handleReinviteUser}
           />
         )}
         <Dialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>

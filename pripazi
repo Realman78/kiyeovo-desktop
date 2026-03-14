@@ -40,6 +40,8 @@ ux improvement - dodaj switch mode o quit app u settingse
 I joined with a user and while the joining was happening, Alice (creator) was sending messages, but Chad did not receive them in real time, only when I checked missed messages. Alice error: [GROUP-MSG] Retrying publish for group=c883e511-02a7-4f23-9df9-4f495c094c44 after retryable error: PublishError.NoPeersSubscribedToTopic (attempt1Ms=1)
 we already went thourgh this and have not found the issue, I will have to investigate later. What do you say to the idea that if Chad is online when a new user joins or leaves or is removed, that the check missed messages gets triggered on his end? of course, only if he is online when the actual system message arrives, not when he comes online and the system message is fetched from the bucket. dont implement, let us just think about it
 
+
+1.1.0 waiting for members to accept pise dok cekas na approval
 1.1.1 nekakav rate limit na DHT zapise (na validatorima)
 
 1.2 High: createGroup can leave partial state on failure (chat created + some invites sent) with no rollback/transaction boundary.
@@ -65,6 +67,7 @@ If one invite send fails mid-loop, IPC returns failure even though earlier invit
  - Claude je potvrdil da je dobra
 3. Animations!
 3.1 paginacija poruka
+3.2 creator dismantle group
 
 4. drag and drop bootstrap nodeova za redoslijed spajanja
 
@@ -99,107 +102,6 @@ Should I save the information about a message being "offline" to show for later?
 
 13.5 Stavi u README da se poveca SCRYPTN_N
 
-14. relay nodeove
-Hybrid = 2 Networks?
-
-  Not necessarily. libp2p supports multiple addresses per peer. A single peer can be reachable via:
-
-  Peer QmAlice:
-    - /onion3/abc...xyz:9001/p2p/QmAlice           (Tor)
-    - /ip4/1.2.3.4/tcp/4001/p2p/QmRelay/p2p-circuit/p2p/QmAlice  (Relay)
-    - /ip4/5.6.7.8/tcp/9001/p2p/QmAlice            (Direct, if public)
-
-  Same DHT, multiple transports. The question is: can different modes talk to each other?
-
-  ---
-  Architecture Options
-
-  Option A: Isolated Modes (Simpler)
-
-  ┌─────────────────────────────────────────────────────────────┐
-  │                      Tor Network                             │
-  │  ┌───────┐      ┌───────────┐      ┌───────┐                │
-  │  │ Alice │◄────►│ Bootstrap │◄────►│  Bob  │                │
-  │  │ (Tor) │      │   (Tor)   │      │ (Tor) │                │
-  │  └───────┘      └───────────┘      └───────┘                │
-  └─────────────────────────────────────────────────────────────┘
-
-  ┌─────────────────────────────────────────────────────────────┐
-  │                     Relay Network                            │
-  │  ┌───────┐      ┌───────────┐      ┌───────┐                │
-  │  │ Carol │◄────►│ Bootstrap │◄────►│ David │                │
-  │  │(Relay)│      │  (Relay)  │      │(Relay)│                │
-  │  └───────┘      └───────────┘      └───────┘                │
-  └─────────────────────────────────────────────────────────────┘
-
-  Alice ✗ cannot reach Carol (different networks)
-
-  Pros: Simple, clean separation, strong anonymity for Tor users
-  Cons: Network fragmentation - Tor users can not message Relay users
-
-  ---
-  Option B: Bridge via Bootstrap (More Complex)
-
-                      ┌─────────────────────┐
-                      │   Bootstrap Node    │
-                      │  ┌───────────────┐  │
-      Tor Network ────┼──│ Tor Hidden Svc│  │
-                      │  └───────┬───────┘  │
-                      │          │          │
-                      │  ┌───────▼───────┐  │
-    Relay Network ────┼──│ Circuit Relay │  │
-                      │  └───────────────┘  │
-                      └─────────────────────┘
-
-  Alice (Tor) ──► Bootstrap ──► Carol (Relay)
-
-  Pros: All users can communicate
-  Cons:
-  - Bootstrap sees message metadata (who talks to whom)
-  - Adds latency for cross-mode messages
-  - More trust in bootstrap operators
-
-  ---
-  Option C: User Choice per Conversation
-
-  Alice has both Tor and Relay enabled:
-    - Announces both addresses
-    - Talks to Bob (Tor-only) via Tor
-    - Talks to Carol (Relay-only) via Relay
-    - Talks to David (both) via Relay (faster) or Tor (user choice)
-
-  Pros: Maximum flexibility
-  Cons: More complexity, resource usage (running both Tor and relay client)
-
-  ---
-  My Recommendation
-
-  Start with Option A (Isolated) with path to Option C:
-
-  1. Phase 1: Add Relay mode as alternative to Tor
-    - User picks mode at setup: "Privacy (Tor)" vs "Performance (Relay)"
-    - Separate networks, no cross-talk
-    - Simple to implement
-  2. Phase 2: Allow dual-mode for power users
-    - Run both Tor and Relay simultaneously
-    - Announce both addresses
-    - Can reach anyone
-  3. File transfers:
-    - Tor mode: 5MB limit
-    - Relay mode: No limit
-
-  ---
-  What Changes Are Needed?
-
-  | Component     | Tor Mode (Existing) | Relay Mode (New)   |
-  |---------------|---------------------|--------------------|
-  | Transport     | TorTransport + TCP  | TCP + CircuitRelay |
-  | NAT Traversal | Hidden Service      | Circuit Relay v2   |
-  | Bootstrap     | Onion address       | Relay address      |
-  | Announce      | /onion3/...         | /p2p-circuit/...   |
-  | File limit    | 5MB                 | Unlimited          |
-
-
 
 15. app security
 1. sandbox: false (line 122)
@@ -222,12 +124,3 @@ Line 139 opens DevTools in dev mode - that is fine. Just make sure isDev() corre
 
 IMPROVEMENT:
 persistent stream per session
-
-
-
-
-
-16. Missing: identity across modes                                                                                                                                                                                                                   
-                                                                                                                                                                                                                                                      
-  The plan says single DB, but what about the user's identity? Same keypair in both modes means a peer who knows your peer ID in fast mode could correlate you to your anonymous-mode identity if they ever see the same peer ID on the Tor network.  
-  If you want true isolation, you'd need separate keypairs per mode. If you don't care about cross-mode correlation (reasonable for v1), document that explicitly as a known tradeoff.

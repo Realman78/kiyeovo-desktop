@@ -10,6 +10,7 @@ import {
   DialogFooter,
 } from '../../ui/Dialog';
 import { Button } from '../../ui/Button';
+import { REINVITE_COOLDOWN_MS } from '../../../constants';
 
 interface Contact {
   peerId: string;
@@ -28,14 +29,21 @@ interface DisabledPeer {
   reason: string;
 }
 
+interface PendingInvitePeer {
+  peerId: string;
+  username: string;
+}
+
 interface InviteUsersDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   chatId: number;
   groupName: string;
   disabledPeers: DisabledPeer[];
+  pendingInvitePeers: PendingInvitePeer[];
   maxSelectable: number;
   onSuccess?: (inviteDeliveries: GroupInviteDeliveryView[]) => void;
+  onReinvite?: (peerId: string) => Promise<{ success: boolean; error?: string }>;
 }
 
 export const InviteUsersDialog = ({
@@ -44,11 +52,16 @@ export const InviteUsersDialog = ({
   chatId,
   groupName,
   disabledPeers,
+  pendingInvitePeers,
   maxSelectable,
   onSuccess,
+  onReinvite,
 }: InviteUsersDialogProps) => {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [selectedPeerIds, setSelectedPeerIds] = useState<Set<string>>(new Set());
+  const [reinviteCooldownUntil, setReinviteCooldownUntil] = useState<Record<string, number>>({});
+  const [reinviteInFlightPeerId, setReinviteInFlightPeerId] = useState<string | null>(null);
+  const [, setCooldownTick] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,6 +72,8 @@ export const InviteUsersDialog = ({
       if (isSubmitting) return;
       setContacts([]);
       setSelectedPeerIds(new Set());
+      setReinviteCooldownUntil({});
+      setReinviteInFlightPeerId(null);
       setIsLoading(false);
       setError(null);
       setLoadError(null);
@@ -85,6 +100,14 @@ export const InviteUsersDialog = ({
     void loadContacts();
   }, [open, isSubmitting]);
 
+  useEffect(() => {
+    if (!open) return;
+    const timer = setInterval(() => {
+      setCooldownTick((prev) => prev + 1);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [open]);
+
   const disabledPeerReasons = useMemo(
     () => new Map(disabledPeers.map((peer) => [peer.peerId, peer.reason])),
     [disabledPeers],
@@ -108,6 +131,33 @@ export const InviteUsersDialog = ({
 
   const selectedContacts = contacts.filter((c) => selectedPeerIds.has(c.peerId));
   const canSubmit = selectedPeerIds.size > 0 && !isSubmitting;
+
+  const getReinviteRemainingMs = (peerId: string): number => {
+    const until = reinviteCooldownUntil[peerId] ?? 0;
+    return Math.max(0, until - Date.now());
+  };
+
+  const handleReinvite = async (peerId: string) => {
+    if (!onReinvite) return;
+    const remaining = getReinviteRemainingMs(peerId);
+    if (remaining > 0) return;
+
+    setReinviteInFlightPeerId(peerId);
+    setError(null);
+    try {
+      const result = await onReinvite(peerId);
+      if (!result.success) {
+        setError(result.error ?? 'Failed to re-invite user');
+        return;
+      }
+      setReinviteCooldownUntil((prev) => ({
+        ...prev,
+        [peerId]: Date.now() + REINVITE_COOLDOWN_MS,
+      }));
+    } finally {
+      setReinviteInFlightPeerId(null);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -239,6 +289,42 @@ export const InviteUsersDialog = ({
                   : 'Group member limit reached.'}
               </p>
             </div>
+
+            {pendingInvitePeers.length > 0 && (
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-2">
+                  Pending Invites
+                </label>
+                <div className="max-h-40 overflow-y-auto border border-border rounded-md divide-y divide-border">
+                  {pendingInvitePeers.map((member) => {
+                    const remainingMs = getReinviteRemainingMs(member.peerId);
+                    const remainingSeconds = Math.ceil(remainingMs / 1000);
+                    const isCoolingDown = remainingMs > 0;
+                    const isReinviting = reinviteInFlightPeerId === member.peerId;
+                    const disabled = isReinviting || isCoolingDown || !onReinvite;
+                    return (
+                      <div key={member.peerId} className="px-3 py-2.5 flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-sm text-foreground truncate">{member.username}</div>
+                          <div className="text-xs text-muted-foreground font-mono truncate">{member.peerId}</div>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={disabled}
+                          onClick={() => {
+                            void handleReinvite(member.peerId);
+                          }}
+                        >
+                          {isReinviting ? 'Re-inviting...' : isCoolingDown ? `Re-invite (${remainingSeconds}s)` : 'Re-invite'}
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {error && (
               <div className="flex items-center gap-2 text-destructive text-sm">

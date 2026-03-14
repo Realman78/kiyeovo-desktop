@@ -316,6 +316,14 @@ const chatSlice = createSlice({
       state.pendingKeyExchanges = action.payload;
     },
     addPendingKeyExchange: (state, action: PayloadAction<PendingKeyExchange>) => {
+      const existingIndex = state.pendingKeyExchanges.findIndex((pk) => pk.peerId === action.payload.peerId);
+      if (existingIndex >= 0) {
+        state.pendingKeyExchanges[existingIndex] = action.payload;
+        if (state.activePendingKeyExchange?.peerId === action.payload.peerId) {
+          state.activePendingKeyExchange = action.payload;
+        }
+        return;
+      }
       state.pendingKeyExchanges.push(action.payload);
     },
     removePendingKeyExchange: (state, action: PayloadAction<string>) => {

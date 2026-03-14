@@ -30,6 +30,8 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
     const [isTorEnabled, setIsTorEnabled] = useState<boolean>(false);
     const isConnected = useSelector((state: RootState) => state.user.connected);
     const isRegistered = useSelector((state: RootState) => state.user.registered);
+    const chats = useSelector((state: RootState) => state.chat.chats);
+    const pendingKeyExchanges = useSelector((state: RootState) => state.chat.pendingKeyExchanges);
 
     const dispatch = useDispatch();
     const { toast } = useToast();
@@ -37,11 +39,21 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
     // Ref to track latest newConversationDialogOpen value without recreating listeners
     const newConversationDialogOpenRef = useRef(newConversationDialogOpen);
     const attemptedAutoRegisterRef = useRef(false);
+    const chatsRef = useRef(chats);
+    const pendingKeyExchangesRef = useRef(pendingKeyExchanges);
 
     // Keep ref in sync with state
     useEffect(() => {
         newConversationDialogOpenRef.current = newConversationDialogOpen;
     }, [newConversationDialogOpen]);
+
+    useEffect(() => {
+        chatsRef.current = chats;
+    }, [chats]);
+
+    useEffect(() => {
+        pendingKeyExchangesRef.current = pendingKeyExchanges;
+    }, [pendingKeyExchanges]);
 
     const handleNewConversation = async (peerIdOrUsername: string, message: string) => {
         setError(undefined);
@@ -135,9 +147,19 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
             console.log(`[UI] Key exchange sent to ${data.username}, newConversationDialogOpen: ${newConversationDialogOpenRef.current}`);
             if (!newConversationDialogOpenRef.current) return;
             console.log(`[UI] Key exchange sent to ${data.username}, closing dialog...`);
-            dispatch(addPendingKeyExchange(data));
+            const existingDirectChat = chatsRef.current.find((chat) => chat.type === 'direct' && chat.peerId === data.peerId);
+            if (!existingDirectChat) {
+                dispatch(addPendingKeyExchange(data));
+                dispatch(setActivePendingKeyExchange(data.peerId));
+            } else {
+                const alreadyPending = pendingKeyExchangesRef.current.some((pending) => pending.peerId === data.peerId);
+                if (alreadyPending) {
+                    dispatch(setActivePendingKeyExchange(data.peerId));
+                } else {
+                    dispatch(setActivePendingKeyExchange(null));
+                }
+            }
             setNewConversationDialogOpen(false);
-            dispatch(setActivePendingKeyExchange(data.peerId));
         });
 
         return () => {
