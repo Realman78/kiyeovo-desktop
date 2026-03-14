@@ -26,6 +26,7 @@ Still “startup blocked” (by design) until the user submits; but at least it 
 
 1.0.3 korisnik se registrira ali jos ni registriral do kraja (samo je username zasad uspil). alice ga kontaktira i uspije poslat kx zahtjev jer username postji u DHT-u, ali se ovaj ni registriral do kraja jos pa dobije kx timed out
 
+1.0.4 delete user & chat, ako si creator nemores ih vise izbacit iz tog chata
 Je li prva poruka u direct conversationu ne enkriptirana??
 
 ux improvement - dodaj switch mode u settingse

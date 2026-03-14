@@ -1308,6 +1308,7 @@ function setupChatSettingsHandlers(
       }
 
       console.log(`[IPC] Deleting chat ${chatId}; user is removed only if no chats remain`);
+      p2pCore.messageHandler.nudgePeerDirectSessionReset(userPeerId);
       p2pCore.database.deleteChatAndUser(chatId, userPeerId);
       try {
         p2pCore.messageHandler.getKeyExchange().deletePendingAcceptanceByPeerId(userPeerId);

@@ -46,6 +46,10 @@ function hasChatId(info: OfflineReadBucketInfoAny): info is OfflineReadBucketInf
   return 'chat_id' in info;
 }
 
+type BucketNudgePayload =
+  | { kind: 'GROUP_REKEY_REFETCH'; groupId: string }
+  | { kind: 'DIRECT_SESSION_RESET' };
+
 /**
  * Main message handler that orchestrates all message handling components
  */
@@ -80,6 +84,13 @@ export class MessageHandler {
   private readonly bucketNudgeProtocol: string;
   private readonly chatProtocol: string;
   private readonly expectedOfflineBucketPrefix: string;
+
+  private formatNudgeTarget(payload: BucketNudgePayload): string {
+    if (payload.kind === 'GROUP_REKEY_REFETCH') {
+      return `group=${payload.groupId.slice(0, 8)}`;
+    }
+    return 'kind=direct_session_reset';
+  }
 
   constructor(
     node: ChatNode,
@@ -182,9 +193,13 @@ export class MessageHandler {
     this.sendBucketNudge(peerId, { kind: 'GROUP_REKEY_REFETCH', groupId }, `group:${peerId}:${groupId}`);
   }
 
+  public nudgePeerDirectSessionReset(peerId: string): void {
+    this.sendBucketNudge(peerId, { kind: 'DIRECT_SESSION_RESET' }, `direct-reset:${peerId}`);
+  }
+
   private sendBucketNudge(
     peerId: string,
-    payload: { kind: 'GROUP_REKEY_REFETCH'; groupId: string },
+    payload: BucketNudgePayload,
     cooldownKey: string
   ): void {
     // Do not force-dial just to send a nudge.
@@ -193,7 +208,7 @@ export class MessageHandler {
     );
     if (!hasActiveConnection) {
       console.log(
-        `[NUDGE][SKIP_NO_CONN] peer=${peerId.slice(-8)} group=${payload.groupId.slice(0, 8)} ` +
+        `[NUDGE][SKIP_NO_CONN] peer=${peerId.slice(-8)} ${this.formatNudgeTarget(payload)} ` +
         `reason=no_active_connection`,
       );
       return;
@@ -226,11 +241,11 @@ export class MessageHandler {
         const payloadBytes = new TextEncoder().encode(JSON.stringify(payload));
         await stream.sink([payloadBytes]);
         await stream.close();
-        console.log(`[NUDGE] Sent group-refetch nudge to ${peerId.slice(-8)} group=${payload.groupId.slice(0, 8)}`);
+        console.log(`[NUDGE] Sent nudge to ${peerId.slice(-8)} ${this.formatNudgeTarget(payload)}`);
       } catch (error: unknown) {
         const reason = error instanceof Error ? error.message : String(error);
         console.log(
-          `[NUDGE][SEND_FAIL] peer=${peerId.slice(-8)} group=${payload.groupId.slice(0, 8)} reason=${reason}`,
+          `[NUDGE][SEND_FAIL] peer=${peerId.slice(-8)} ${this.formatNudgeTarget(payload)} reason=${reason}`,
         );
         // Best-effort — peer offline or unreachable, offline bucket still delivers
       }
@@ -245,10 +260,30 @@ export class MessageHandler {
       const { remoteId, stream } = StreamHandler.getRemotePeerInfo(context);
       // Ignore nudges from blocked peers
       if (this.database.isBlocked(remoteId)) return;
-      
+
+      const hasDirectChat = this.database.getChatByPeerId(remoteId) !== null;
+      const knownUser = this.database.getUserByPeerId(remoteId) !== null;
+      if (!hasDirectChat && !knownUser) {
+        console.log(`[NUDGE] Ignoring nudge from unknown peer ${remoteId.slice(-8)}`);
+        return;
+      }
+
       const nudgePayload = await this.readBucketNudgePayload(stream);
       await stream.close();
 
+
+      if (nudgePayload?.kind === 'DIRECT_SESSION_RESET') {
+        const directChat = this.database.getChatByPeerId(remoteId);
+        if (!directChat) {
+          console.log(`[NUDGE] Received direct-session-reset from ${remoteId.slice(-8)} but no direct chat exists, ignoring`);
+          return;
+        }
+        this.keyExchange.deletePendingAcceptanceByPeerId(remoteId);
+        this.sessionManager.removePendingKeyExchange(remoteId);
+        this.sessionManager.clearSession(remoteId);
+        console.log(`[NUDGE] Applied direct-session-reset from ${remoteId.slice(-8)} (chatId=${directChat.id})`);
+        return;
+      }
 
       if (nudgePayload?.kind === 'GROUP_REKEY_REFETCH') {
         const groupChat = this.database.getChatByGroupId(nudgePayload.groupId);
@@ -564,10 +599,7 @@ export class MessageHandler {
     }
   }
 
-  private async readBucketNudgePayload(stream: StreamHandlerContext['stream']): Promise<{
-    kind: 'GROUP_REKEY_REFETCH';
-    groupId: string;
-  } | null> {
+  private async readBucketNudgePayload(stream: StreamHandlerContext['stream']): Promise<BucketNudgePayload | null> {
     const chunks: Uint8Array[] = [];
     for await (const chunk of stream.source) {
       chunks.push((chunk as any).subarray());
@@ -584,6 +616,9 @@ export class MessageHandler {
 
     try {
       const parsed = JSON.parse(new TextDecoder().decode(combined)) as { kind?: string; groupId?: string };
+      if (parsed.kind === 'DIRECT_SESSION_RESET') {
+        return { kind: 'DIRECT_SESSION_RESET' };
+      }
       if (parsed.kind === 'GROUP_REKEY_REFETCH' && typeof parsed.groupId === 'string' && parsed.groupId.length > 0) {
         return { kind: 'GROUP_REKEY_REFETCH', groupId: parsed.groupId };
       }
