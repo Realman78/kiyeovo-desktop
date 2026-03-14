@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { UserPlus, AtSign, Shield, AlertCircle, Copy, Check, Shuffle, Info } from "lucide-react";
 import {
   Dialog,
@@ -51,13 +51,16 @@ const RegisterDialog = ({
     await onRegister(username, rememberMe);
   };
 
+  const validationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newValue = e.target.value;
     setUsername(newValue);
-    // Real-time validation
+    if (validationTimerRef.current) clearTimeout(validationTimerRef.current);
     if (newValue) {
-      const error = validateUsername(newValue, peerId);
-      setValidationError(error);
+      validationTimerRef.current = setTimeout(() => {
+        setValidationError(validateUsername(newValue, peerId));
+      }, 300);
     } else {
       setValidationError("");
     }

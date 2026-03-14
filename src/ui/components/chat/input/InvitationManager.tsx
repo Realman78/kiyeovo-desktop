@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { useDispatch } from "react-redux";
+import { useDispatch, useSelector } from "react-redux";
 import { Button } from "../../ui/Button";
 import { removeContactAttempt } from "../../../state/slices/chatSlice";
 import { useToast } from "../../ui/use-toast";
+import type { RootState } from "../../../state/store";
 
 type InvitationManagerProps = {
     peerId: string;
@@ -10,6 +11,8 @@ type InvitationManagerProps = {
 
 export const InvitationManager = ({peerId}: InvitationManagerProps) => {
     const dispatch = useDispatch();
+    const isRegistered = useSelector((state: RootState) => state.user.registered);
+    const registrationInProgress = useSelector((state: RootState) => state.user.registrationInProgress);
     const [error, setError] = useState<string | undefined>(undefined);
     const [isAccepting, setIsAccepting] = useState(false);
     const [isRejecting, setIsRejecting] = useState(false);
@@ -18,6 +21,11 @@ export const InvitationManager = ({peerId}: InvitationManagerProps) => {
     // Note: onChatCreated listener moved to Main.tsx to avoid race conditions
 
     const handleAccept = async () => {
+        if (!isRegistered || registrationInProgress) {
+            toast.warning('Finish registration first, then accept this contact request.');
+            return;
+        }
+
         setError(undefined);
         setIsAccepting(true);
 

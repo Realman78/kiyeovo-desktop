@@ -352,6 +352,10 @@ function setupContactRequestHandlers(
       if (!p2pCore) {
         return { success: false, error: 'P2P core not initialized' };
       }
+      const currentUsername = p2pCore.usernameRegistry.getCurrentUsername();
+      if (!currentUsername) {
+        return { success: false, error: 'Finish registration first, then accept this contact request.' };
+      }
 
       console.log(`[IPC] Accepting contact request from peer: ${peerId}`);
       p2pCore.messageHandler.getKeyExchange().acceptPendingContact(peerId);
