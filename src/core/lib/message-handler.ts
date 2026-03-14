@@ -895,7 +895,7 @@ export class MessageHandler {
           if (!user) {
             const dbUser = this.database.getUserByPeerIdThenUsername(targetUsernameOrPeerId);
             if (dbUser && !this.database.getChatByPeerId(dbUser.peer_id)) {
-              throw new Error(`${targetUsernameOrPeerId} is offline — no conversation established yet`);
+              throw new Error(`${targetUsernameOrPeerId} is offline`);
             }
             user = dbUser ?? null;
           }

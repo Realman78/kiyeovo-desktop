@@ -30,17 +30,20 @@ export class UsernameRegistry {
   public reregistrationInterval: NodeJS.Timeout | null = null;
   private database: ChatDatabase;
   private readonly usernameDhtPrefix: string;
+  private readonly autoRegisterSettingKey: string;
 
   constructor(node: ChatNode, database: ChatDatabase) {
     this.node = node;
     this.database = database;
-    this.usernameDhtPrefix = getNetworkModeRuntime(database.getSessionNetworkMode()).config.dhtNamespaces.username;
+    const mode = database.getSessionNetworkMode();
+    this.usernameDhtPrefix = getNetworkModeRuntime(mode).config.dhtNamespaces.username;
+    this.autoRegisterSettingKey = `auto_register_${mode}`;
   }
 
   async initialize(userIdentity: EncryptedUserIdentity, onRestoreUsername: (username: string) => void): Promise<void> {
     this.userIdentity = userIdentity;
 
-    const autoRegister = this.database.getSetting('auto_register');
+    const autoRegister = this.database.getSetting(this.autoRegisterSettingKey);
 
     if (autoRegister === 'never') {
       console.log('Auto-registration is disabled. Use "register <username>" to register a username.');
@@ -231,7 +234,7 @@ export class UsernameRegistry {
     }
 
     if (rememberMe) {
-      this.database.setSetting('auto_register', 'true');
+      this.database.setSetting(this.autoRegisterSettingKey, 'true');
       console.log(`Registered username: ${username} and will auto-register on startup`);
     }
 
@@ -242,7 +245,7 @@ export class UsernameRegistry {
   }
 
   async attemptAutoRegister(): Promise<string | null> {
-    const autoRegister = this.database.getSetting('auto_register');
+    const autoRegister = this.database.getSetting(this.autoRegisterSettingKey);
     if (autoRegister !== 'true') {
       return null;
     }
@@ -278,7 +281,7 @@ export class UsernameRegistry {
       peerIdUnregistered: false,
     }
 
-    this.database.setSetting('auto_register', 'never');
+    this.database.setSetting(this.autoRegisterSettingKey, 'never');
 
     const targetUsername = this.currentUsername?.trim();
     if (!targetUsername) {

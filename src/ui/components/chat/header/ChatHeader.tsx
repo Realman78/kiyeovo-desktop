@@ -699,9 +699,9 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
               <div className="flex items-start gap-2 p-3 bg-warning/10 border border-warning/30 rounded">
                 <AlertCircle className="w-5 h-5 text-warning mt-0.5 shrink-0" />
                 <div className="text-sm text-warning">
-                  <p className="font-semibold mb-1">Warning: Offline messages will not work</p>
+                  <p className="font-semibold mb-1">Warning: Offline messages may not work immediately</p>
                   <p className="text-xs">
-                    In case you make contact with <span className="font-semibold">{username}</span> again, you <span className="font-semibold">will not receive offline messages</span> from this user until they also delete and re-initiate contact with you.
+                    If you make contact with <span className="font-semibold">{username}</span> again, offline delivery can be temporarily inconsistent until the contact is re-established.
                   </p>
                 </div>
               </div>
@@ -719,7 +719,7 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
                 onClick={confirmDeleteChatAndUser}
                 disabled={isDeleting}
               >
-                {isDeleting ? 'Deleting...' : 'Delete Chat & User'}
+                {isDeleting ? 'Deleting...' : 'Delete Chat'}
               </Button>
             </DialogFooter>
           </DialogContent>

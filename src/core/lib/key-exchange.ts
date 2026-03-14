@@ -815,7 +815,6 @@ export class KeyExchange {
       if (sendError instanceof Error && sendError.message.includes("Cannot push value onto an ended pushable")) {
         console.log("The sender went offline. Sender needs to be online to finish key exchange");
         try {
-          this.database.deleteUserByPeerId(remoteId);
           this.deletePendingAcceptanceByPeerId(remoteId);
         } catch {
           console.log('Pending key exchange deletion failed');

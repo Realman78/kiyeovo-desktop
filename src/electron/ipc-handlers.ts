@@ -211,7 +211,8 @@ function setupRegistrationHandlers(
         return { autoRegister: false };
       }
 
-      const setting = p2pCore.database.getSetting('auto_register');
+      const mode = p2pCore.database.getSessionNetworkMode();
+      const setting = p2pCore.database.getSetting(`auto_register_${mode}`);
       return { autoRegister: setting === 'true' };
     } catch (error) {
       console.error('[IPC] Failed to get auto-register setting:', error);
@@ -227,8 +228,9 @@ function setupRegistrationHandlers(
         return { success: false, error: 'P2P core not initialized' };
       }
 
-      p2pCore.database.setSetting('auto_register', enabled ? 'true' : 'never');
-      console.log(`[IPC] Auto-register setting updated to: ${enabled}`);
+      const mode = p2pCore.database.getSessionNetworkMode();
+      p2pCore.database.setSetting(`auto_register_${mode}`, enabled ? 'true' : 'never');
+      console.log(`[IPC] Auto-register setting updated to: ${enabled} (mode=${mode})`);
       return { success: true };
     } catch (error) {
       console.error('[IPC] Failed to set auto-register:', error);
@@ -1305,7 +1307,7 @@ function setupChatSettingsHandlers(
         return { success: false, error: 'P2P core not initialized' };
       }
 
-      console.log(`[IPC] Deleting chat ${chatId} and user ${userPeerId}`);
+      console.log(`[IPC] Deleting chat ${chatId}; user is removed only if no chats remain`);
       p2pCore.database.deleteChatAndUser(chatId, userPeerId);
       try {
         p2pCore.messageHandler.getKeyExchange().deletePendingAcceptanceByPeerId(userPeerId);
@@ -1314,7 +1316,7 @@ function setupChatSettingsHandlers(
       } catch (err) {
         console.error('[IPC] Failed to delete in memory data:', err);
       }
-      console.log(`[IPC] Chat ${chatId} and user ${userPeerId} deleted`);
+      console.log(`[IPC] Chat ${chatId} deleted`);
 
       return { success: true, error: null };
     } catch (error) {

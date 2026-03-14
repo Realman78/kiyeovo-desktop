@@ -1825,9 +1825,24 @@ export class ChatDatabase {
     }
 
     deleteChatAndUser(chatId: number, userPeerId: string): void {
-        this.deleteChat(chatId);
-        this.deleteUserByPeerId(userPeerId);
-        this.deleteBlockedPeer(userPeerId);
+        const deleteChatStmt = this.db.prepare('DELETE FROM chats WHERE id = ?');
+        const hasAnyChatWithPeerStmt = this.db.prepare(`
+            SELECT 1
+            FROM chat_participants
+            WHERE peer_id = ?
+            LIMIT 1
+        `);
+        const deleteUserStmt = this.db.prepare('DELETE FROM users WHERE peer_id = ?');
+
+        const txn = this.db.transaction((cId: number, peerId: string) => {
+            deleteChatStmt.run(cId);
+            const stillHasChats = hasAnyChatWithPeerStmt.get(peerId) !== undefined;
+            if (!stillHasChats) {
+                deleteUserStmt.run(peerId);
+            }
+        });
+
+        txn(chatId, userPeerId);
     }
 
     deleteContactAttemptsByPeerId(peerId: string): void {
