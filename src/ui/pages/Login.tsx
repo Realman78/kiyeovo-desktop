@@ -72,6 +72,7 @@ export const Login = ({ initStatus }: LoginProps) => {
             const isRetryWithError = Boolean(request.errorMessage);
 
             // Keep typed password on failed retries; reset only on fresh flow/mode changes.
+            console.log("marinparin", isRetryWithError, modeChanged, request)
             if (!isRetryWithError || modeChanged) {
                 setPassword('');
                 setConfirmPassword('');
