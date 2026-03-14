@@ -6,6 +6,21 @@ import { DEFAULT_NETWORK_MODE, NETWORK_MODES } from "../../core/constants";
 import type { NetworkMode } from "../../core/types";
 import { NetworkModeSelector } from "../components/login/NetworkModeSelector";
 
+function isDuplicatePasswordRequest(a: PasswordRequest | null, b: PasswordRequest): boolean {
+    if (!a) return false;
+    return (
+        a.prompt === b.prompt &&
+        a.isNewPassword === b.isNewPassword &&
+        a.recoveryPhrase === b.recoveryPhrase &&
+        a.prefilledPassword === b.prefilledPassword &&
+        a.errorMessage === b.errorMessage &&
+        a.cooldownSeconds === b.cooldownSeconds &&
+        a.cooldownUntil === b.cooldownUntil &&
+        a.showRecoveryOption === b.showRecoveryOption &&
+        a.keychainAvailable === b.keychainAvailable
+    );
+}
+
 type LoginProps = {
     initStatus: string;
 }
@@ -57,6 +72,7 @@ export const Login = ({ initStatus }: LoginProps) => {
                 setRequiresNetworkModeSelection(Boolean(initState.requiresNetworkModeSelection));
                 if (initState.pendingPasswordRequest) {
                     setPasswordRequest(initState.pendingPasswordRequest);
+                    previousPasswordRequestRef.current = initState.pendingPasswordRequest;
                     setIsSubmitting(false);
                 }
             } catch {
@@ -67,19 +83,23 @@ export const Login = ({ initStatus }: LoginProps) => {
         void restorePendingPasswordRequest();
 
         const unsubscribe = window.kiyeovoAPI.onPasswordRequest((request) => {
-            const previousRequest = previousPasswordRequestRef.current;
-            const modeChanged = previousRequest?.isNewPassword !== request.isNewPassword;
-            const isRetryWithError = Boolean(request.errorMessage);
+            setTimeout(() => {
+                const previousRequest = previousPasswordRequestRef.current;
+                const modeChanged = previousRequest?.isNewPassword !== request.isNewPassword;
+                const isRetryWithError = Boolean(request.errorMessage);
+                const isDuplicate = isDuplicatePasswordRequest(previousRequest, request);
 
-            // Keep typed password on failed retries; reset only on fresh flow/mode changes.
-            console.log("marinparin", isRetryWithError, modeChanged, request)
-            if (!isRetryWithError || modeChanged) {
-                setPassword('');
-                setConfirmPassword('');
-            }
-            setPasswordRequest(request);
-            setIsSubmitting(false);
-            previousPasswordRequestRef.current = request;
+                // Keep typed password on failed retries and duplicate requests
+                // (duplicate = same logical request arriving from both init snapshot + IPC event).
+                if ((!isRetryWithError || modeChanged) && !isDuplicate) {
+                    setPassword('');
+                    setConfirmPassword('');
+                }
+                setPasswordRequest(request);
+                setIsSubmitting(false);
+                previousPasswordRequestRef.current = request;
+            }, 2000)
+
         });
 
         return () => {
@@ -181,7 +201,7 @@ export const Login = ({ initStatus }: LoginProps) => {
 
     return <div className="w-full h-full flex justify-center items-center flex-col bg-background cyber-grid">
         <div className={`w-16 h-16 mb-6 rounded-full border ${networkMode === NETWORK_MODES.ANONYMOUS ? "border-[#5a3184] glow-border-tor" : "border-primary/50 glow-border"} flex items-center justify-center`}>
-            <Logo version="2" _isTorActive={networkMode === NETWORK_MODES.ANONYMOUS}/>
+            <Logo version="2" _isTorActive={networkMode === NETWORK_MODES.ANONYMOUS} />
         </div>
         {!!passwordRequest ? <PasswordPrompt
             passwordRequest={passwordRequest}
