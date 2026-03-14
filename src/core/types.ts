@@ -196,6 +196,8 @@ export interface EncryptedMessage {
   type: 'encrypted' | 'plain' | 'key_exchange'
   content: string // This is the content of the message, but in the key exchange case, it is the message body
   messageBody?: string // This is the message body of the key exchange message
+  linkIntent?: 'initial' | 'resume'
+  linkDecision?: 'accepted' | 'reset_required'
   nonce?: string // For encrypted messages
   senderPublicKey?: string // Sender's encryption public key
   ephemeralPublicKey?: string // For key exchange
@@ -307,6 +309,8 @@ export type MessageToVerify = {
   senderUsername: string;
   timestamp: number;
   messageBody?: string;
+  linkIntent?: 'initial' | 'resume';
+  linkDecision?: 'accepted' | 'reset_required';
 }
 
 // User Profile Export/Import

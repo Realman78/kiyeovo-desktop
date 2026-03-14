@@ -106,7 +106,17 @@ export class MessageHandler {
     this.onGroupChatActivated = onGroupChatActivated;
     this.onGroupMembersUpdated = onGroupMembersUpdated;
     this.onOfflineMessagesFetchComplete = onOfflineMessagesFetchComplete;
-    this.keyExchange = new KeyExchange(node, usernameRegistry, this.sessionManager, database, onKeyExchangeSent, onContactRequestReceived, onChatCreated, onKeyExchangeFailed);
+    this.keyExchange = new KeyExchange(
+      node,
+      usernameRegistry,
+      this.sessionManager,
+      database,
+      onKeyExchangeSent,
+      onContactRequestReceived,
+      onChatCreated,
+      onKeyExchangeFailed,
+      this.handleDirectLinkReset.bind(this)
+    );
     this.fileHandler = new FileHandler(node, this, database, onFileTransferProgress, onFileTransferComplete, onFileTransferFailed, onPendingFileReceived);
     const sessionNetworkMode = database.getSessionNetworkMode();
     const modeConfig = getNetworkModeRuntime(sessionNetworkMode).config;
@@ -480,6 +490,34 @@ export class MessageHandler {
     }
 
     void this.runQueuedGroupStateCatchup(chatId);
+  }
+
+  private handleDirectLinkReset(peerId: string): void {
+    const myPeerId = this.node.peerId.toString();
+    const groupChats = this.database.getAllGroupChats();
+
+    for (const chat of groupChats) {
+      if (!chat.group_id) continue;
+
+      const isParticipant = this.database
+        .getChatParticipants(chat.id)
+        .some((participant) => participant.peer_id === peerId);
+      if (!isParticipant) continue;
+
+      if (chat.group_creator_peer_id === myPeerId) {
+        console.log(
+          `[DIRECT-RESET][NUDGE] peer=${peerId.slice(-8)} group=${chat.group_id.slice(0, 8)} reason=creator_local`,
+        );
+        this.nudgePeerGroupRefetch(peerId, chat.group_id);
+      }
+
+      if (chat.group_creator_peer_id === peerId) {
+        console.log(
+          `[DIRECT-RESET][CATCHUP] peer=${peerId.slice(-8)} group=${chat.group_id.slice(0, 8)} reason=creator_remote`,
+        );
+        this.scheduleGroupStateUpdateCatchup(chat.id, chat.group_id, 'direct_link_reset');
+      }
+    }
   }
 
   private async runQueuedGroupStateCatchup(chatId: number): Promise<void> {

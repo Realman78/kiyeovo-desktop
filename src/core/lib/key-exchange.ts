@@ -41,8 +41,31 @@ export class KeyExchange {
   private onContactRequestReceived: (data: ContactRequestEvent) => void;
   private onChatCreated: (data: ChatCreatedEvent) => void;
   private onKeyExchangeFailed: (data: KeyExchangeFailedEvent) => void;
+  private onDirectLinkReset: (peerId: string) => void;
   private readonly offlineBucketPrefix: string;
   private readonly chatProtocol: string;
+
+  private resolveLinkIntent(remoteId: string): 'initial' | 'resume' {
+    return this.database.getChatByPeerId(remoteId) ? 'resume' : 'initial';
+  }
+
+  private buildKeyExchangeMessageToVerify(
+    message: Pick<AuthenticatedEncryptedMessage, 'content' | 'ephemeralPublicKey' | 'senderUsername' | 'timestamp' | 'messageBody' | 'linkIntent' | 'linkDecision'>
+  ): MessageToVerify {
+    const payload: MessageToVerify = {
+      type: 'key_exchange',
+      content: message.content as MessageToVerify['content'],
+      // Field is required by MessageToVerify and guaranteed by callers.
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      ephemeralPublicKey: message.ephemeralPublicKey!,
+      senderUsername: message.senderUsername,
+      timestamp: message.timestamp,
+    };
+    if (message.messageBody !== undefined) payload.messageBody = message.messageBody;
+    if (message.linkIntent !== undefined) payload.linkIntent = message.linkIntent;
+    if (message.linkDecision !== undefined) payload.linkDecision = message.linkDecision;
+    return payload;
+  }
 
   constructor(
     node: ChatNode,
@@ -52,7 +75,8 @@ export class KeyExchange {
     onKeyExchangeSent: (data: KeyExchangeEvent) => void,
     onContactRequestReceived: (data: ContactRequestEvent) => void,
     onChatCreated: (data: ChatCreatedEvent) => void,
-    onKeyExchangeFailed: (data: KeyExchangeFailedEvent) => void
+    onKeyExchangeFailed: (data: KeyExchangeFailedEvent) => void,
+    onDirectLinkReset?: (peerId: string) => void
   ) {
     this.node = node;
     this.usernameRegistry = usernameRegistry;
@@ -62,6 +86,7 @@ export class KeyExchange {
     this.onContactRequestReceived = onContactRequestReceived;
     this.onChatCreated = onChatCreated;
     this.onKeyExchangeFailed = onKeyExchangeFailed;
+    this.onDirectLinkReset = onDirectLinkReset ?? (() => undefined);
     const modeConfig = getNetworkModeRuntime(database.getSessionNetworkMode()).config;
     this.offlineBucketPrefix = modeConfig.dhtNamespaces.offline;
     this.chatProtocol = modeConfig.chatProtocol;
@@ -287,7 +312,12 @@ export class KeyExchange {
   }
 
   //Initiate a key exchange with a target peer
-  async initiateKeyExchange(targetPeerId: PeerId, targetUsername: string, message: string): Promise<User | null> {
+  async initiateKeyExchange(
+    targetPeerId: PeerId,
+    targetUsername: string,
+    message: string,
+    options?: { linkIntent?: 'initial' | 'resume' }
+  ): Promise<User | null> {
     const userIdentity = this.usernameRegistry.getUserIdentity();
     if (!userIdentity) {
       throw new Error('No user identity available');
@@ -299,6 +329,7 @@ export class KeyExchange {
     const myUsername = myUser?.username || `user_${myPeerId.slice(-8)}`;
 
     const peerIdStr = targetPeerId.toString();
+    const linkIntent = options?.linkIntent ?? this.resolveLinkIntent(peerIdStr);
 
     // Check if already waiting for response from this user
     if (this.keyExchangeAbortControllers.has(peerIdStr)) {
@@ -326,6 +357,7 @@ export class KeyExchange {
       senderUsername: myUsername,
       timestamp,
       messageBody: message,
+      linkIntent,
     };
 
     const stringifiedSignFields = JSON.stringify(signFields);
@@ -638,18 +670,17 @@ export class KeyExchange {
     sender: UserRegistration | User,
     remoteId: string
   ): Promise<{ valid: boolean; keys: { signingPublicKey: string; offlinePublicKey: string; signature: string } }> {
-    const messageToVerify: MessageToVerify = {
-      type: 'key_exchange',
+    const verifyPayload: Pick<AuthenticatedEncryptedMessage, 'content' | 'ephemeralPublicKey' | 'senderUsername' | 'timestamp' | 'messageBody' | 'linkIntent' | 'linkDecision'> = {
       content: 'key_exchange_init',
-      // disabling because it is validated in validateKeyExchangeInit
+      // validated in validateKeyExchangeInit
       // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
       ephemeralPublicKey: message.ephemeralPublicKey!,
       senderUsername: message.senderUsername,
       timestamp: message.timestamp,
     };
-    if (message.messageBody !== undefined) {
-      messageToVerify.messageBody = message.messageBody;
-    }
+    if (message.messageBody !== undefined) verifyPayload.messageBody = message.messageBody;
+    if (message.linkIntent !== undefined) verifyPayload.linkIntent = message.linkIntent;
+    const messageToVerify = this.buildKeyExchangeMessageToVerify(verifyPayload);
 
     console.log("message to verify", messageToVerify)
 
@@ -785,7 +816,8 @@ export class KeyExchange {
     ephemeralPublicKey: Uint8Array,
     myUsername: string,
     userIdentity: EncryptedUserIdentity,
-    remoteId: string
+    remoteId: string,
+    linkDecision: 'accepted' | 'reset_required' = 'accepted'
   ): Promise<void> {
     const responseTimestamp = Date.now();
 
@@ -795,6 +827,7 @@ export class KeyExchange {
       ephemeralPublicKey: Buffer.from(ephemeralPublicKey).toString('base64'),
       senderUsername: myUsername,
       timestamp: responseTimestamp,
+      linkDecision,
     };
 
     const responseSignature = userIdentity.sign(JSON.stringify(responseMessageToSign));
@@ -867,6 +900,14 @@ export class KeyExchange {
     myUsername: string
   ): Promise<void> {
     try {
+      const existingDirectChat = this.database.getChatByPeerId(remoteId);
+      const incomingLinkIntent = message.linkIntent ?? 'resume';
+      const shouldForceResetLocalDirectChat = Boolean(existingDirectChat) && incomingLinkIntent === 'initial';
+      const responseLinkDecision: 'accepted' | 'reset_required' =
+        !existingDirectChat && incomingLinkIntent !== 'initial'
+          ? 'reset_required'
+          : 'accepted';
+
       const ourPendingKeyExchange = this.sessionManager.getPendingKeyExchange(remoteId);
       if (ourPendingKeyExchange) {
         console.log(`Cleaning up our pending key exchange with ${remoteId.slice(0, 8)}... - they initiated a new one`);
@@ -925,7 +966,8 @@ export class KeyExchange {
         ephemeralPublicKey,
         myUsername,
         userIdentity,
-        remoteId
+        remoteId,
+        responseLinkDecision
       );
 
       // Create chat record in database
@@ -936,8 +978,12 @@ export class KeyExchange {
         notificationsBucketKey,
         keys.signingPublicKey,
         keys.offlinePublicKey,
-        keys.signature
+        keys.signature,
+        shouldForceResetLocalDirectChat
       );
+      if (shouldForceResetLocalDirectChat) {
+        this.onDirectLinkReset(remoteId);
+      }
     } catch (error: unknown) {
       if (error instanceof Error && error.message === 'REJECTION_NEEDED') {
         await this.sendRejectionResponse(
@@ -990,13 +1036,12 @@ export class KeyExchange {
           throw new Error('Rejection message missing signature, sender username or ephemeral public key');
         }
 
-        const messageToVerify: MessageToVerify = {
-          type: 'key_exchange',
+        const messageToVerify = this.buildKeyExchangeMessageToVerify({
           content: 'key_exchange_rejected',
           ephemeralPublicKey: message.ephemeralPublicKey,
           senderUsername: message.senderUsername,
           timestamp: message.timestamp,
-        };
+        });
 
         const { valid } = await this.verifySignatureWithFallback(
           message.signature,
@@ -1023,13 +1068,14 @@ export class KeyExchange {
         throw new Error('Key exchange response missing signature, sender username or ephemeral public key');
       }
 
-      const messageToVerify: MessageToVerify = {
-        type: 'key_exchange',
+      const verifyPayload: Pick<AuthenticatedEncryptedMessage, 'content' | 'ephemeralPublicKey' | 'senderUsername' | 'timestamp' | 'messageBody' | 'linkIntent' | 'linkDecision'> = {
         content: 'key_exchange_response',
         ephemeralPublicKey: message.ephemeralPublicKey,
         senderUsername: message.senderUsername,
         timestamp: message.timestamp,
       };
+      if (message.linkDecision !== undefined) verifyPayload.linkDecision = message.linkDecision;
+      const messageToVerify = this.buildKeyExchangeMessageToVerify(verifyPayload);
 
       const { valid } = await this.verifySignatureWithFallback(
         message.signature,
@@ -1072,6 +1118,7 @@ export class KeyExchange {
       const myPeerId = this.node.peerId.toString();
       const offlineBucketSecret = this.deriveOfflineBucketSecret(sharedSecret, myPeerId, peerId);
       const notificationsBucketKey = this.deriveNotificationsBucketKey(sharedSecret, myPeerId, peerId);
+      const forceResetDirectChat = message.linkDecision === 'reset_required';
 
       const userFromDb = this.database.getUserByPeerId(peerId);
       await this._createUserAndChat(
@@ -1081,8 +1128,12 @@ export class KeyExchange {
         notificationsBucketKey,
         userFromDb?.signing_public_key,
         userFromDb?.offline_public_key,
-        userFromDb?.signature
+        userFromDb?.signature,
+        forceResetDirectChat
       );
+      if (forceResetDirectChat) {
+        this.onDirectLinkReset(peerId);
+      }
 
       // Return the user object we just created/updated
       return this.database.getUserByPeerId(peerId);
@@ -1440,7 +1491,8 @@ export class KeyExchange {
     notificationsBucketKey: Uint8Array,
     signing_public_key?: string,
     offline_public_key?: string,
-    signature?: string
+    signature?: string,
+    forceResetDirectChat = false
   ): Promise<void> {
     const otherUser = this.database.getUserByPeerId(remoteId);
     if (!otherUser) {
@@ -1491,14 +1543,19 @@ export class KeyExchange {
         peerId: remoteId,
         username
       });
-    } else if (chat.trusted_out_of_band) {
-      // Upgrade from out-of-band trust to full ECDH-derived keys
-      console.log(`Upgrading chat ${chat.id} from out-of-band trust to ECDH-derived keys`);
+    } else if (chat.trusted_out_of_band || forceResetDirectChat) {
+      if (forceResetDirectChat) {
+        console.log(`Resetting direct chat ${chat.id} keys due to explicit key-exchange reset`);
+      } else {
+        console.log(`Upgrading chat ${chat.id} from out-of-band trust to ECDH-derived keys`);
+      }
       this.database.updateChatEncryptionKeys(chat.id, {
         offline_bucket_secret: offlineBucketSecret,
         notifications_bucket_key: toBase64Url(notificationsBucketKey),
         trusted_out_of_band: false
       });
+      this.database.updateOfflineLastReadTimestampByPeerId(remoteId, 0);
+      this.database.updateOfflineLastAckSentByPeerId(remoteId, 0);
 
       // this.onChatCreated({
       //   chatId: chat.id,
@@ -1506,10 +1563,7 @@ export class KeyExchange {
       //   username
       // });
     }
-    // TODO: Offline message desync after "Delete chat & user"
-    // When one user deletes chat/user and re-initiates contact, they generate a new offline_bucket_secret while the other user keeps the old one, causing offline message loss.
-    // Solutions: (1) Exchange/compare secret hashes during key exchange and reconcile mismatches, (2) Store offline secrets in deletion-resistant table, (3) Accept loss and warn users (current approach).
-    // Choosing option 3 for now - user warned that deletion breaks offline messages until both users delete or re-sync.
+    // key-exchange reset path handles "delete chat & user" desync by rotating both direct bucket secrets.
   }
 
   private isKeyExchangeRateLimitExceeded(): boolean {
