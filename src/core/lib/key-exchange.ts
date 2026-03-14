@@ -903,6 +903,7 @@ export class KeyExchange {
       const existingDirectChat = this.database.getChatByPeerId(remoteId);
       const incomingLinkIntent = message.linkIntent ?? 'resume';
       const shouldForceResetLocalDirectChat = Boolean(existingDirectChat) && incomingLinkIntent === 'initial';
+      const shouldTriggerRelinkCatchup = !existingDirectChat && incomingLinkIntent !== 'initial';
       const responseLinkDecision: 'accepted' | 'reset_required' =
         !existingDirectChat && incomingLinkIntent !== 'initial'
           ? 'reset_required'
@@ -981,7 +982,7 @@ export class KeyExchange {
         keys.signature,
         shouldForceResetLocalDirectChat
       );
-      if (shouldForceResetLocalDirectChat) {
+      if (shouldForceResetLocalDirectChat || shouldTriggerRelinkCatchup) {
         this.onDirectLinkReset(remoteId);
       }
     } catch (error: unknown) {
