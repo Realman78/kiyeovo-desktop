@@ -311,6 +311,9 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     getChatById: async (chatId: number): Promise<{ success: boolean; chat: any | null; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.GET_CHAT, chatId);
     },
+    searchChats: async (query: string): Promise<{ success: boolean; chatIds: number[]; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.SEARCH_CHATS, query);
+    },
 
     // Messages
     getMessages: async (chatId: number): Promise<{ success: boolean; messages: Array<Message>; error: string | null }> => {

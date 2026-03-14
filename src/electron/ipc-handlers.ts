@@ -875,6 +875,22 @@ function setupChatHandlers(
     }
   });
 
+  ipcMain.handle(IPC_CHANNELS.SEARCH_CHATS, async (_event, query: string) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, chatIds: [], error: 'P2P core not initialized' };
+      }
+
+      const myPeerId = p2pCore.userIdentity.id;
+      const chatIds = p2pCore.database.searchChats(query, myPeerId);
+      return { success: true, chatIds, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to search chats:', error);
+      return { success: false, chatIds: [], error: error instanceof Error ? error.message : 'Failed to search chats' };
+    }
+  });
+
   ipcMain.handle(IPC_CHANNELS.GET_CHAT, async (_event, chatId: number) => {
     try {
       const p2pCore = getP2PCore();

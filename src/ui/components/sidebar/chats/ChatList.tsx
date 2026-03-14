@@ -1,4 +1,4 @@
-import { useState, type FC } from "react";
+import { useState, useEffect, useRef, type FC } from "react";
 import { Input } from "../../ui/Input";
 import { Search } from "lucide-react";
 import { ChatPreview } from "./ChatPreview";
@@ -9,11 +9,45 @@ import { EmptyChatList } from "./EmptyChatList";
 
 export const ChatList: FC = () => {
     const [searchQuery, setSearchQuery] = useState("");
+    const [matchingChatIds, setMatchingChatIds] = useState<Set<number> | null>(null);
+    const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const searchRequestSeqRef = useRef(0);
     const chats = useSelector((state: RootState) => state.chat.chats);
     const contactAttempts = useSelector((state: RootState) => state.chat.contactAttempts);
     const selectedChatId = useSelector((state: RootState) => state.chat.activeChat);
     const isConnected = useSelector((state: RootState) => state.user.connected);
     const dispatch = useDispatch();
+
+    useEffect(() => {
+        if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+
+        const trimmed = searchQuery.trim();
+        const requestSeq = ++searchRequestSeqRef.current;
+        if (!trimmed) {
+            setMatchingChatIds(null);
+            return;
+        }
+
+        searchTimerRef.current = setTimeout(async () => {
+            try {
+                const result = await window.kiyeovoAPI.searchChats(trimmed);
+                if (requestSeq !== searchRequestSeqRef.current) return;
+                if (result.success) {
+                    setMatchingChatIds(new Set(result.chatIds));
+                } else {
+                    setMatchingChatIds(new Set());
+                }
+            } catch (error) {
+                if (requestSeq !== searchRequestSeqRef.current) return;
+                setMatchingChatIds(new Set());
+                console.error('[UI] Chat search failed:', error);
+            }
+        }, 300);
+
+        return () => {
+            if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+        };
+    }, [searchQuery]);
 
     const onSelectChat = async (chatId: number) => {
         dispatch(setActiveChat(chatId));
@@ -52,6 +86,11 @@ export const ChatList: FC = () => {
         if (chat.status !== 'pending') return true;
         return chat.type === 'group' && chat.groupStatus === 'awaiting_activation';
     });
+
+    const filteredChats = matchingChatIds !== null
+        ? activeChats.filter((chat) => matchingChatIds.has(chat.id))
+        : activeChats;
+
     const hasNoConversations = activeChats.length === 0 && contactAttempts.length === 0;
 
     return (
@@ -71,7 +110,7 @@ export const ChatList: FC = () => {
                 {hasNoConversations ? (
                     <EmptyChatList />
                 ) : (
-                    activeChats.map((chat) => (
+                    filteredChats.map((chat) => (
                         <ChatPreview key={chat.id} chat={chat} onSelectChat={onSelectChat} selectedChatId={selectedChatId?.id ?? null} />
                     ))
                 )}

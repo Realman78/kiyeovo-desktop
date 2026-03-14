@@ -84,6 +84,7 @@ declare global {
                 chats: Array<Chat & { group_creator_username?: string }>;
                 error: string | null
             }>;
+            searchChats: (query: string) => Promise<{ success: boolean; chatIds: number[]; error: string | null }>;
             getChatById: (chatId: number) => Promise<{
                 success: boolean;
                 chat: (Chat & {

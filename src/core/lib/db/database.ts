@@ -1289,6 +1289,32 @@ export class ChatDatabase {
         }));
     }
 
+    searchChats(query: string, myPeerId: string): number[] {
+        const pattern = `%${query}%`;
+        const mode = this.getActiveNetworkMode();
+        const stmt = this.db.prepare(`
+            SELECT DISTINCT c.id FROM chats c
+            LEFT JOIN chat_participants cp ON c.id = cp.chat_id AND c.type = 'direct' AND cp.peer_id != ?
+            LEFT JOIN users u ON cp.peer_id = u.peer_id AND u.network_mode = c.network_mode
+            WHERE c.network_mode = ? AND (
+                -- Direct chat: match other party's username or peerId
+                (c.type = 'direct' AND (u.username LIKE ? OR cp.peer_id LIKE ?))
+                OR
+                -- Group chat: match group name
+                (c.type = 'group' AND c.name LIKE ?)
+                OR
+                -- Group chat: match any participant's username or peerId
+                (c.type = 'group' AND c.id IN (
+                    SELECT gcp.chat_id FROM chat_participants gcp
+                    LEFT JOIN users gu ON gcp.peer_id = gu.peer_id AND gu.network_mode = ?
+                    WHERE gcp.peer_id != ? AND (gu.username LIKE ? OR gcp.peer_id LIKE ?)
+                ))
+            )
+        `);
+        const rows = stmt.all(myPeerId, mode, pattern, pattern, pattern, mode, myPeerId, pattern, pattern) as { id: number }[];
+        return rows.map(row => row.id);
+    }
+
     getAllChatsWithUsernameAndLastMsg(myPeerId: string): Array<Chat & {
         username?: string | undefined;
         group_creator_username?: string | undefined;

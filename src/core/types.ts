@@ -505,6 +505,7 @@ export const IPC_CHANNELS = {
   CHAT_CREATED: 'chat:created',
   GET_CHATS: 'chats:get',
   GET_CHAT: 'chat:get',
+  SEARCH_CHATS: 'chats:search',
 
   // Message events
   MESSAGE_RECEIVED: 'message:received',
