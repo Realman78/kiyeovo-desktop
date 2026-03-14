@@ -433,7 +433,22 @@ function setupBootstrapHandlers(
       }
 
       console.log('[IPC] Fetching bootstrap nodes from database...');
-      const nodes = p2pCore.database.getBootstrapNodes();
+      const dbNodes = p2pCore.database.getBootstrapNodes();
+      const connectedPeerIds = new Set(
+        p2pCore.node.getConnections().map((connection) => connection.remotePeer.toString()),
+      );
+      const nodes = dbNodes.map((node) => {
+        let peerId: string | null = null;
+        try {
+          peerId = multiaddr(node.address).getPeerId() ?? null;
+        } catch {
+          peerId = null;
+        }
+        return {
+          address: node.address,
+          connected: peerId !== null && connectedPeerIds.has(peerId),
+        };
+      });
       console.log(`[IPC] Found ${nodes.length} bootstrap nodes`);
 
       return { success: true, nodes, error: null };

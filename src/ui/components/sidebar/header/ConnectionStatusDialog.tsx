@@ -100,7 +100,7 @@ const ConnectionStatusDialog = ({
     };
 
     void fetchDialogData();
-  }, [open]);
+  }, [open, isConnected]);
 
   useEffect(() => {
     if (networkMode !== 'fast' && activeTab === 'relays') {
@@ -253,17 +253,18 @@ const ConnectionStatusDialog = ({
     }, 2000);
   };
 
-  const bootstrapConnectedCount = bootstrapNodes.filter((node) => node.connected).length;
-  const relayConnectedCount = relayNodes.filter((node) => node.connected).length;
+  const showLiveNodeConnectivity = isConnected === true;
+  const bootstrapConnectedCount = bootstrapNodes.filter((node) => showLiveNodeConnectivity && node.connected).length;
+  const relayConnectedCount = relayNodes.filter((node) => showLiveNodeConnectivity && node.connected).length;
   const bootstrapEntries = bootstrapNodes.map((node) => ({
     key: node.id,
     address: node.address,
-    connected: node.connected,
+    connected: showLiveNodeConnectivity && node.connected,
   }));
   const relayEntries = relayNodes.map((node) => ({
     key: node.address,
     address: node.address,
-    connected: node.connected,
+    connected: showLiveNodeConnectivity && node.connected,
   }));
   const isFastMode = networkMode === 'fast';
   const isRelayTab = activeTab === 'relays' && isFastMode;
