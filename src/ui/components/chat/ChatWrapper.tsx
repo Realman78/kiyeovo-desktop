@@ -8,6 +8,7 @@ import { ChatInput } from "./input/ChatInput";
 import { InvitationManager } from "./input/InvitationManager";
 import { EmptyState } from "./messages/EmptyState";
 import { PendingKxManager } from "./input/PendingKxManager";
+import { getGroupCreatorLinkState, type GroupCreatorLinkState } from "../../utils/groupCreatorLinkHealth";
 
 interface ChatWrapperProps {
   //   chatName: string;
@@ -24,6 +25,8 @@ const ChatWrapper = ({
   const activePendingKeyExchange = useSelector((state: RootState) => state.chat.activePendingKeyExchange);
   const messages = useSelector((state: RootState) => state.chat.messages);
   const sendingMessages = useSelector((state: RootState) => state.chat.sendingMessages);
+  const chats = useSelector((state: RootState) => state.chat.chats);
+  const myPeerId = useSelector((state: RootState) => state.user.peerId);
 
   //   useEffect(() => {
   //     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -70,6 +73,15 @@ const ChatWrapper = ({
     return null;
   }, [activePendingKeyExchange, activeContactAttempt, activeChat]);
 
+  const groupCreatorLinkState = useMemo<GroupCreatorLinkState>(() => {
+    if (!activeChat) return { broken: false };
+    return getGroupCreatorLinkState(activeChat, chats, myPeerId);
+  }, [activeChat, chats, myPeerId]);
+
+  const creatorLabel = groupCreatorLinkState.creatorName
+    ? `${groupCreatorLinkState.creatorName} (${groupCreatorLinkState.creatorPeerId})`
+    : groupCreatorLinkState.creatorPeerId;
+
   return (
     <div className="flex-1 flex flex-col h-full bg-background">
       {!activeChat && !activeContactAttempt && !activePendingKeyExchange ? (
@@ -83,6 +95,13 @@ const ChatWrapper = ({
             groupStatus={activeChat?.groupStatus}
             chatId={activeChat?.id}
           />
+          {groupCreatorLinkState.broken && (
+            <div className="mx-6 mb-2 mt-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              You do not have a direct chat with {creatorLabel || 'the group creator'}, so you cannot receive future group updates.
+              Existing messages may still work until the next group update.
+              To fix this: make sure {groupCreatorLinkState.creatorName || 'the creator'} also deletes you, then establish a new conversation.
+            </div>
+          )}
           <MessagesContainer
             messages={messagesToDisplay}
             isPending={!!activeContactAttempt || !!activePendingKeyExchange}

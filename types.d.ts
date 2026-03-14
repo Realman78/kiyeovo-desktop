@@ -79,12 +79,17 @@ declare global {
             onChatCreated: (callback: (data: ChatCreatedEvent) => void) => () => void;
             onGroupChatActivated: (callback: (data: GroupChatActivatedEvent) => void) => () => void;
             onGroupMembersUpdated: (callback: (data: GroupMembersUpdatedEvent) => void) => () => void;
-            getChats: () => Promise<{ success: boolean; chats: Array<Chat>; error: string | null }>;
+            getChats: () => Promise<{
+                success: boolean;
+                chats: Array<Chat & { group_creator_username?: string }>;
+                error: string | null
+            }>;
             getChatById: (chatId: number) => Promise<{
                 success: boolean;
                 chat: (Chat & {
                     username?: string;
                     other_peer_id?: string;
+                    group_creator_username?: string;
                     last_message_content?: string;
                     last_message_timestamp?: Date;
                     last_message_sender?: string;

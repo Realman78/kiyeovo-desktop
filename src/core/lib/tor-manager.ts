@@ -270,8 +270,8 @@ AvoidDiskWrites 1
       }
 
       const timeout = setTimeout(() => {
-        reject(new Error('Tor bootstrap timeout (60 seconds)'));
-      }, 60000);
+        reject(new Error('Tor bootstrap timeout (5 minutes)'));
+      }, 300_000);
 
       let lastProgress = 0;
 

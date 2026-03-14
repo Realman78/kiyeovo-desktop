@@ -39,6 +39,8 @@ export interface Chat {
   type: 'direct' | 'group';
   name: string;
   groupId?: string;
+  groupCreatorPeerId?: string;
+  groupCreatorUsername?: string;
   peerId?: string; // optional because of potential group chats
   lastMessage: string;
   lastMessageTimestamp: number;

@@ -1291,6 +1291,7 @@ export class ChatDatabase {
 
     getAllChatsWithUsernameAndLastMsg(myPeerId: string): Array<Chat & {
         username?: string | undefined;
+        group_creator_username?: string | undefined;
         other_peer_id?: string | undefined;
         last_message_content?: string | undefined;
         last_message_timestamp?: Date | undefined;
@@ -1301,6 +1302,7 @@ export class ChatDatabase {
             SELECT
                 c.*,
                 u.username,
+                creator_u.username as group_creator_username,
                 cp.peer_id as other_peer_id,
                 last_msg.content as last_message_content,
                 last_msg.timestamp as last_message_timestamp,
@@ -1309,6 +1311,7 @@ export class ChatDatabase {
             FROM chats c
             LEFT JOIN chat_participants cp ON c.id = cp.chat_id AND c.type = 'direct' AND cp.peer_id != ?
             LEFT JOIN users u ON cp.peer_id = u.peer_id AND u.network_mode = c.network_mode
+            LEFT JOIN users creator_u ON c.type = 'group' AND creator_u.peer_id = c.group_creator_peer_id AND creator_u.network_mode = c.network_mode
             LEFT JOIN blocked_peers bp ON cp.peer_id = bp.peer_id AND bp.network_mode = c.network_mode
             LEFT JOIN messages last_msg ON last_msg.id = (
                 SELECT id FROM messages
@@ -1325,6 +1328,7 @@ export class ChatDatabase {
         return rows.map(row => ({
             ...this.mapChatRow(row),
             username: row.username || undefined,
+            group_creator_username: row.group_creator_username || undefined,
             other_peer_id: row.other_peer_id || undefined,
             last_message_content: row.last_message_content || undefined,
             last_message_timestamp: row.last_message_timestamp ? new Date(row.last_message_timestamp) : undefined,
@@ -1335,6 +1339,7 @@ export class ChatDatabase {
 
     getChatByIdWithUsernameAndLastMsg(chatId: number, myPeerId: string): (Chat & {
         username?: string | undefined;
+        group_creator_username?: string | undefined;
         other_peer_id?: string | undefined;
         last_message_content?: string | undefined;
         last_message_timestamp?: Date | undefined;
@@ -1345,6 +1350,7 @@ export class ChatDatabase {
             SELECT
                 c.*,
                 u.username,
+                creator_u.username as group_creator_username,
                 cp.peer_id as other_peer_id,
                 last_msg.content as last_message_content,
                 last_msg.timestamp as last_message_timestamp,
@@ -1353,6 +1359,7 @@ export class ChatDatabase {
             FROM chats c
             LEFT JOIN chat_participants cp ON c.id = cp.chat_id AND c.type = 'direct' AND cp.peer_id != ?
             LEFT JOIN users u ON cp.peer_id = u.peer_id AND u.network_mode = c.network_mode
+            LEFT JOIN users creator_u ON c.type = 'group' AND creator_u.peer_id = c.group_creator_peer_id AND creator_u.network_mode = c.network_mode
             LEFT JOIN blocked_peers bp ON cp.peer_id = bp.peer_id AND bp.network_mode = c.network_mode
             LEFT JOIN messages last_msg ON last_msg.id = (
                 SELECT id FROM messages
@@ -1368,6 +1375,7 @@ export class ChatDatabase {
         return {
             ...this.mapChatRow(row),
             username: row.username || undefined,
+            group_creator_username: row.group_creator_username || undefined,
             other_peer_id: row.other_peer_id || undefined,
             last_message_content: row.last_message_content || undefined,
             last_message_timestamp: row.last_message_timestamp ? new Date(row.last_message_timestamp) : undefined,

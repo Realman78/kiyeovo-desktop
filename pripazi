@@ -24,6 +24,8 @@ Still “startup blocked” (by design) until the user submits; but at least it 
 
 1.0.2 kada se bootstrap ugasi i na klijentu pise OFFLINE, bootstrap jos uvik ima zelenu tockicu
 
+1.0.3 korisnik se registrira ali jos ni registriral do kraja (samo je username zasad uspil). alice ga kontaktira i uspije poslat kx zahtjev jer username postji u DHT-u, ali se ovaj ni registriral do kraja jos pa dobije kx timed out
+
 Je li prva poruka u direct conversationu ne enkriptirana??
 
 ux improvement - dodaj switch mode u settingse

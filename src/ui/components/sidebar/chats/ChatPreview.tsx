@@ -2,6 +2,9 @@ import type { FC } from "react";
 import type { Chat } from "../../../state/slices/chatSlice";
 import { formatTimestampToHourMinute } from "../../../utils/dateUtils";
 import { Ban, BellOff, Paperclip, Users } from "lucide-react";
+import { useSelector } from "react-redux";
+import type { RootState } from "../../../state/store";
+import { getGroupCreatorLinkState } from "../../../utils/groupCreatorLinkHealth";
 
 type ChatPreviewProps = {
     chat: Chat;
@@ -9,9 +12,14 @@ type ChatPreviewProps = {
     selectedChatId: number | null;
 }
 export const ChatPreview: FC<ChatPreviewProps> = ({ chat, onSelectChat, selectedChatId }) => {
+    const chats = useSelector((state: RootState) => state.chat.chats);
+    const myPeerId = useSelector((state: RootState) => state.user.peerId);
+    const creatorLinkState = getGroupCreatorLinkState(chat, chats, myPeerId);
     const isAwaitingActivation = chat.type === 'group' && chat.groupStatus === 'awaiting_activation';
     const isArchivedGroup = chat.type === 'group' && chat.groupStatus === 'removed';
-    const previewText = isAwaitingActivation
+    const previewText = creatorLinkState.broken
+        ? 'Creator link is broken. Group updates are paused.'
+        : isAwaitingActivation
         ? 'Waiting for creator activation...'
         : (chat.lastMessage || "SYSTEM: No messages yet");
 
@@ -28,6 +36,11 @@ export const ChatPreview: FC<ChatPreviewProps> = ({ chat, onSelectChat, selected
                         {isArchivedGroup && (
                             <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-500/15 text-slate-600 dark:text-slate-300 uppercase tracking-wide shrink-0">
                                 Archived
+                            </span>
+                        )}
+                        {creatorLinkState.broken && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-destructive/15 text-destructive uppercase tracking-wide shrink-0">
+                                Broken
                             </span>
                         )}
                         <span title={chat.name} className="truncate max-w-45">{chat.name}</span>
