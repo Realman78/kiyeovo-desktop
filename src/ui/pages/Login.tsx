@@ -83,23 +83,20 @@ export const Login = ({ initStatus }: LoginProps) => {
         void restorePendingPasswordRequest();
 
         const unsubscribe = window.kiyeovoAPI.onPasswordRequest((request) => {
-            setTimeout(() => {
-                const previousRequest = previousPasswordRequestRef.current;
-                const modeChanged = previousRequest?.isNewPassword !== request.isNewPassword;
-                const isRetryWithError = Boolean(request.errorMessage);
-                const isDuplicate = isDuplicatePasswordRequest(previousRequest, request);
+            const previousRequest = previousPasswordRequestRef.current;
+            const modeChanged = previousRequest?.isNewPassword !== request.isNewPassword;
+            const isRetryWithError = Boolean(request.errorMessage);
+            const isDuplicate = isDuplicatePasswordRequest(previousRequest, request);
 
-                // Keep typed password on failed retries and duplicate requests
-                // (duplicate = same logical request arriving from both init snapshot + IPC event).
-                if ((!isRetryWithError || modeChanged) && !isDuplicate) {
-                    setPassword('');
-                    setConfirmPassword('');
-                }
-                setPasswordRequest(request);
-                setIsSubmitting(false);
-                previousPasswordRequestRef.current = request;
-            }, 2000)
-
+            // Keep typed password on failed retries and duplicate requests
+            // (duplicate = same logical request arriving from both init snapshot + IPC event).
+            if ((!isRetryWithError || modeChanged) && !isDuplicate) {
+                setPassword('');
+                setConfirmPassword('');
+            }
+            setPasswordRequest(request);
+            setIsSubmitting(false);
+            previousPasswordRequestRef.current = request;
         });
 
         return () => {
@@ -201,7 +198,7 @@ export const Login = ({ initStatus }: LoginProps) => {
 
     return <div className="w-full h-full flex justify-center items-center flex-col bg-background cyber-grid">
         <div className={`w-16 h-16 mb-6 rounded-full border ${networkMode === NETWORK_MODES.ANONYMOUS ? "border-[#5a3184] glow-border-tor" : "border-primary/50 glow-border"} flex items-center justify-center`}>
-            <Logo version="2" _isTorActive={networkMode === NETWORK_MODES.ANONYMOUS} />
+            <Logo version="2" _isTorActive={networkMode === NETWORK_MODES.ANONYMOUS}/>
         </div>
         {!!passwordRequest ? <PasswordPrompt
             passwordRequest={passwordRequest}

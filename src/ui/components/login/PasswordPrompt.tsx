@@ -96,7 +96,6 @@ export function PasswordPrompt({
   const isNewPassword = passwordRequest.isNewPassword ?? false;
 
   useEffect(() => {
-    console.log("prefileedpwd", passwordRequest.prefilledPassword, password);
     if (passwordRequest.prefilledPassword && !password) {
       setPassword(passwordRequest.prefilledPassword);
     }
