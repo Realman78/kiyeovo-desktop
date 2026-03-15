@@ -12,23 +12,20 @@ we already went thourgh this and have not found the issue, I will have to invest
 
 1.5 OPTIMIZIACIJA - protobuf umisto JSON-a za offline poruke
 
-----------------------------
-
-2.5 what if a user changes public keys
+3. Animations!
 
 2.8.0 [NUDGE][SEND_FAIL] peer=fz9zYUjU group=32398e08 reason=Remote closed connection during opening -> 2 korisnika u isto vrime prihvate, skuzi zac se jedan aktivira puno kasnije
 
+----------------------------
+
 2.8 BITNA OPTIMIZIACIJA: in clearAcknowledgedMessages, why dont we just remove "await OfflineMessageManager.putToDHT(node, bucketKey, signedStore);" ? the line 287 already saves to database. that means that the next time we go to send a message, we will just be sending the cleanMessages + new message
  - Claude je potvrdil da je dobra
-3. Animations!
 
 3.2 creator dismantle group
+3.2.1 group info
+3.2.3 request group update
 
 6. PUT to DHT - Key: /kiyeovo-offline/test-shared-secret/Fnct1g9tDqVB7vFXN2QLoDLAKPIKzruAARCVT4gFscY, Original: 1938 bytes -> je li ovaj bucket zapravo uvijek isti za sve trusted korisnike? ako stavi isti secret naravno. vjv da. treba to napomenut u warningu
-
-8. Deprecated paeketi
-
-9. npx electron-rebuild jer je bettersqlite na nekoj staroj verziji
 
 10. prva poruka u sesiji nemore bit file - Also, I found a bug where I cant send a file as a first message in a session because it says "key exchange init signature verification failed" - remember, the key exchange happens at the beginning of every session, not just the first ever contact
 

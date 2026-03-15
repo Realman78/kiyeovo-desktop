@@ -19,7 +19,7 @@ import { useToast } from "../../ui/use-toast";
 import { Input } from "../../ui/Input";
 import { validateUsername } from "../../../utils/general";
 import { InviteUsersDialog, type GroupInviteDeliveryView } from "./InviteUsersDialog";
-import { MAX_GROUP_MEMBERS } from "../../../constants";
+import { INBOUND_INACTIVITY_WARNING_MS, MAX_GROUP_MEMBERS } from "../../../constants";
 import { getGroupStatusMessage, isGroupStatusWaiting } from "../../../utils/groupStatusMessages";
 
 type ChatHeaderProps = {
@@ -484,6 +484,9 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
   const isFetchingGroupUpdates = isGroup && activeChat?.isFetchingOffline === true;
   const groupStatusMessage = !isGroup ? null : getGroupStatusMessage(groupStatus);
   const showGroupStateMessage = Boolean(groupStatusMessage);
+  const showDirectInactivityWarning = !isGroup
+    && typeof activeChat?.lastInboundActivityTimestamp === 'number'
+    && (Date.now() - activeChat.lastInboundActivityTimestamp) >= INBOUND_INACTIVITY_WARNING_MS;
 
   const memberSummary = groupMembers.length > 0
     ? groupMembers.map(m => m.status === 'pending' ? `${m.username} (invited)` : m.username).sort().join(', ')
@@ -498,7 +501,7 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
     .map((member) => ({ peerId: member.peerId, username: member.username }));
   const kickableMembers = groupMembers.filter((member) => member.status === 'confirmed');
 
-  return <div className={`${showGroupStateMessage ? 'h-20' : 'h-16'} px-6 flex items-center justify-between border-b border-border ${activeChat?.status === 'pending' ? "" : "bg-card/50"}`}>
+  return <div className={`${showGroupStateMessage || showDirectInactivityWarning ? 'h-20' : 'h-16'} px-6 flex items-center justify-between border-b border-border ${activeChat?.status === 'pending' ? "" : "bg-card/50"}`}>
     <div className="flex items-center gap-3">
       {isGroup ? (
         <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center">
@@ -536,11 +539,21 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
             )}
           </div>
         ) : (
-          <div className="flex items-center gap-1.5">
-            <Shield className="w-3 h-3 text-primary" />
-            <span className="text-xs text-muted-foreground font-mono">
-              {peerId}
-            </span>
+          <div className="flex flex-col gap-0.5">
+            <div className="flex items-center gap-1.5">
+              <Shield className="w-3 h-3 text-primary" />
+              <span className="text-xs text-muted-foreground font-mono">
+                {peerId}
+              </span>
+            </div>
+            {showDirectInactivityWarning && (
+              <div className="flex items-center gap-1">
+                <AlertCircle className="w-3 h-3 text-warning" />
+                <span className="text-xs text-warning">
+                  This contact has not sent activity for over 30 days.
+                </span>
+              </div>
+            )}
           </div>
         )}
       </div>

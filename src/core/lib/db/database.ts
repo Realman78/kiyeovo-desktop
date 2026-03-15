@@ -1325,6 +1325,7 @@ export class ChatDatabase {
         other_peer_id?: string | undefined;
         last_message_content?: string | undefined;
         last_message_timestamp?: Date | undefined;
+        last_inbound_activity_timestamp?: Date | undefined;
         last_message_sender?: string | undefined;
         blocked?: boolean | undefined;
     }> {
@@ -1336,9 +1337,21 @@ export class ChatDatabase {
                 cp.peer_id as other_peer_id,
                 last_msg.content as last_message_content,
                 last_msg.timestamp as last_message_timestamp,
+                inbound_activity.last_inbound_activity_timestamp as last_inbound_activity_timestamp,
                 last_msg.sender_peer_id as last_message_sender,
                 CASE WHEN bp.peer_id IS NOT NULL THEN 1 ELSE 0 END as blocked
             FROM chats c
+            LEFT JOIN (
+                SELECT
+                    m.chat_id,
+                    MAX(m.timestamp) as last_inbound_activity_timestamp
+                FROM messages m
+                JOIN chats c2 ON c2.id = m.chat_id
+                WHERE c2.type = 'direct'
+                  AND c2.network_mode = ?
+                  AND m.sender_peer_id != ?
+                GROUP BY m.chat_id
+            ) inbound_activity ON inbound_activity.chat_id = c.id
             LEFT JOIN chat_participants cp ON c.id = cp.chat_id AND c.type = 'direct' AND cp.peer_id != ?
             LEFT JOIN users u ON cp.peer_id = u.peer_id AND u.network_mode = c.network_mode
             LEFT JOIN users creator_u ON c.type = 'group' AND creator_u.peer_id = c.group_creator_peer_id AND creator_u.network_mode = c.network_mode
@@ -1352,7 +1365,8 @@ export class ChatDatabase {
             WHERE c.network_mode = ?
             ORDER BY c.updated_at DESC
         `);
-        const rows = stmt.all(myPeerId, this.getActiveNetworkMode()) as any[];
+        const mode = this.getActiveNetworkMode();
+        const rows = stmt.all(mode, myPeerId, myPeerId, mode) as any[];
 
         if (!rows) return [];
         return rows.map(row => ({
@@ -1362,6 +1376,7 @@ export class ChatDatabase {
             other_peer_id: row.other_peer_id || undefined,
             last_message_content: row.last_message_content || undefined,
             last_message_timestamp: row.last_message_timestamp ? new Date(row.last_message_timestamp) : undefined,
+            last_inbound_activity_timestamp: row.last_inbound_activity_timestamp ? new Date(row.last_inbound_activity_timestamp) : undefined,
             last_message_sender: row.last_message_sender || undefined,
             blocked: Boolean(row.blocked)
         }));
@@ -1373,6 +1388,7 @@ export class ChatDatabase {
         other_peer_id?: string | undefined;
         last_message_content?: string | undefined;
         last_message_timestamp?: Date | undefined;
+        last_inbound_activity_timestamp?: Date | undefined;
         last_message_sender?: string | undefined;
         blocked?: boolean | undefined;
     }) | null {
@@ -1384,9 +1400,21 @@ export class ChatDatabase {
                 cp.peer_id as other_peer_id,
                 last_msg.content as last_message_content,
                 last_msg.timestamp as last_message_timestamp,
+                inbound_activity.last_inbound_activity_timestamp as last_inbound_activity_timestamp,
                 last_msg.sender_peer_id as last_message_sender,
                 CASE WHEN bp.peer_id IS NOT NULL THEN 1 ELSE 0 END as blocked
             FROM chats c
+            LEFT JOIN (
+                SELECT
+                    m.chat_id,
+                    MAX(m.timestamp) as last_inbound_activity_timestamp
+                FROM messages m
+                JOIN chats c2 ON c2.id = m.chat_id
+                WHERE c2.type = 'direct'
+                  AND c2.network_mode = ?
+                  AND m.sender_peer_id != ?
+                GROUP BY m.chat_id
+            ) inbound_activity ON inbound_activity.chat_id = c.id
             LEFT JOIN chat_participants cp ON c.id = cp.chat_id AND c.type = 'direct' AND cp.peer_id != ?
             LEFT JOIN users u ON cp.peer_id = u.peer_id AND u.network_mode = c.network_mode
             LEFT JOIN users creator_u ON c.type = 'group' AND creator_u.peer_id = c.group_creator_peer_id AND creator_u.network_mode = c.network_mode
@@ -1399,7 +1427,8 @@ export class ChatDatabase {
             )
             WHERE c.id = ? AND c.network_mode = ?
         `);
-        const row = stmt.get(myPeerId, chatId, this.getActiveNetworkMode()) as any;
+        const mode = this.getActiveNetworkMode();
+        const row = stmt.get(mode, myPeerId, myPeerId, chatId, mode) as any;
 
         if (!row) return null;
         return {
@@ -1409,6 +1438,7 @@ export class ChatDatabase {
             other_peer_id: row.other_peer_id || undefined,
             last_message_content: row.last_message_content || undefined,
             last_message_timestamp: row.last_message_timestamp ? new Date(row.last_message_timestamp) : undefined,
+            last_inbound_activity_timestamp: row.last_inbound_activity_timestamp ? new Date(row.last_inbound_activity_timestamp) : undefined,
             last_message_sender: row.last_message_sender || undefined,
             blocked: Boolean(row.blocked)
         };

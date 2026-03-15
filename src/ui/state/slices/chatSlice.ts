@@ -44,6 +44,7 @@ export interface Chat {
   peerId?: string; // optional because of potential group chats
   lastMessage: string;
   lastMessageTimestamp: number;
+  lastInboundActivityTimestamp?: number;
   unreadCount: number;
   status: 'active' | 'pending' | 'awaiting_acceptance';
   justCreated?: boolean; // Flag for newly created chats waiting for first message
@@ -193,6 +194,10 @@ const chatSlice = createSlice({
         // Update chat properties
         chat.lastMessage = action.payload.content;
         chat.lastMessageTimestamp = action.payload.timestamp;
+        if (!isFromCurrentUser) {
+          const prevInboundTs = chat.lastInboundActivityTimestamp ?? 0;
+          chat.lastInboundActivityTimestamp = Math.max(prevInboundTs, action.payload.timestamp);
+        }
 
         // Clear justCreated flag when first message arrives
         if (chat.justCreated) {

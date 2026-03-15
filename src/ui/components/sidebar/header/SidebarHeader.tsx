@@ -281,6 +281,9 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
                     lastMessageTimestamp: result.chat.last_message_timestamp
                         ? new Date(result.chat.last_message_timestamp).getTime()
                         : new Date(result.chat.updated_at || result.chat.created_at).getTime(),
+                    lastInboundActivityTimestamp: result.chat.last_inbound_activity_timestamp
+                        ? new Date(result.chat.last_inbound_activity_timestamp).getTime()
+                        : undefined,
                     unreadCount: 0,
                     status: result.chat.status as 'active' | 'pending' | 'awaiting_acceptance',
                     username: result.chat.username,

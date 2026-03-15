@@ -93,6 +93,9 @@ export const Main = () => {
                 lastMessageTimestamp: dbChat.last_message_timestamp
                   ? new Date(dbChat.last_message_timestamp).getTime()
                   : new Date(dbChat.updated_at).getTime(),
+                lastInboundActivityTimestamp: dbChat.last_inbound_activity_timestamp
+                  ? new Date(dbChat.last_inbound_activity_timestamp).getTime()
+                  : undefined,
                 unreadCount: 0,
                 status: 'active',
                 fetchedOffline: false,
@@ -121,6 +124,9 @@ export const Main = () => {
                 groupCreatorPeerId: dbChat.group_creator_peer_id,
                 groupCreatorUsername: dbChat.group_creator_username,
                 peerId: dbChat.other_peer_id,
+                lastInboundActivityTimestamp: dbChat.last_inbound_activity_timestamp
+                  ? new Date(dbChat.last_inbound_activity_timestamp).getTime()
+                  : undefined,
                 status: 'active',
                 groupStatus: 'active',
                 fetchedOffline: false,
@@ -164,6 +170,9 @@ export const Main = () => {
               lastMessageTimestamp: dbChat.last_message_timestamp
                 ? new Date(dbChat.last_message_timestamp).getTime()
                 : new Date(dbChat.updated_at).getTime(),
+              lastInboundActivityTimestamp: dbChat.last_inbound_activity_timestamp
+                ? new Date(dbChat.last_inbound_activity_timestamp).getTime()
+                : undefined,
               unreadCount: 0,
               status: dbChat.status,
               fetchedOffline: dbChat.type === 'group'
@@ -186,6 +195,9 @@ export const Main = () => {
               groupCreatorPeerId: dbChat.group_creator_peer_id,
               groupCreatorUsername: dbChat.group_creator_username,
               peerId: dbChat.other_peer_id,
+              lastInboundActivityTimestamp: dbChat.last_inbound_activity_timestamp
+                ? new Date(dbChat.last_inbound_activity_timestamp).getTime()
+                : undefined,
               status: dbChat.status,
               groupStatus: dbChat.group_status,
               needsRemovedCatchup: Boolean(dbChat.needs_removed_catchup),
@@ -366,6 +378,9 @@ export const Main = () => {
           lastMessageTimestamp: dbChat.last_message_timestamp
             ? new Date(dbChat.last_message_timestamp).getTime()
             : new Date(dbChat.updated_at).getTime(),
+          lastInboundActivityTimestamp: dbChat.last_inbound_activity_timestamp
+            ? new Date(dbChat.last_inbound_activity_timestamp).getTime()
+            : undefined,
           unreadCount: 0,
           status: dbChat.status,
           fetchedOffline: dbChat.type === 'group'
@@ -468,6 +483,9 @@ export const Main = () => {
                   lastMessageTimestamp: dbChat.last_message_timestamp
                     ? new Date(dbChat.last_message_timestamp).getTime()
                     : new Date(dbChat.updated_at).getTime(),
+                  lastInboundActivityTimestamp: dbChat.last_inbound_activity_timestamp
+                    ? new Date(dbChat.last_inbound_activity_timestamp).getTime()
+                    : undefined,
                   unreadCount: currentUnreadByChatId.get(dbChat.id) ?? 0,
                   status: dbChat.status,
                   fetchedOffline: currentChats.find(c => c.id === dbChat.id)?.fetchedOffline

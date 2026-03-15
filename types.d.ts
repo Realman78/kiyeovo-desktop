@@ -83,7 +83,10 @@ declare global {
             onGroupMembersUpdated: (callback: (data: GroupMembersUpdatedEvent) => void) => () => void;
             getChats: () => Promise<{
                 success: boolean;
-                chats: Array<Chat & { group_creator_username?: string }>;
+                chats: Array<Chat & {
+                    group_creator_username?: string;
+                    last_inbound_activity_timestamp?: Date;
+                }>;
                 error: string | null
             }>;
             searchChats: (query: string) => Promise<{ success: boolean; chatIds: number[]; error: string | null }>;
@@ -95,6 +98,7 @@ declare global {
                     group_creator_username?: string;
                     last_message_content?: string;
                     last_message_timestamp?: Date;
+                    last_inbound_activity_timestamp?: Date;
                     last_message_sender?: string;
                     updated_at?: Date;
                 }) | null;
