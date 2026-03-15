@@ -386,21 +386,25 @@ function setupContactRequestHandlers(
       }
 
       console.log(`[IPC] Rejecting contact request from peer: ${peerId}`);
-      const pending = p2pCore.messageHandler.getKeyExchange().getPendingAcceptanceByPeerId(peerId);
+      const keyExchange = p2pCore.messageHandler.getKeyExchange();
+      const pending = keyExchange.getPendingAcceptanceByPeerId(peerId);
 
-      if (!pending) {
-        console.log(`No pending contact request from ${peerId}`);
-        return { success: false, error: 'No pending contact request found' };
+      if (pending) {
+        keyExchange.rejectPendingContact(peerId);
+      } else {
+        console.log(`[IPC] No active pending contact request for ${peerId}; treating as already rejected`);
       }
 
-      p2pCore.messageHandler.getKeyExchange().rejectPendingContact(peerId);
-      p2pCore.messageHandler.getKeyExchange().deletePendingAcceptanceByPeerId(peerId);
+      // Idempotent local cleanup: always clear any in-memory/db residue.
+      keyExchange.deletePendingAcceptanceByPeerId(peerId);
+      p2pCore.database.deleteContactAttemptsByPeerId(peerId);
 
       if (block) {
-        p2pCore.database.blockPeer(peerId, pending.username, 'Rejected contact request');
-        console.log(`Rejected and blocked ${pending.username}`);
+        const knownUsername = pending?.username ?? p2pCore.database.getUserByPeerId(peerId)?.username ?? null;
+        p2pCore.database.blockPeer(peerId, knownUsername, 'Rejected contact request');
+        console.log(`Rejected and blocked ${knownUsername ?? peerId}`);
       } else {
-        console.log(`Rejected contact request from ${pending.username}`);
+        console.log(`Rejected contact request from ${pending?.username ?? peerId}`);
       }
 
       return { success: true, error: null };

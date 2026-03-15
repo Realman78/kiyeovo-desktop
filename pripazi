@@ -10,13 +10,9 @@ we already went thourgh this and have not found the issue, I will have to invest
 
 1.2.4 High: if a user has a full bucket, he wont be able to receive GROUP_STATE_UPDATE or any other group control message -- dodani reserve slotovi
 
-----------------------------
-
-1.3 ako oden rejectat nesto i faila mi reject. zac ne maknut samo?
-
 1.5 OPTIMIZIACIJA - protobuf umisto JSON-a za offline poruke
 
-2. Timestamp forgery - ca ako korisnici sami mijenjaju timestamp
+----------------------------
 
 2.5 what if a user changes public keys
 
@@ -29,8 +25,6 @@ we already went thourgh this and have not found the issue, I will have to invest
 3.2 creator dismantle group
 
 6. PUT to DHT - Key: /kiyeovo-offline/test-shared-secret/Fnct1g9tDqVB7vFXN2QLoDLAKPIKzruAARCVT4gFscY, Original: 1938 bytes -> je li ovaj bucket zapravo uvijek isti za sve trusted korisnike? ako stavi isti secret naravno. vjv da. treba to napomenut u warningu
-
-7.  Offline message desync after "Delete chat & user"
 
 8. Deprecated paeketi
 

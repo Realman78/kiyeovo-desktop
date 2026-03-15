@@ -56,6 +56,9 @@ type BucketNudgePayload =
  * Main message handler that orchestrates all message handling components
  */
 export class MessageHandler {
+  private static readonly GROUP_CONTROL_MAX_RETRIES = 3;
+  private static readonly GROUP_CONTROL_RETRY_TTL_MS = 10 * 60 * 1000;
+  private static readonly GROUP_CONTROL_RETRY_CACHE_MAX_ENTRIES = 200;
   private node: ChatNode;
   private usernameRegistry: UsernameRegistry;
   private sessionManager: SessionManager;
@@ -78,6 +81,7 @@ export class MessageHandler {
   private groupAckStartupTimer: ReturnType<typeof setTimeout> | null = null;
   private groupInfoRepublishTimer: ReturnType<typeof setTimeout> | null = null;
   private groupInfoStartupTimer: ReturnType<typeof setTimeout> | null = null;
+  private groupControlRetryState = new Map<string, { attempts: number; lastSeenAt: number; lastError: string }>();
   private offlineCheckRunSeq = 0;
   private groupOfflineManager: GroupOfflineManager;
   private groupMessaging: GroupMessaging;
@@ -1919,9 +1923,28 @@ export class MessageHandler {
           console.log(`[GROUP] Unknown group message type: ${type}`);
           return 'retry';
       }
+      this.clearGroupControlRetryState(senderInfo.peer_id, parsed as Record<string, unknown>);
     } catch (error: unknown) {
-      generalErrorHandler(error, `[GROUP] Error handling ${type} from ${senderInfo.username}`);
-      return 'retry'; // Handler failed — don't advance timestamp so message is retried
+      const errorText = error instanceof Error ? error.message : String(error);
+      if (this.isPermanentGroupControlError(errorText)) {
+        this.clearGroupControlRetryState(senderInfo.peer_id, parsed as Record<string, unknown>);
+        console.warn(
+          `[GROUP][TRACE][ROUTE][DROP_PERMANENT] from=${senderInfo.peer_id.slice(-8)} ${groupMeta} reason=${errorText}`,
+        );
+        return 'handled';
+      }
+
+      const attempts = this.bumpGroupControlRetryAttempt(senderInfo.peer_id, parsed as Record<string, unknown>, errorText);
+      if (attempts >= MessageHandler.GROUP_CONTROL_MAX_RETRIES) {
+        this.clearGroupControlRetryState(senderInfo.peer_id, parsed as Record<string, unknown>);
+        console.warn(
+          `[GROUP][TRACE][ROUTE][DROP_MAX_RETRIES] from=${senderInfo.peer_id.slice(-8)} ${groupMeta} attempts=${attempts} reason=${errorText}`,
+        );
+        return 'handled';
+      }
+
+      generalErrorHandler(error, `[GROUP] Error handling ${type} from ${senderInfo.username}; retry ${attempts}/${MessageHandler.GROUP_CONTROL_MAX_RETRIES}`);
+      return 'retry'; // Transient failure — retry a bounded number of times
     }
     console.log(
       `[GROUP][TRACE][ROUTE][DONE] from=${senderInfo.peer_id.slice(-8)} ${groupMeta} result=handled`,
@@ -1938,5 +1961,71 @@ export class MessageHandler {
     const ackedMessageId = typeof parsed.ackedMessageId === 'string' ? parsed.ackedMessageId : 'n/a';
     const ackId = typeof parsed.ackId === 'string' ? parsed.ackId : 'n/a';
     return `type=${type} group=${groupId} inviteId=${inviteId} msgId=${messageId} ackedMsgId=${ackedMessageId} ackId=${ackId}`;
+  }
+
+  private buildGroupControlRetryKey(senderPeerId: string, parsed: Record<string, unknown>): string {
+    const type = typeof parsed.type === 'string' ? parsed.type : 'unknown';
+    const groupId = typeof parsed.groupId === 'string' ? parsed.groupId : 'n/a';
+    const messageId = typeof parsed.messageId === 'string' ? parsed.messageId : '';
+    const inviteId = typeof parsed.inviteId === 'string' ? parsed.inviteId : '';
+    const ackId = typeof parsed.ackId === 'string' ? parsed.ackId : '';
+    const ackedMessageId = typeof parsed.ackedMessageId === 'string' ? parsed.ackedMessageId : '';
+    const fallbackId = typeof parsed.timestamp === 'number' ? String(parsed.timestamp) : 'n/a';
+    const id = messageId || ackId || inviteId || ackedMessageId || fallbackId;
+    return `${senderPeerId}|${type}|${groupId}|${id}`;
+  }
+
+  private bumpGroupControlRetryAttempt(senderPeerId: string, parsed: Record<string, unknown>, errorText: string): number {
+    this.pruneGroupControlRetryState();
+    const key = this.buildGroupControlRetryKey(senderPeerId, parsed);
+    const prev = this.groupControlRetryState.get(key);
+    const attempts = (prev?.attempts ?? 0) + 1;
+    this.groupControlRetryState.set(key, {
+      attempts,
+      lastSeenAt: Date.now(),
+      lastError: errorText,
+    });
+    return attempts;
+  }
+
+  private clearGroupControlRetryState(senderPeerId: string, parsed: Record<string, unknown>): void {
+    const key = this.buildGroupControlRetryKey(senderPeerId, parsed);
+    this.groupControlRetryState.delete(key);
+  }
+
+  private pruneGroupControlRetryState(): void {
+    if (this.groupControlRetryState.size === 0) return;
+    const now = Date.now();
+    for (const [key, value] of this.groupControlRetryState.entries()) {
+      if (now - value.lastSeenAt > MessageHandler.GROUP_CONTROL_RETRY_TTL_MS) {
+        this.groupControlRetryState.delete(key);
+      }
+    }
+    if (this.groupControlRetryState.size <= MessageHandler.GROUP_CONTROL_RETRY_CACHE_MAX_ENTRIES) {
+      return;
+    }
+    // Defensive cap in case of abuse.
+    const entries = Array.from(this.groupControlRetryState.entries())
+      .sort((a, b) => a[1].lastSeenAt - b[1].lastSeenAt);
+    const overflow = this.groupControlRetryState.size - MessageHandler.GROUP_CONTROL_RETRY_CACHE_MAX_ENTRIES;
+    for (let i = 0; i < overflow; i++) {
+      const entry = entries[i];
+      if (!entry) break;
+      this.groupControlRetryState.delete(entry[0]);
+    }
+  }
+
+  private isPermanentGroupControlError(errorText: string): boolean {
+    const normalized = errorText.toLowerCase();
+    return (
+      normalized.includes('signature verification failed')
+      || normalized.includes('missing signature')
+      || normalized.includes('invalid signature')
+      || normalized.includes('invalid timestamp')
+      || normalized.includes('timestamp invalid')
+      || normalized.includes('timestamp too far in future')
+      || normalized.includes('cannot read properties of undefined')
+      || normalized.includes('cannot destructure property')
+    );
   }
 } 
