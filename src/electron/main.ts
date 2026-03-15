@@ -158,6 +158,19 @@ function createMainWindow() {
     app.dock.setIcon(branding.icon);
   }
 
+  const enforceWindowTitle = () => {
+    if (!win.isDestroyed()) {
+      win.setTitle(branding.title);
+    }
+  };
+
+  // Prevent renderer HTML <title> updates from overriding mode-aware native window title.
+  win.on('page-title-updated', (event) => {
+    event.preventDefault();
+    enforceWindowTitle();
+  });
+  win.webContents.on('did-finish-load', enforceWindowTitle);
+
   // Restore maximized state or maximize on first run
   if (savedBounds?.isMaximized || !savedBounds) {
     win.maximize();
