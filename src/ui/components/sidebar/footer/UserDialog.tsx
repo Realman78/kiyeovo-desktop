@@ -14,6 +14,7 @@ import { useDispatch, useSelector } from "react-redux";
 import type { RootState } from "../../../state/store";
 import { useToast } from "../../ui/use-toast";
 import { setRegistered, setUsername } from "../../../state/slices/userSlice";
+import { generateSharedSecretValue } from "../../../utils/general";
 
 
 interface UserDialogProps {
@@ -36,6 +37,8 @@ const UserDialog = ({ open, onOpenChange, onRegister, backendError, isRegisterin
     const [exportPassword, setExportPassword] = useState("");
     const [exportPasswordConfirm, setExportPasswordConfirm] = useState("");
     const [sharedSecret, setSharedSecret] = useState("");
+    const [generatedSharedSecret, setGeneratedSharedSecret] = useState("");
+    const [confirmCustomSecretRisk, setConfirmCustomSecretRisk] = useState(false);
     const [exportError, setExportError] = useState("");
     const [exportSuccess, setExportSuccess] = useState(false);
     const [exportedFingerprint, setExportedFingerprint] = useState("");
@@ -108,6 +111,17 @@ const UserDialog = ({ open, onOpenChange, onRegister, backendError, isRegisterin
             setNewUsername("");
             setValidationError("");
             setIsEditingUsername(false);
+            setIsExportExpanded(false);
+            setExportError("");
+            setExportPassword("");
+            setExportPasswordConfirm("");
+            setSharedSecret("");
+            setGeneratedSharedSecret("");
+            setConfirmCustomSecretRisk(false);
+            setExportSuccess(false);
+            setExportedFingerprint("");
+            setExportedFilePath("");
+            setFingerprintCopied(false);
         } else {
             // Load auto-register setting when dialog opens
             const loadAutoRegister = async () => {
@@ -115,6 +129,10 @@ const UserDialog = ({ open, onOpenChange, onRegister, backendError, isRegisterin
                 setAutoRegister(result.autoRegister);
             };
             loadAutoRegister();
+            const generatedSecret = generateSharedSecretValue();
+            setSharedSecret(generatedSecret);
+            setGeneratedSharedSecret(generatedSecret);
+            setConfirmCustomSecretRisk(false);
         }
     }, [open]);
 
@@ -147,6 +165,8 @@ const UserDialog = ({ open, onOpenChange, onRegister, backendError, isRegisterin
 
     const handleExportProfile = async () => {
         setExportError("");
+        const normalizedSharedSecret = sharedSecret.trim();
+        const isCustomSharedSecret = normalizedSharedSecret !== generatedSharedSecret;
 
         // Validate inputs
         if (!exportPassword) {
@@ -159,8 +179,13 @@ const UserDialog = ({ open, onOpenChange, onRegister, backendError, isRegisterin
             return;
         }
 
-        if (!sharedSecret) {
+        if (!normalizedSharedSecret) {
             setExportError("Shared secret is required");
+            return;
+        }
+
+        if (isCustomSharedSecret && !confirmCustomSecretRisk) {
+            setExportError("Please confirm the custom shared-secret warning before export.");
             return;
         }
 
@@ -172,27 +197,59 @@ const UserDialog = ({ open, onOpenChange, onRegister, backendError, isRegisterin
         setIsExporting(true);
 
         try {
-            const result = await window.kiyeovoAPI.exportProfile(exportPassword, sharedSecret);
+            const reuseResult = await window.kiyeovoAPI.checkTrustedSecretReuse(normalizedSharedSecret);
+            if (reuseResult.success && reuseResult.isReused) {
+                setExportError(
+                    `This shared secret is already used in ${reuseResult.count} trusted chat${reuseResult.count === 1 ? "" : "s"}. ` +
+                    "Reusing it can share one outgoing bucket across contacts and ACKs may prune pending messages for the wrong recipient. Generate a unique secret."
+                );
+                return;
+            }
+            if (!reuseResult.success) {
+                console.warn("Shared secret reuse check failed:", reuseResult.error);
+            }
+
+            const result = await window.kiyeovoAPI.exportProfile(exportPassword, normalizedSharedSecret);
 
             if (result.success && result.filePath && result.fingerprint) {
                 // Show success dialog with security warnings
                 setExportedFilePath(result.filePath);
                 setExportedFingerprint(result.fingerprint);
                 setExportSuccess(true);
-                setIsExporting(false);
 
                 // Reset form
                 setExportPassword("");
                 setExportPasswordConfirm("");
-                setSharedSecret("");
+                const generatedSecret = generateSharedSecretValue();
+                setSharedSecret(generatedSecret);
+                setGeneratedSharedSecret(generatedSecret);
+                setConfirmCustomSecretRisk(false);
             } else {
                 setExportError(result.error || "Failed to export profile");
-                setIsExporting(false);
             }
         } catch (error) {
             console.error("Failed to export profile:", error);
             setExportError(error instanceof Error ? error.message : "Unexpected error occurred");
+        } finally {
             setIsExporting(false);
+        }
+    };
+
+    const handleGenerateSharedSecret = () => {
+        const generatedSecret = generateSharedSecretValue();
+        setSharedSecret(generatedSecret);
+        setGeneratedSharedSecret(generatedSecret);
+        setConfirmCustomSecretRisk(false);
+        if (exportError) {
+            setExportError("");
+        }
+    };
+
+    const handleSharedSecretChange = (value: string) => {
+        setSharedSecret(value);
+        setConfirmCustomSecretRisk(false);
+        if (exportError) {
+            setExportError("");
         }
     };
 
@@ -367,14 +424,46 @@ const UserDialog = ({ open, onOpenChange, onRegister, backendError, isRegisterin
                                             spellCheck={false}
                                             autoComplete="new-password"
                                         />
-                                        <Input
-                                            type="text"
-                                            placeholder="Shared secret (coordinate with recipient)..."
-                                            value={sharedSecret}
-                                            onChange={(e) => setSharedSecret(e.target.value)}
-                                            icon={<Key className="w-4 h-4" />}
-                                            spellCheck={false}
-                                        />
+                                        <div className="space-y-2">
+                                            <div className="flex items-center gap-2">
+                                                <div className="flex-1">
+                                                    <Input
+                                                        type="text"
+                                                        placeholder="Shared secret (coordinate with recipient)..."
+                                                        value={sharedSecret}
+                                                        onChange={(e) => handleSharedSecretChange(e.target.value)}
+                                                        icon={<Key className="w-4 h-4" />}
+                                                        spellCheck={false}
+                                                    />
+                                                </div>
+                                                <Button
+                                                    type="button"
+                                                    variant="outline"
+                                                    size="sm"
+                                                    onClick={handleGenerateSharedSecret}
+                                                    disabled={isExporting}
+                                                >
+                                                    Generate
+                                                </Button>
+                                            </div>
+                                            <p className="text-xs text-muted-foreground">
+                                                Use a unique secret per recipient. Reusing a secret can make multiple trusted contacts share one outgoing bucket and ACK-based cleanup can prune pending messages for the wrong contact.
+                                            </p>
+                                            {sharedSecret.trim() !== generatedSharedSecret && (
+                                                <label className="flex items-start gap-2 text-xs text-foreground">
+                                                    <input
+                                                        type="checkbox"
+                                                        className="mt-0.5"
+                                                        checked={confirmCustomSecretRisk}
+                                                        onChange={(e) => setConfirmCustomSecretRisk(e.target.checked)}
+                                                        disabled={isExporting}
+                                                    />
+                                                    <span>
+                                                        I understand this custom shared secret is risky if reused and can cause shared-bucket metadata overlap and ACK-based pruning across contacts.
+                                                    </span>
+                                                </label>
+                                            )}
+                                        </div>
                                         {exportError && (
                                             <div className="flex items-center gap-2 text-destructive text-sm">
                                                 <AlertCircle className="w-4 h-4" />
@@ -385,7 +474,12 @@ const UserDialog = ({ open, onOpenChange, onRegister, backendError, isRegisterin
                                             type="button"
                                             size="sm"
                                             onClick={handleExportProfile}
-                                            disabled={isExporting || !exportPassword || !sharedSecret}
+                                            disabled={
+                                                isExporting ||
+                                                !exportPassword ||
+                                                !sharedSecret ||
+                                                (sharedSecret.trim() !== generatedSharedSecret && !confirmCustomSecretRisk)
+                                            }
                                             className="w-full"
                                         >
                                             <Download className="w-3 h-3 mr-2" />
@@ -422,6 +516,7 @@ const UserDialog = ({ open, onOpenChange, onRegister, backendError, isRegisterin
                                                     <ul className="text-xs text-muted-foreground space-y-1 ml-4 list-disc">
                                                         <li>Send you offline messages</li>
                                                         <li>Impersonate lookups (if they have your peerId)</li>
+                                                        <li>Cause cross-contact bucket sharing; reused shared secrets can leak metadata and ACK cleanup can remove pending messages for the wrong contact</li>
                                                     </ul>
                                                     <p className="text-xs text-muted-foreground font-medium">
                                                         Only share this with people you trust. Communicate the password separately (phone, video call, etc.).
@@ -484,9 +579,9 @@ const UserDialog = ({ open, onOpenChange, onRegister, backendError, isRegisterin
                                     </p>
                                     <p className="text-sm">
                                         In the profile exporting section, the export password encrypts the profile file. 
-                                        The shared secret will be used to create an offline bucket until you 
-                                        and the recipient make contact while both are online - make sure the recipient matches that Shared 
-                                        secret and make sure that it is as globally unique as possible!
+                                        The shared secret will be used to create an offline bucket until you and the recipient make contact while both are online.
+                                        Never reuse the same shared secret across trusted recipients, because reuse can make contacts share one outgoing bucket, overlap metadata, and ACK cleanup may prune pending messages for the wrong recipient.
+                                        Always generate a unique secret per recipient and verify it out-of-band.
                                     </p>
                                 </div>
                             </div>

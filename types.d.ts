@@ -143,6 +143,12 @@ declare global {
                 filePath?: string;
                 fingerprint?: string;
             }>;
+            checkTrustedSecretReuse: (sharedSecret: string) => Promise<{
+                success: boolean;
+                isReused: boolean;
+                count: number;
+                error: string | null;
+            }>;
 
             // File dialogs
             showOpenDialog: (options: {

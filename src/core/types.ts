@@ -535,6 +535,7 @@ export const IPC_CHANNELS = {
   // Trusted user import/export
   IMPORT_TRUSTED_USER: 'trustedUser:import',
   EXPORT_PROFILE: 'profile:export',
+  CHECK_TRUSTED_SECRET_REUSE: 'profile:checkSharedSecretReuse',
 
   // File dialogs
   SHOW_OPEN_DIALOG: 'dialog:showOpen',

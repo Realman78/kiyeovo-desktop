@@ -43,3 +43,15 @@ export const formatRecoveryPhrase = (mnemonic: string): { num: number; word: str
     }
     return "";
   };
+
+
+const toBase64Url = (bytes: Uint8Array): string => {
+  const binary = Array.from(bytes, byte => String.fromCharCode(byte)).join("");
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+};
+
+export const generateSharedSecretValue = (): string => {
+  const bytes = new Uint8Array(24);
+  globalThis.crypto.getRandomValues(bytes);
+  return `sec_${toBase64Url(bytes)}`;
+};

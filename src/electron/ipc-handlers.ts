@@ -842,6 +842,31 @@ function setupTrustedUserHandlers(
       };
     }
   });
+
+  ipcMain.handle(IPC_CHANNELS.CHECK_TRUSTED_SECRET_REUSE, async (_event, sharedSecret: string) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, isReused: false, count: 0, error: 'P2P core not initialized' };
+      }
+
+      const normalizedSecret = typeof sharedSecret === 'string' ? sharedSecret.trim() : '';
+      if (!normalizedSecret) {
+        return { success: false, isReused: false, count: 0, error: 'Shared secret is required' };
+      }
+
+      const count = p2pCore.database.countTrustedDirectChatsByOfflineSecret(normalizedSecret);
+      return { success: true, isReused: count > 0, count, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to check shared secret reuse:', error);
+      return {
+        success: false,
+        isReused: false,
+        count: 0,
+        error: error instanceof Error ? error.message : 'Failed to check shared secret reuse',
+      };
+    }
+  });
 }
 
 /**

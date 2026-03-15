@@ -180,6 +180,14 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.EXPORT_PROFILE, password, sharedSecret);
     },
+    checkTrustedSecretReuse: async (sharedSecret: string): Promise<{
+        success: boolean;
+        isReused: boolean;
+        count: number;
+        error: string | null;
+    }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.CHECK_TRUSTED_SECRET_REUSE, sharedSecret);
+    },
 
     // File dialogs
     showOpenDialog: async (options: {

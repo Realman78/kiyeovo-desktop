@@ -1662,6 +1662,19 @@ export class ChatDatabase {
         return chat.offline_bucket_secret;
     }
 
+    countTrustedDirectChatsByOfflineSecret(offlineBucketSecret: string): number {
+        const stmt = this.db.prepare(`
+            SELECT COUNT(*) as count
+            FROM chats
+            WHERE network_mode = ?
+              AND type = 'direct'
+              AND trusted_out_of_band = 1
+              AND offline_bucket_secret = ?
+        `);
+        const row = stmt.get(this.getActiveNetworkMode(), offlineBucketSecret) as { count: number } | undefined;
+        return row?.count ?? 0;
+    }
+
     // Offline message last read timestamp operations
     getOfflineLastReadTimestamp(chatId: number): number {
         const stmt = this.db.prepare('SELECT offline_last_read_timestamp FROM chats WHERE id = ?');

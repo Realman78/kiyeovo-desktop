@@ -1,47 +1,35 @@
-1.0.4 delete user & chat, ako si creator nemores ih vise izbacit iz tog chata - izgleda da moren ipak
-  - jako cudno kada alice zbrise chada i onda ga izbaci iz grupe
+1. [NUDGE][SEND_FAIL] peer=fz9zYUjU group=32398e08 reason=Remote closed connection during opening -> 2 korisnika u isto vrime prihvate, skuzi zac se jedan aktivira puno kasnije
 
-1.0.2 Chad accepts group invitation from Alice. Alice sends welcome and propagates the notification that Chad joined to other group members. however, Chad did not receive the WELCOME message so he never ACK-ed it. Chad is not in the group from his POV, but everyone else sees that he is. of course, when chad restarts the app, this works, so maybe it is not an issue since chad will read the messages from the group offline bucket
+2. Chad accepts group invitation from Alice. Alice sends welcome and propagates the notification that Chad joined to other group members. however, Chad did not receive the WELCOME message so he never ACK-ed it. Chad is not in the group from his POV, but everyone else sees that he is. of course, when chad restarts the app, this works, so maybe it is not an issue since chad will read the messages from the group offline bucket
 
-1.1 I joined with a user and while the joining was happening, Alice (creator) was sending messages, but Chad did not receive them in real time, only when I checked missed messages. Alice error: [GROUP-MSG] Retrying publish for group=c883e511-02a7-4f23-9df9-4f495c094c44 after retryable error: PublishError.NoPeersSubscribedToTopic (attempt1Ms=1)
+3. I joined with a user and while the joining was happening, Alice (creator) was sending messages, but Chad did not receive them in real time, only when I checked missed messages. Alice error: [GROUP-MSG] Retrying publish for group=c883e511-02a7-4f23-9df9-4f495c094c44 after retryable error: PublishError.NoPeersSubscribedToTopic (attempt1Ms=1)
 we already went thourgh this and have not found the issue, I will have to investigate later. What do you say to the idea that if Chad is online when a new user joins or leaves or is removed, that the check missed messages gets triggered on his end? of course, only if he is online when the actual system message arrives, not when he comes online and the system message is fetched from the bucket. dont implement, let us just think about it
 
-1.1.1 nekakav rate limit na DHT zapise (na validatorima)
+4. delete user & chat, ako si creator nemores ih vise izbacit iz tog chata - izgleda da moren ipak
+- jako cudno kada alice zbrise chada i onda ga izbaci iz grupe
 
-1.2.4 High: if a user has a full bucket, he wont be able to receive GROUP_STATE_UPDATE or any other group control message -- dodani reserve slotovi
+5. High: if a user has a full bucket, he wont be able to receive GROUP_STATE_UPDATE or any other group control message -- dodani reserve slotovi
 
-1.5 OPTIMIZIACIJA - protobuf umisto JSON-a za offline poruke
+6. nekakav rate limit na DHT zapise (na validatorima)
 
-3. Animations!
+7 Stavi u README da se poveca SCRYPTN_N
 
-2.8.0 [NUDGE][SEND_FAIL] peer=fz9zYUjU group=32398e08 reason=Remote closed connection during opening -> 2 korisnika u isto vrime prihvate, skuzi zac se jedan aktivira puno kasnije
+8. OPTIMIZATION - protobuf umisto JSON-a za offline poruke
 
-13.5 Stavi u README da se poveca SCRYPTN_N
+9. OPTIMIZATION: persistent stream per session
 
-----------------------------
+10. app security
+- 1. sandbox: false (line 122)
+    sandbox: false // Need to disable sandbox for IPC to work properly
+    This comment is outdated. With modern Electron (v20+), contextIsolation: true + preload script works fine WITH sandbox enabled. Sandbox adds an extra layer of OS-level isolation. You should test with sandbox: true - it should work.
 
-ako prvi put ne oznacin "remember me" onda se nikad ne pamti
+- 2. No CSP for production
+  For production builds, you should add a CSP. Options:
+  - Add <meta> tag in your index.html
+  - Or set it programmatically via Electron session API
+  Example strict CSP for production:
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
 
-6. PUT to DHT - Key: /kiyeovo-offline/test-shared-secret/Fnct1g9tDqVB7vFXN2QLoDLAKPIKzruAARCVT4gFscY, Original: 1938 bytes -> je li ovaj bucket zapravo uvijek isti za sve trusted korisnike? ako stavi isti secret naravno. vjv da. treba to napomenut u warningu
+- 3. DevTools in production? Line 139 opens DevTools in dev mode - that is fine. Just make sure isDev() correctly returns false in packaged builds.
 
-15. app security
-1. sandbox: false (line 122)
-sandbox: false // Need to disable sandbox for IPC to work properly
-This comment is outdated. With modern Electron (v20+), contextIsolation: true + preload script works fine WITH sandbox enabled. Sandbox adds an extra layer of OS-level isolation. You should test with sandbox: true - it should work.
-
-2. No CSP for production
-
-For production builds, you should add a CSP. Options:
-- Add <meta> tag in your index.html
-- Or set it programmatically via Electron session API
-
-Example strict CSP for production:
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
-
-3. DevTools in production?
-
-Line 139 opens DevTools in dev mode - that is fine. Just make sure isDev() correctly returns false in packaged builds.
-
-
-IMPROVEMENT:
-persistent stream per session
+11. Animations!
