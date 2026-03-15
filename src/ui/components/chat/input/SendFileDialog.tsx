@@ -9,7 +9,7 @@ import {
 } from '../../ui/Dialog';
 import { Button } from '../../ui/Button';
 import { FileUp, X } from 'lucide-react';
-import { MAX_FILE_SIZE } from '../../../constants';
+import { useAppSelector } from '../../../state/hooks';
 
 interface SendFileDialogProps {
   open: boolean;
@@ -18,6 +18,7 @@ interface SendFileDialogProps {
 }
 
 export const SendFileDialog: React.FC<SendFileDialogProps> = ({ open, onOpenChange, onSend }) => {
+  const maxFileSize = useAppSelector((state) => state.appConfig.config.maxFileSize);
   const [selectedFile, setSelectedFile] = useState<{ path: string; name: string; size: number } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [sizeError, setSizeError] = useState<string | null>(null);
@@ -37,6 +38,15 @@ export const SendFileDialog: React.FC<SendFileDialogProps> = ({ open, onOpenChan
       setSizeError(null);
     }
   }, [open]);
+
+  useEffect(() => {
+    if (!selectedFile) return;
+    setSizeError(
+      selectedFile.size > maxFileSize
+        ? `File exceeds size limit (${formatFileSize(maxFileSize)} max)`
+        : null,
+    );
+  }, [selectedFile, maxFileSize]);
 
   const handleBrowse = async () => {
     try {
@@ -64,7 +74,7 @@ export const SendFileDialog: React.FC<SendFileDialogProps> = ({ open, onOpenChan
           name: fileName,
           size: fileSize
         });
-        setSizeError(fileSize > MAX_FILE_SIZE ? `File exceeds size limit (${formatFileSize(MAX_FILE_SIZE)} max)` : null);
+        setSizeError(fileSize > maxFileSize ? `File exceeds size limit (${formatFileSize(maxFileSize)} max)` : null);
       }
     } catch (error) {
       console.error('Error selecting file:', error);

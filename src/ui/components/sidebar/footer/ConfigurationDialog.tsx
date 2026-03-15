@@ -12,6 +12,8 @@ import { Button } from '../../ui/Button';
 import { Input } from '../../ui/Input';
 import { Settings, ChevronDown, ChevronUp, Save, RotateCcw } from 'lucide-react';
 import { useToast } from '../../ui/use-toast';
+import { useAppDispatch, useAppSelector } from '../../../state/hooks';
+import { saveAppConfig } from '../../../state/slices/appConfigSlice';
 import {
   CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES,
   KEY_EXCHANGE_RATE_LIMIT_DEFAULT,
@@ -54,44 +56,26 @@ const DEFAULT_CONFIG: AppConfig = {
 };
 
 export function ConfigurationDialog({ open, onOpenChange }: ConfigurationDialogProps) {
+  const dispatch = useAppDispatch();
+  const appConfig = useAppSelector((state) => state.appConfig.config);
+  const saving = useAppSelector((state) => state.appConfig.saving);
   const [config, setConfig] = useState<AppConfig>(DEFAULT_CONFIG);
-  const [loading, setLoading] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
-    if (open) {
-      loadConfig();
-    }
-  }, [open]);
-
-  const loadConfig = async () => {
-    try {
-      const result = await window.kiyeovoAPI.getAppConfig();
-      if (result.success && result.config) {
-        setConfig(result.config);
-      }
-    } catch (error) {
-      console.error('Failed to load configuration:', error);
-      toast.error('Failed to load configuration');
-    }
-  };
+    if (!open) return;
+    setConfig(appConfig);
+  }, [open, appConfig]);
 
   const handleSave = async () => {
-    setLoading(true);
     try {
-      const result = await window.kiyeovoAPI.setAppConfig(config);
-      if (result.success) {
-        toast.success('Configuration saved successfully');
-        onOpenChange(false);
-      } else {
-        toast.error(result.error || 'Failed to save configuration');
-      }
+      await dispatch(saveAppConfig(config)).unwrap();
+      toast.success('Configuration saved successfully');
+      onOpenChange(false);
     } catch (error) {
       console.error('Failed to save configuration:', error);
-      toast.error('Failed to save configuration');
-    } finally {
-      setLoading(false);
+      toast.error(error instanceof Error ? error.message : 'Failed to save configuration');
     }
   };
 
@@ -344,15 +328,15 @@ export function ConfigurationDialog({ open, onOpenChange }: ConfigurationDialogP
           <Button
             variant="outline"
             onClick={handleReset}
-            disabled={loading}
+            disabled={saving}
             className="flex-1"
           >
             <RotateCcw className="w-4 h-4" />
             Reset to Defaults
           </Button>
-          <Button onClick={handleSave} disabled={loading} className="flex-1">
+          <Button onClick={handleSave} disabled={saving} className="flex-1">
             <Save className="w-4 h-4" />
-            {loading ? 'Saving...' : 'Save Configuration'}
+            {saving ? 'Saving...' : 'Save Configuration'}
           </Button>
         </DialogFooter>
       </DialogContent>

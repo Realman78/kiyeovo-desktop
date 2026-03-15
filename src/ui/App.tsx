@@ -2,14 +2,15 @@ import { useState, useEffect } from 'react'
 import './App.css'
 import { Login } from './pages/Login';
 import { Main } from './pages/Main';
-import { useDispatch } from 'react-redux';
 import { setPeerId, setTorEnabled } from './state/slices/userSlice';
+import { fetchAppConfig } from './state/slices/appConfigSlice';
+import { useAppDispatch } from './state/hooks';
 
 function App() {
   const [initStatus, setInitStatus] = useState('Initializing...');
   const [isInitialized, setIsInitialized] = useState(false);
 
-  const dispatch = useDispatch();
+  const dispatch = useAppDispatch();
 
   useEffect(() => {
     let isMounted = true;
@@ -75,6 +76,11 @@ function App() {
       unsubError();
     };
   }, [dispatch]);
+
+  useEffect(() => {
+    if (!isInitialized) return;
+    void dispatch(fetchAppConfig());
+  }, [isInitialized, dispatch]);
 
   return <div className='w-full h-full'>
     {isInitialized ? <Main /> : <Login initStatus={initStatus} />}
