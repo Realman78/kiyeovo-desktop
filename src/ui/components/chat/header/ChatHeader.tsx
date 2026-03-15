@@ -20,6 +20,7 @@ import { Input } from "../../ui/Input";
 import { validateUsername } from "../../../utils/general";
 import { InviteUsersDialog, type GroupInviteDeliveryView } from "./InviteUsersDialog";
 import { MAX_GROUP_MEMBERS } from "../../../constants";
+import { getGroupStatusMessage, isGroupStatusWaiting } from "../../../utils/groupStatusMessages";
 
 type ChatHeaderProps = {
   username: string;
@@ -481,16 +482,7 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
 
   const isGroup = chatType === 'group';
   const isFetchingGroupUpdates = isGroup && activeChat?.isFetchingOffline === true;
-  const groupStatusMessage = !isGroup ? null
-    : groupStatus === 'awaiting_activation'
-      ? 'Waiting for members to accept invites...'
-      : groupStatus === 'rekeying'
-        ? 'Group membership is updating...'
-        : groupStatus === 'left'
-          ? 'You left this group.'
-          : groupStatus === 'removed'
-            ? 'You were removed from this group.'
-            : null;
+  const groupStatusMessage = !isGroup ? null : getGroupStatusMessage(groupStatus);
   const showGroupStateMessage = Boolean(groupStatusMessage);
 
   const memberSummary = groupMembers.length > 0
@@ -534,7 +526,7 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
             </span>
             {showGroupStateMessage && (
               <div className="flex items-center gap-1">
-                {groupStatus === 'awaiting_activation' || groupStatus === 'rekeying' ? (
+                {isGroupStatusWaiting(groupStatus) ? (
                   <Clock className="w-3 h-3 text-warning" />
                 ) : (
                   <AlertCircle className="w-3 h-3 text-warning" />

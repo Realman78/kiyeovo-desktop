@@ -5,6 +5,7 @@ import { Ban, BellOff, Paperclip, Users } from "lucide-react";
 import { useSelector } from "react-redux";
 import type { RootState } from "../../../state/store";
 import { getGroupCreatorLinkState } from "../../../utils/groupCreatorLinkHealth";
+import { getGroupStatusMessage } from "../../../utils/groupStatusMessages";
 
 type ChatPreviewProps = {
     chat: Chat;
@@ -17,10 +18,11 @@ export const ChatPreview: FC<ChatPreviewProps> = ({ chat, onSelectChat, selected
     const creatorLinkState = getGroupCreatorLinkState(chat, chats, myPeerId);
     const isAwaitingActivation = chat.type === 'group' && chat.groupStatus === 'awaiting_activation';
     const isArchivedGroup = chat.type === 'group' && chat.groupStatus === 'removed';
+    const groupStatusMessage = chat.type === 'group' ? getGroupStatusMessage(chat.groupStatus) : null;
     const previewText = creatorLinkState.broken
         ? 'Creator link is broken. Group updates are paused.'
-        : isAwaitingActivation
-        ? 'Waiting for creator activation...'
+        : groupStatusMessage
+        ? groupStatusMessage
         : (chat.lastMessage || "SYSTEM: No messages yet");
 
     return (

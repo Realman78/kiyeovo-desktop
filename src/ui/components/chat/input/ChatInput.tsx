@@ -8,6 +8,7 @@ import type { RootState } from "../../../state/store";
 import { SendFileDialog } from "./SendFileDialog";
 import { addMessage, addSendingMessage, finalizeSendingMessage, removeMessageById, updateChat, updateFileTransferStatus, updateLocalMessageSendState } from "../../../state/slices/chatSlice";
 import { FILE_ACCEPTANCE_TIMEOUT, MAX_MESSAGE_CONTENT_LENGTH } from "../../../constants";
+import { getGroupStatusMessage } from "../../../utils/groupStatusMessages";
 
 type PendingSendJob =
     | { type: 'direct'; chatId: number; peerId: string; content: string; localMessageId: string }
@@ -70,13 +71,7 @@ export const ChatInput: FC = () => {
     }, [activeChat?.id, activeChat?.type, myPeerId]);
 
     const groupBlockedReason = activeChat?.type === 'group' && activeChat?.groupStatus !== 'active'
-        ? activeChat?.groupStatus === 'left'
-            ? 'You left this group'
-            : activeChat?.groupStatus === 'removed'
-                ? 'You were removed from this group'
-                : activeChat?.groupStatus === 'rekeying'
-                    ? 'Group membership is updating...'
-                    : 'Waiting for members to join...'
+        ? (getGroupStatusMessage(activeChat?.groupStatus) ?? 'Group is not active yet')
         : activeChat?.type === 'group' && !groupHasOtherMembers
             ? 'Cannot send messages to an empty group'
             : null;
