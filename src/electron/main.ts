@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, nativeImage } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -106,11 +106,31 @@ function setupMinimalMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+function getWindowBrandingForMode(mode: NetworkMode): { title: string; icon: string | Electron.NativeImage } {
+  const iconsDir = app.isPackaged
+    ? path.join(process.resourcesPath, 'icons')
+    : path.join(__dirname, '..', '..', 'resources', 'icons');
+
+  const fastIconPath = path.join(iconsDir, 'app-icon.png');
+  if (mode !== 'anonymous') {
+    return {
+      title: 'Kiyeovo',
+      icon: fastIconPath,
+    };
+  }
+
+  const anonymousSvgPath = path.join(iconsDir, 'app-icon-anonymous.svg');
+  const anonymousIcon = nativeImage.createFromPath(anonymousSvgPath);
+  return {
+    title: 'Kiyeovo (anonymous)',
+    icon: anonymousIcon.isEmpty() ? fastIconPath : anonymousIcon,
+  };
+}
+
 function createMainWindow() {
   const savedBounds = loadWindowBounds();
-  const windowIconPath = app.isPackaged
-    ? path.join(process.resourcesPath, 'icons', 'app-icon.png')
-    : path.join(__dirname, '..', '..', 'resources', 'icons', 'app-icon.png');
+  const startupNetworkMode = readPersistedNetworkMode();
+  const branding = getWindowBrandingForMode(startupNetworkMode);
 
   const win = new BrowserWindow({
     // Use saved bounds if available, otherwise Electron will use defaults (centered)
@@ -123,7 +143,8 @@ function createMainWindow() {
     minWidth: 880,
     minHeight: 600,
     autoHideMenuBar: true,
-    icon: windowIconPath,
+    title: branding.title,
+    icon: branding.icon,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -131,6 +152,11 @@ function createMainWindow() {
       sandbox: false // Need to disable sandbox for IPC to work properly
     }
   });
+
+  // Keep dock/taskbar branding aligned with the current network mode.
+  if (process.platform === 'darwin' && app.dock) {
+    app.dock.setIcon(branding.icon);
+  }
 
   // Restore maximized state or maximize on first run
   if (savedBounds?.isMaximized || !savedBounds) {
