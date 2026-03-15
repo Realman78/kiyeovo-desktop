@@ -10,11 +10,12 @@ import { pushable } from "it-pushable";
 import { pipe } from "it-pipe";
 import { StreamHandler } from "./stream-handler.js";
 import mime from "mime-types";
-import { CHUNK_SIZE, DOWNLOADS_DIR, FILE_ACCEPTANCE_TIMEOUT, FILE_OFFER, FILE_OFFER_RESPONSE, FILE_TRANSFER_CONFIRM, MAX_FILE_MESSAGE_SIZE, MAX_FILE_SIZE, MAX_COPY_ATTEMPTS, CHUNK_RECEIVE_TIMEOUT, CHUNK_IDLE_TIMEOUT, FILE_OFFER_RATE_LIMIT, FILE_OFFER_RATE_LIMIT_WINDOW, MAX_PENDING_FILES_PER_PEER, MAX_PENDING_FILES_TOTAL, FILE_REJECTION_COUNTER_RESET_INTERVAL, SILENT_REJECTION_THRESHOLD_GLOBAL, SILENT_REJECTION_THRESHOLD_PER_PEER, getNetworkModeRuntime } from "../constants.js";
+import { CHUNK_SIZE, DOWNLOADS_DIR, FILE_ACCEPTANCE_TIMEOUT, FILE_OFFER, FILE_OFFER_RESPONSE, FILE_TRANSFER_CONFIRM, MAX_FILE_MESSAGE_SIZE, MAX_FILE_SIZE, CHUNK_RECEIVE_TIMEOUT, CHUNK_IDLE_TIMEOUT, FILE_OFFER_RATE_LIMIT, FILE_OFFER_RATE_LIMIT_WINDOW, MAX_PENDING_FILES_PER_PEER, MAX_PENDING_FILES_TOTAL, FILE_REJECTION_COUNTER_RESET_INTERVAL, SILENT_REJECTION_THRESHOLD_GLOBAL, SILENT_REJECTION_THRESHOLD_PER_PEER, getNetworkModeRuntime } from "../constants.js";
 import { MessageHandler } from "./message-handler.js";
 import { generalErrorHandler } from "../utils/general-error.js";
 import { EncryptedUserIdentity } from "./encrypted-user-identity.js";
 import { dialProtocolWithRelayFallback } from "./protocol-dialer.js";
+import { formatCopyTimestamp } from "../utils/miscellaneous";
 
 interface FileMetadata {
   buffer: Buffer
@@ -746,27 +747,38 @@ export class FileHandler {
       const downloadsDir = this.database.getSetting('downloads_directory') || DOWNLOADS_DIR;
       await mkdir(downloadsDir, { recursive: true });
 
-      // Find unique filename by adding "_copy", "_copy2", "_copy3", etc.
+      // Find unique filename by adding "_copy_MMDD_HHMMSS_mm" when a collision exists.
       const sanitizedFilename = basename(offer.filename);
       let savePath = `${downloadsDir}/${sanitizedFilename}`;
-      let copyCounter = 0;
-
-      while (copyCounter < MAX_COPY_ATTEMPTS) {
-        try {
-          // eslint-disable-next-line no-await-in-loop
-          await access(savePath);
-          copyCounter++;
-          const ext = extname(sanitizedFilename);
-          const nameWithoutExt = basename(sanitizedFilename, ext);
-          const suffix = copyCounter === 1 ? '_copy' : `_copy${copyCounter}`;
-          savePath = `${downloadsDir}/${nameWithoutExt}${suffix}${ext}`;
-        } catch {
-          break;
-        }
+      const ext = extname(sanitizedFilename);
+      const nameWithoutExt = basename(sanitizedFilename, ext);
+      let originalExists = false;
+      try {
+        await access(savePath);
+        originalExists = true;
+      } catch {
+        originalExists = false;
       }
 
-      if (copyCounter >= MAX_COPY_ATTEMPTS) {
-        throw new Error('Too many copies of this file already exist');
+      if (originalExists) {
+        let found = false;
+        for (let attempt = 0; attempt < 1000; attempt++) {
+          const timestampSuffix = `_copy_${formatCopyTimestamp(new Date())}`;
+          const attemptSuffix = attempt > 0 ? `_${attempt}` : '';
+          const candidate = `${downloadsDir}/${nameWithoutExt}${timestampSuffix}${attemptSuffix}${ext}`;
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            await access(candidate);
+          } catch {
+            savePath = candidate;
+            found = true;
+            break;
+          }
+        }
+
+        if (!found) {
+          throw new Error('Unable to allocate a unique filename');
+        }
       }
 
       await writeFile(savePath, fileBuffer);

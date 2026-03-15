@@ -59,3 +59,13 @@ export const ensureAppDataDir = (): string => {
     }
     return appDataDir;
 };
+
+export const formatCopyTimestamp = (date: Date): string => {
+    const MM = String(date.getMonth() + 1).padStart(2, '0');
+    const DD = String(date.getDate()).padStart(2, '0');
+    const HH = String(date.getHours()).padStart(2, '0');
+    const mm = String(date.getMinutes()).padStart(2, '0');
+    const SS = String(date.getSeconds()).padStart(2, '0');
+    const centiseconds = String(Math.floor(date.getMilliseconds() / 10)).padStart(2, '0');
+    return `${MM}${DD}_${HH}${mm}${SS}_${centiseconds}`;
+  };
