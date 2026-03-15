@@ -20,6 +20,7 @@ import { Chat, ChatDatabase, User } from './db/database.js';
 import { toBase64Url } from './base64url.js';
 import { UsernameRegistry } from './username-registry.js';
 import { StreamHandler } from './stream-handler.js';
+import { MessageEncryption } from './message-encryption.js';
 import { generalErrorHandler } from '../utils/general-error.js';
 import { dialProtocolWithRelayFallback } from './protocol-dialer.js';
 
@@ -50,7 +51,17 @@ export class KeyExchange {
   }
 
   private buildKeyExchangeMessageToVerify(
-    message: Pick<AuthenticatedEncryptedMessage, 'content' | 'ephemeralPublicKey' | 'senderUsername' | 'timestamp' | 'messageBody' | 'linkIntent' | 'linkDecision'>
+    message: Pick<AuthenticatedEncryptedMessage,
+      'content' |
+      'ephemeralPublicKey' |
+      'senderUsername' |
+      'timestamp' |
+      'encryptedMessageBody' |
+      'encryptedMessageBodyType' |
+      'encryptedMessageBodyKey' |
+      'encryptedMessageBodyIv' |
+      'linkIntent' |
+      'linkDecision'>
   ): MessageToVerify {
     const payload: MessageToVerify = {
       type: 'key_exchange',
@@ -61,7 +72,10 @@ export class KeyExchange {
       senderUsername: message.senderUsername,
       timestamp: message.timestamp,
     };
-    if (message.messageBody !== undefined) payload.messageBody = message.messageBody;
+    if (message.encryptedMessageBody !== undefined) payload.encryptedMessageBody = message.encryptedMessageBody;
+    if (message.encryptedMessageBodyType !== undefined) payload.encryptedMessageBodyType = message.encryptedMessageBodyType;
+    if (message.encryptedMessageBodyKey !== undefined) payload.encryptedMessageBodyKey = message.encryptedMessageBodyKey;
+    if (message.encryptedMessageBodyIv !== undefined) payload.encryptedMessageBodyIv = message.encryptedMessageBodyIv;
     if (message.linkIntent !== undefined) payload.linkIntent = message.linkIntent;
     if (message.linkDecision !== undefined) payload.linkDecision = message.linkDecision;
     return payload;
@@ -316,7 +330,7 @@ export class KeyExchange {
     targetPeerId: PeerId,
     targetUsername: string,
     message: string,
-    options?: { linkIntent?: 'initial' | 'resume' }
+    options?: { linkIntent?: 'initial' | 'resume'; recipientOfflinePublicKey?: string }
   ): Promise<User | null> {
     const userIdentity = this.usernameRegistry.getUserIdentity();
     if (!userIdentity) {
@@ -346,6 +360,23 @@ export class KeyExchange {
       throw new Error(`Rate limit: You must wait before contacting ${targetUsername} again`);
     }
 
+    let recipientOfflinePublicKeyBase64 = options?.recipientOfflinePublicKey;
+    if (!recipientOfflinePublicKeyBase64) {
+      recipientOfflinePublicKeyBase64 = this.database.getUserByPeerId(peerIdStr)?.offline_public_key;
+    }
+    if (!recipientOfflinePublicKeyBase64) {
+      const registration = await this.usernameRegistry.lookupByPeerId(peerIdStr);
+      recipientOfflinePublicKeyBase64 = registration.offlinePublicKey;
+    }
+    if (!recipientOfflinePublicKeyBase64) {
+      throw new Error(`Missing offline public key for ${targetUsername}`);
+    }
+    const recipientOfflinePublicKeyPem = Buffer.from(recipientOfflinePublicKeyBase64, 'base64').toString('utf8');
+    const encryptedInitialMessage = MessageEncryption.encryptForRecipientOffline(
+      message,
+      recipientOfflinePublicKeyPem
+    );
+
     const ephemeralPrivateKey = x25519.utils.randomSecretKey();
     const ephemeralPublicKey = x25519.getPublicKey(ephemeralPrivateKey);
 
@@ -356,7 +387,10 @@ export class KeyExchange {
       ephemeralPublicKey: Buffer.from(ephemeralPublicKey).toString('base64'),
       senderUsername: myUsername,
       timestamp,
-      messageBody: message,
+      encryptedMessageBody: encryptedInitialMessage.content,
+      encryptedMessageBodyType: encryptedInitialMessage.messageType,
+      ...(encryptedInitialMessage.encryptedAesKey !== undefined && { encryptedMessageBodyKey: encryptedInitialMessage.encryptedAesKey }),
+      ...(encryptedInitialMessage.aesIv !== undefined && { encryptedMessageBodyIv: encryptedInitialMessage.aesIv }),
       linkIntent,
     };
 
@@ -502,6 +536,21 @@ export class KeyExchange {
       throw new Error('Key exchange init message has invalid type');
     }
 
+    if (!message.encryptedMessageBody || !message.encryptedMessageBodyType) {
+      throw new Error('Key exchange init missing encrypted initial message');
+    }
+
+    if (message.encryptedMessageBodyType !== 'encrypted' && message.encryptedMessageBodyType !== 'hybrid') {
+      throw new Error('Key exchange init has invalid encrypted message type');
+    }
+
+    if (
+      message.encryptedMessageBodyType === 'hybrid'
+      && (!message.encryptedMessageBodyKey || !message.encryptedMessageBodyIv)
+    ) {
+      throw new Error('Key exchange init hybrid payload missing key or IV');
+    }
+
     // Replay attack prevention
     const messageAge = Date.now() - message.timestamp;
     if (messageAge > MAX_KEY_EXCHANGE_AGE || messageAge < 0) {
@@ -509,10 +558,30 @@ export class KeyExchange {
     }
   }
 
+  private decryptInitialMessageBody(
+    message: AuthenticatedEncryptedMessage,
+    offlinePrivateKeyPem: string
+  ): string {
+    if (!message.encryptedMessageBody || !message.encryptedMessageBodyType) {
+      throw new Error('Missing encrypted initial message');
+    }
+
+    return MessageEncryption.decryptFromRecipientOffline(
+      {
+        messageType: message.encryptedMessageBodyType,
+        content: message.encryptedMessageBody,
+        ...(message.encryptedMessageBodyKey !== undefined && { encryptedAesKey: message.encryptedMessageBodyKey }),
+        ...(message.encryptedMessageBodyIv !== undefined && { aesIv: message.encryptedMessageBodyIv }),
+      },
+      offlinePrivateKeyPem
+    );
+  }
+
   //Authorize contact request based on contact mode and existing relationship
   private async authorizeContactRequest(
     remoteId: string,
     message: AuthenticatedEncryptedMessage,
+    initialMessageBody: string,
   ): Promise<UserRegistration | User | null> {
     const senderUsername = message.senderUsername;
 
@@ -566,7 +635,7 @@ export class KeyExchange {
       sender_peer_id: remoteId,
       sender_username: senderUsername,
       message: message.content || 'Contact request',
-      message_body: message.messageBody || '',
+      message_body: initialMessageBody,
       timestamp: Date.now()
     });
 
@@ -577,7 +646,7 @@ export class KeyExchange {
     // }
 
     // Active mode
-    return await this.handleActiveContactRequest(remoteId, message, contactAttemptId);
+    return await this.handleActiveContactRequest(remoteId, message, contactAttemptId, initialMessageBody);
   }
 
   // Handle contact request in active mode (with user prompt and timeout)
@@ -585,6 +654,7 @@ export class KeyExchange {
     remoteId: string,
     message: AuthenticatedEncryptedMessage,
     contactAttemptId: number,
+    initialMessageBody: string,
   ): Promise<UserRegistration | User> {
     const senderUsername = message.senderUsername;
 
@@ -600,7 +670,7 @@ export class KeyExchange {
       peerId: remoteId,
       username: senderUsername,
       message: message.content || senderUsername + ' wants to contact you',
-      messageBody: message.messageBody || senderUsername + ' wants to contact you',
+      messageBody: initialMessageBody || senderUsername + ' wants to contact you',
       receivedAt: now,
       expiresAt
     });
@@ -608,7 +678,7 @@ export class KeyExchange {
     console.log(`Contact Request from ${senderUsername}`);
 
     const acceptancePromise = new Promise<boolean>((resolve, reject) => {
-      this.pendingAcceptances.set(remoteId, { resolve, reject, timestamp: Date.now(), username: senderUsername, messageBody: message.messageBody || '' });
+      this.pendingAcceptances.set(remoteId, { resolve, reject, timestamp: Date.now(), username: senderUsername, messageBody: initialMessageBody });
     });
 
     let timeoutId: NodeJS.Timeout | undefined;
@@ -670,7 +740,17 @@ export class KeyExchange {
     sender: UserRegistration | User,
     remoteId: string
   ): Promise<{ valid: boolean; keys: { signingPublicKey: string; offlinePublicKey: string; signature: string } }> {
-    const verifyPayload: Pick<AuthenticatedEncryptedMessage, 'content' | 'ephemeralPublicKey' | 'senderUsername' | 'timestamp' | 'messageBody' | 'linkIntent' | 'linkDecision'> = {
+    const verifyPayload: Pick<AuthenticatedEncryptedMessage,
+      'content' |
+      'ephemeralPublicKey' |
+      'senderUsername' |
+      'timestamp' |
+      'encryptedMessageBody' |
+      'encryptedMessageBodyType' |
+      'encryptedMessageBodyKey' |
+      'encryptedMessageBodyIv' |
+      'linkIntent' |
+      'linkDecision'> = {
       content: 'key_exchange_init',
       // validated in validateKeyExchangeInit
       // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
@@ -678,7 +758,10 @@ export class KeyExchange {
       senderUsername: message.senderUsername,
       timestamp: message.timestamp,
     };
-    if (message.messageBody !== undefined) verifyPayload.messageBody = message.messageBody;
+    if (message.encryptedMessageBody !== undefined) verifyPayload.encryptedMessageBody = message.encryptedMessageBody;
+    if (message.encryptedMessageBodyType !== undefined) verifyPayload.encryptedMessageBodyType = message.encryptedMessageBodyType;
+    if (message.encryptedMessageBodyKey !== undefined) verifyPayload.encryptedMessageBodyKey = message.encryptedMessageBodyKey;
+    if (message.encryptedMessageBodyIv !== undefined) verifyPayload.encryptedMessageBodyIv = message.encryptedMessageBodyIv;
     if (message.linkIntent !== undefined) verifyPayload.linkIntent = message.linkIntent;
     const messageToVerify = this.buildKeyExchangeMessageToVerify(verifyPayload);
 
@@ -924,9 +1007,10 @@ export class KeyExchange {
 
       // Validate input and check if sender is blocked
       this.validateKeyExchangeInit(message);
+      const initialMessageBody = this.decryptInitialMessageBody(message, userIdentity.offlinePrivateKey);
 
       // Authorize contact request
-      const authResult = await this.authorizeContactRequest(remoteId, message);
+      const authResult = await this.authorizeContactRequest(remoteId, message, initialMessageBody);
 
       if (!authResult) {
         return;
@@ -1069,7 +1153,17 @@ export class KeyExchange {
         throw new Error('Key exchange response missing signature, sender username or ephemeral public key');
       }
 
-      const verifyPayload: Pick<AuthenticatedEncryptedMessage, 'content' | 'ephemeralPublicKey' | 'senderUsername' | 'timestamp' | 'messageBody' | 'linkIntent' | 'linkDecision'> = {
+      const verifyPayload: Pick<AuthenticatedEncryptedMessage,
+        'content' |
+        'ephemeralPublicKey' |
+        'senderUsername' |
+        'timestamp' |
+        'encryptedMessageBody' |
+        'encryptedMessageBodyType' |
+        'encryptedMessageBodyKey' |
+        'encryptedMessageBodyIv' |
+        'linkIntent' |
+        'linkDecision'> = {
         content: 'key_exchange_response',
         ephemeralPublicKey: message.ephemeralPublicKey,
         senderUsername: message.senderUsername,

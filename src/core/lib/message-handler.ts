@@ -827,6 +827,7 @@ export class MessageHandler {
     }
     let targetPeerId: PeerId;
     let keyExchangeOccurred = false;
+    let resolvedOfflinePublicKey: string | undefined;
 
     if (!user) {
       if (isFileTransfer) {
@@ -840,6 +841,7 @@ export class MessageHandler {
           ? await this.usernameRegistry.lookupByPeerId(targetUsernameOrPeerId)
           : await this.usernameRegistry.lookup(targetUsernameOrPeerId);
         targetPeerId = peerIdFromString(userRegistration.peerID);
+        resolvedOfflinePublicKey = userRegistration.offlinePublicKey;
       } catch (lookupErr: unknown) {
         const lookupErrorText = lookupErr instanceof Error ? lookupErr.message : String(lookupErr);
         if (lookupErrorText === ERRORS.USERNAME_NOT_FOUND || lookupErrorText === 'Peer ID not found in DHT') {
@@ -848,7 +850,9 @@ export class MessageHandler {
         throw new Error(`Failed to resolve user '${targetUsernameOrPeerId}': ${lookupErrorText}`);
       }
 
-      user = await this.keyExchange.initiateKeyExchange(targetPeerId, targetUsernameOrPeerId, message);
+      user = await this.keyExchange.initiateKeyExchange(targetPeerId, targetUsernameOrPeerId, message, {
+        recipientOfflinePublicKey: resolvedOfflinePublicKey,
+      });
       if (!user) {
         throw new Error('Key exchange failed');
       }

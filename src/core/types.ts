@@ -194,8 +194,11 @@ export interface PendingAcceptance {
 
 export interface EncryptedMessage {
   type: 'encrypted' | 'plain' | 'key_exchange'
-  content: string // This is the content of the message, but in the key exchange case, it is the message body
-  messageBody?: string // This is the message body of the key exchange message
+  content: string // Encrypted/plain content, or key_exchange subtype marker for key exchange messages
+  encryptedMessageBody?: string // RSA/hybrid encrypted initial message body (base64)
+  encryptedMessageBodyType?: 'encrypted' | 'hybrid'
+  encryptedMessageBodyKey?: string // hybrid only: RSA-encrypted AES key (base64)
+  encryptedMessageBodyIv?: string // hybrid only: AES-GCM IV (base64)
   linkIntent?: 'initial' | 'resume'
   linkDecision?: 'accepted' | 'reset_required'
   nonce?: string // For encrypted messages
@@ -308,7 +311,10 @@ export type MessageToVerify = {
   ephemeralPublicKey: string;
   senderUsername: string;
   timestamp: number;
-  messageBody?: string;
+  encryptedMessageBody?: string;
+  encryptedMessageBodyType?: 'encrypted' | 'hybrid';
+  encryptedMessageBodyKey?: string;
+  encryptedMessageBodyIv?: string;
   linkIntent?: 'initial' | 'resume';
   linkDecision?: 'accepted' | 'reset_required';
 }

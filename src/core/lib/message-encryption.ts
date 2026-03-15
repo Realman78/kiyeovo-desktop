@@ -1,5 +1,5 @@
 import { xchacha20poly1305 } from '@noble/ciphers/chacha';
-import { privateDecrypt, randomBytes, createDecipheriv } from 'crypto';
+import { privateDecrypt, publicEncrypt, randomBytes, createCipheriv, createDecipheriv } from 'crypto';
 import type { ConversationSession, EncryptedMessage, OfflineMessage, OfflineSenderInfo } from '../types.js';
 import { generalErrorHandler } from '../utils/general-error.js';
 
@@ -7,6 +7,69 @@ import { generalErrorHandler } from '../utils/general-error.js';
  * Handles message encryption and decryption using session keys
  */
 export class MessageEncryption {
+  static encryptForRecipientOffline(
+    content: string,
+    recipientPublicKeyPem: string,
+  ): {
+    messageType: 'encrypted' | 'hybrid';
+    content: string;
+    encryptedAesKey?: string;
+    aesIv?: string;
+  } {
+    // RSA-OAEP max plaintext for 2048-bit keys
+    const RSA_MAX_PLAINTEXT = 214;
+    const contentBytes = Buffer.from(content, 'utf8');
+
+    if (contentBytes.byteLength <= RSA_MAX_PLAINTEXT) {
+      const encryptedContent = publicEncrypt(recipientPublicKeyPem, contentBytes);
+      return {
+        messageType: 'encrypted',
+        content: encryptedContent.toString('base64'),
+      };
+    }
+
+    const aesKey = randomBytes(32);
+    const iv = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', aesKey, iv);
+    const ciphertext = Buffer.concat([cipher.update(contentBytes), cipher.final()]);
+    const authTag = cipher.getAuthTag();
+
+    return {
+      messageType: 'hybrid',
+      content: Buffer.concat([authTag, ciphertext]).toString('base64'),
+      encryptedAesKey: publicEncrypt(recipientPublicKeyPem, aesKey).toString('base64'),
+      aesIv: iv.toString('base64'),
+    };
+  }
+
+  static decryptFromRecipientOffline(
+    payload: {
+      messageType: 'encrypted' | 'hybrid';
+      content: string;
+      encryptedAesKey?: string;
+      aesIv?: string;
+    },
+    recipientPrivateKeyPem: string,
+  ): string {
+    if (payload.messageType === 'hybrid') {
+      if (!payload.encryptedAesKey || !payload.aesIv) {
+        throw new Error('Malformed encrypted key exchange payload');
+      }
+      const aesKey = privateDecrypt(recipientPrivateKeyPem, Buffer.from(payload.encryptedAesKey, 'base64'));
+      const iv = Buffer.from(payload.aesIv, 'base64');
+      const combined = Buffer.from(payload.content, 'base64');
+      const authTag = combined.subarray(0, 16);
+      const ciphertext = combined.subarray(16);
+      const decipher = createDecipheriv('aes-256-gcm', aesKey, iv);
+      decipher.setAuthTag(authTag);
+      return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
+    }
+
+    const encryptedContent = Buffer.from(payload.content, 'base64');
+    const decrypted = privateDecrypt(recipientPrivateKeyPem, encryptedContent);
+    return decrypted.toString('utf8');
+  }
+
   static encryptMessage(message: string, session: ConversationSession | undefined): EncryptedMessage {
     if (!session || session.sendingKey.length === 0) {
       console.log('No valid session, falling back to plain text');
