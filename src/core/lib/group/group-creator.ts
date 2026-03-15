@@ -318,26 +318,26 @@ export class GroupCreator {
         const invitee = database.getUserByPeerId(peerId);
         const username = invitee?.username || peerId;
 
-        const invite: Omit<GroupInvite, 'signature'> = {
-          type: GroupMessageType.GROUP_INVITE,
-          groupId,
-          groupName,
-          inviterPeerId: myPeerId,
-          inviteId,
-          createdAt: now,
-          expiresAt,
-        };
-
-        const signature = this.sign(invite);
-        const signedInvite: GroupInvite = { ...invite, signature };
-
-        // Store in pending ACKs first, then send
-        database.insertPendingAck(groupId, peerId, 'GROUP_INVITE', JSON.stringify(signedInvite));
-        console.log(
-          `[GROUP][TRACE][INVITE][CREATE] group=${groupId} inviteId=${inviteId} to=${username} expiresAt=${expiresAt}`,
-        );
-
         try {
+          const invite: Omit<GroupInvite, 'signature'> = {
+            type: GroupMessageType.GROUP_INVITE,
+            groupId,
+            groupName,
+            inviterPeerId: myPeerId,
+            inviteId,
+            createdAt: now,
+            expiresAt,
+          };
+
+          const signature = this.sign(invite);
+          const signedInvite: GroupInvite = { ...invite, signature };
+
+          // Store in pending ACKs first, then send
+          database.insertPendingAck(groupId, peerId, 'GROUP_INVITE', JSON.stringify(signedInvite));
+          console.log(
+            `[GROUP][TRACE][INVITE][CREATE] group=${groupId} inviteId=${inviteId} to=${username} expiresAt=${expiresAt}`,
+          );
+
           await this.sendControlMessageToPeer(peerId, signedInvite);
           console.log(
             `[GROUP][TRACE][INVITE][SENT] group=${groupId} inviteId=${inviteId} to=${username}`,

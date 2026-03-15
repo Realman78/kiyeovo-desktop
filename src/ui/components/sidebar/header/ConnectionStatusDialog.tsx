@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Wifi, WifiOff, Loader2 } from "lucide-react";
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../ui/Dialog";
 import { useToast } from "../../ui/use-toast";
@@ -43,7 +43,11 @@ const ConnectionStatusDialog = ({
   const [relayError, setRelayError] = useState<string | null>(null);
   const [isRetryingBootstrap, setIsRetryingBootstrap] = useState(false);
   const [isRetryingRelays, setIsRetryingRelays] = useState(false);
+  const [isReorderingBootstrapNodes, setIsReorderingBootstrapNodes] = useState(false);
+  const [isReorderingRelayNodes, setIsReorderingRelayNodes] = useState(false);
   const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
+  const bootstrapReorderInFlightRef = useRef(false);
+  const relayReorderInFlightRef = useRef(false);
 
   const refreshBootstrapNodes = async () => {
     const nodesResult = await window.kiyeovoAPI.getBootstrapNodes();
@@ -245,6 +249,62 @@ const ConnectionStatusDialog = ({
     }
   };
 
+  const handleMoveBootstrapNode = async (index: number, direction: 'up' | 'down') => {
+    if (bootstrapReorderInFlightRef.current) return;
+    const newNodes = [...bootstrapNodes];
+    const swapIndex = direction === 'up' ? index - 1 : index + 1;
+    if (swapIndex < 0 || swapIndex >= newNodes.length) return;
+
+    [newNodes[index]!, newNodes[swapIndex]!] = [newNodes[swapIndex]!, newNodes[index]!];
+    setBootstrapNodes(newNodes);
+    setBootstrapError(null);
+    bootstrapReorderInFlightRef.current = true;
+    setIsReorderingBootstrapNodes(true);
+
+    try {
+      const addresses = newNodes.map((n) => n.address);
+      const result = await window.kiyeovoAPI.reorderBootstrapNodes(addresses);
+      if (!result.success) {
+        setBootstrapError(result.error || 'Failed to reorder bootstrap nodes');
+        await refreshBootstrapNodes();
+      }
+    } catch (error) {
+      setBootstrapError(error instanceof Error ? error.message : 'Unexpected error occurred');
+      await refreshBootstrapNodes();
+    } finally {
+      bootstrapReorderInFlightRef.current = false;
+      setIsReorderingBootstrapNodes(false);
+    }
+  };
+
+  const handleMoveRelayNode = async (index: number, direction: 'up' | 'down') => {
+    if (relayReorderInFlightRef.current) return;
+    const newNodes = [...relayNodes];
+    const swapIndex = direction === 'up' ? index - 1 : index + 1;
+    if (swapIndex < 0 || swapIndex >= newNodes.length) return;
+
+    [newNodes[index]!, newNodes[swapIndex]!] = [newNodes[swapIndex]!, newNodes[index]!];
+    setRelayNodes(newNodes);
+    setRelayError(null);
+    relayReorderInFlightRef.current = true;
+    setIsReorderingRelayNodes(true);
+
+    try {
+      const addresses = newNodes.map((n) => n.address);
+      const result = await window.kiyeovoAPI.reorderRelayNodes(addresses);
+      if (!result.success) {
+        setRelayError(result.error || 'Failed to reorder relay nodes');
+        await refreshRelayNodes();
+      }
+    } catch (error) {
+      setRelayError(error instanceof Error ? error.message : 'Unexpected error occurred');
+      await refreshRelayNodes();
+    } finally {
+      relayReorderInFlightRef.current = false;
+      setIsReorderingRelayNodes(false);
+    }
+  };
+
   const handleCopy = (address: string) => {
     setCopiedAddress(address);
     navigator.clipboard.writeText(address);
@@ -278,7 +338,7 @@ const ConnectionStatusDialog = ({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-2xl!">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             {isConnected === null ? (
@@ -343,6 +403,9 @@ const ConnectionStatusDialog = ({
               onRetry={handleRetryBootstrap}
               onCopy={handleCopy}
               onRemove={handleRemoveBootstrapNode}
+              onMoveUp={(index) => handleMoveBootstrapNode(index, 'up')}
+              onMoveDown={(index) => handleMoveBootstrapNode(index, 'down')}
+              moveDisabled={isReorderingBootstrapNodes}
             />
           ) : (
             <ConnectionNodesTab
@@ -364,6 +427,9 @@ const ConnectionStatusDialog = ({
               onRetry={handleRetryRelays}
               onCopy={handleCopy}
               onRemove={handleRemoveRelayNode}
+              onMoveUp={(index) => handleMoveRelayNode(index, 'up')}
+              onMoveDown={(index) => handleMoveRelayNode(index, 'down')}
+              moveDisabled={isReorderingRelayNodes}
             />
           )}
 

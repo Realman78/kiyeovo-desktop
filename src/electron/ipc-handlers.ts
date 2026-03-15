@@ -47,6 +47,16 @@ function parseRelayMultiaddrList(raw: string): string[] {
   );
 }
 
+function normalizeAddressList(addresses: string[]): string[] {
+  return Array.from(
+    new Set(
+      addresses
+        .map((value) => value.trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
 /**
  * Setup all IPC handlers for communication between renderer and main process
  */
@@ -616,6 +626,38 @@ function setupBootstrapHandlers(
     }
   });
 
+  // Reorder relay nodes
+  ipcMain.handle(IPC_CHANNELS.REORDER_RELAY_NODES, async (_event, addresses: string[]) => {
+    try {
+      withSettingsDatabase(getP2PCore, (db) => {
+        const incoming = normalizeAddressList(addresses);
+        const existingRaw = db.getSetting(FAST_RELAY_MULTIADDRS_SETTING_KEY);
+        const existing = existingRaw === null
+          ? [...DEFAULT_FAST_RELAY_MULTIADDRS]
+          : parseRelayMultiaddrList(existingRaw);
+        const existingSet = new Set(existing);
+
+        if (incoming.length !== existingSet.size || incoming.some((address) => !existingSet.has(address))) {
+          throw new Error('Invalid relay reorder payload');
+        }
+
+        for (const address of incoming) {
+          const ma = multiaddr(address);
+          if (!ma.getPeerId()) {
+            throw new Error(`Relay multiaddr must include /p2p/<peerId>: ${address}`);
+          }
+        }
+
+        db.setSetting(FAST_RELAY_MULTIADDRS_SETTING_KEY, incoming.join(','));
+      });
+
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to reorder relay nodes:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to reorder relay nodes' };
+    }
+  });
+
   // Add bootstrap node
   ipcMain.handle(IPC_CHANNELS.ADD_BOOTSTRAP_NODE, async (_event, address: string) => {
     try {
@@ -651,6 +693,29 @@ function setupBootstrapHandlers(
     } catch (error) {
       console.error('[IPC] Failed to remove bootstrap node:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to remove bootstrap node' };
+    }
+  });
+
+  // Reorder bootstrap nodes
+  ipcMain.handle(IPC_CHANNELS.REORDER_BOOTSTRAP_NODES, async (_event, addresses: string[]) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+
+      const incoming = normalizeAddressList(addresses);
+      const existing = p2pCore.database.getBootstrapNodes().map((node) => node.address);
+      const existingSet = new Set(existing);
+      if (incoming.length !== existingSet.size || incoming.some((address) => !existingSet.has(address))) {
+        return { success: false, error: 'Invalid bootstrap reorder payload' };
+      }
+
+      p2pCore.database.reorderBootstrapNodes(incoming);
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to reorder bootstrap nodes:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to reorder bootstrap nodes' };
     }
   });
 }

@@ -7,12 +7,7 @@ I joined with a user and while the joining was happening, Alice (creator) was se
 we already went thourgh this and have not found the issue, I will have to investigate later. What do you say to the idea that if Chad is online when a new user joins or leaves or is removed, that the check missed messages gets triggered on his end? of course, only if he is online when the actual system message arrives, not when he comes online and the system message is fetched from the bucket. dont implement, let us just think about it
 
 
-1.1.0 waiting for members to accept pise dok cekas na approval
 1.1.1 nekakav rate limit na DHT zapise (na validatorima)
-
-1.2 High: createGroup can leave partial state on failure (chat created + some invites sent) with no rollback/transaction boundary.
-If one invite send fails mid-loop, IPC returns failure even though earlier invites may already be delivered.
-
 1.2.4 High: if a user has a full bucket, he wont be able to receive GROUP_STATE_UPDATE or any other group control message
 
 1.3 ako oden rejectat nesto i faila mi reject. zac ne maknut samo?

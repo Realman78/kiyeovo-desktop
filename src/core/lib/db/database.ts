@@ -502,20 +502,24 @@ export class ChatDatabase {
                 address TEXT NOT NULL,
                 network_mode TEXT NOT NULL DEFAULT '${DEFAULT_NETWORK_MODE}' CHECK(network_mode IN ('${NETWORK_MODES.FAST}','${NETWORK_MODES.ANONYMOUS}')),
                 connected INTEGER NOT NULL DEFAULT 0,
+                sort_order INTEGER NOT NULL DEFAULT 0,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(address, network_mode)
             )
         `);
 
+        this.ensureColumnExists('bootstrap_nodes', 'sort_order', 'INTEGER NOT NULL DEFAULT 0');
+
         // Initialize default bootstrap nodes (only once, even if user deletes them later)
         const bootstrapInitialized = this.db.prepare('SELECT value FROM settings WHERE key = ?').get('bootstrap_nodes_initialized');
         if (!bootstrapInitialized) {
-            for (const node of DEFAULT_BOOTSTRAP_NODES) {
+            for (let i = 0; i < DEFAULT_BOOTSTRAP_NODES.length; i++) {
+                const node = DEFAULT_BOOTSTRAP_NODES[i]!;
                 const mode = node.includes('/onion')
                     ? NETWORK_MODES.ANONYMOUS
                     : NETWORK_MODES.FAST;
-                this.db.prepare('INSERT INTO bootstrap_nodes (address, network_mode, connected) VALUES (?, ?, ?)').run(node, mode, 0);
+                this.db.prepare('INSERT INTO bootstrap_nodes (address, network_mode, connected, sort_order) VALUES (?, ?, 0, ?)').run(node, mode, i);
             }
             this.db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('bootstrap_nodes_initialized', 'true');
         }
@@ -2054,7 +2058,7 @@ export class ChatDatabase {
 
     // Bootstrap nodes operations
     getBootstrapNodes(): { address: string; connected: boolean }[] {
-        const stmt = this.db.prepare('SELECT address, connected FROM bootstrap_nodes WHERE network_mode = ?');
+        const stmt = this.db.prepare('SELECT address, connected FROM bootstrap_nodes WHERE network_mode = ? ORDER BY sort_order ASC, id ASC');
         const rows = stmt.all(this.getActiveNetworkMode()) as { address: string; connected: number }[];
         return rows.map(row => ({ address: row.address, connected: Boolean(row.connected) }));
     }
@@ -2082,8 +2086,38 @@ export class ChatDatabase {
             throw new Error('Bootstrap node already exists');
         }
 
-        const stmt = this.db.prepare('INSERT INTO bootstrap_nodes (address, network_mode, connected) VALUES (?, ?, 0)');
-        stmt.run(address, mode);
+        const maxOrder = (this.db.prepare('SELECT MAX(sort_order) as max_order FROM bootstrap_nodes WHERE network_mode = ?').get(mode) as { max_order: number | null })?.max_order ?? -1;
+        const stmt = this.db.prepare('INSERT INTO bootstrap_nodes (address, network_mode, connected, sort_order) VALUES (?, ?, 0, ?)');
+        stmt.run(address, mode, maxOrder + 1);
+    }
+
+    reorderBootstrapNodes(addresses: string[]): void {
+        const mode = this.getActiveNetworkMode();
+        const existingRows = this.db
+            .prepare('SELECT address FROM bootstrap_nodes WHERE network_mode = ?')
+            .all(mode) as Array<{ address: string }>;
+        const existingAddresses = existingRows.map((row) => row.address);
+        const existingSet = new Set(existingAddresses);
+
+        if (addresses.length !== existingSet.size) {
+            throw new Error('Invalid bootstrap reorder payload: address count mismatch');
+        }
+        for (const address of addresses) {
+            if (!existingSet.has(address)) {
+                throw new Error(`Invalid bootstrap reorder payload: unknown address "${address}"`);
+            }
+        }
+
+        const updateStmt = this.db.prepare('UPDATE bootstrap_nodes SET sort_order = ? WHERE address = ? AND network_mode = ?');
+        const transaction = this.db.transaction(() => {
+            for (let i = 0; i < addresses.length; i++) {
+                const info = updateStmt.run(i, addresses[i], mode);
+                if (info.changes !== 1) {
+                    throw new Error(`Failed to reorder bootstrap node: "${addresses[i]}"`);
+                }
+            }
+        });
+        transaction();
     }
 
     // Check if database is healthy

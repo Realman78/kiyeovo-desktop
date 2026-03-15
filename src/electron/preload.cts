@@ -148,6 +148,12 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     removeBootstrapNode: async (address: string): Promise<{ success: boolean; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.REMOVE_BOOTSTRAP_NODE, address);
     },
+    reorderBootstrapNodes: async (addresses: string[]): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.REORDER_BOOTSTRAP_NODES, addresses);
+    },
+    reorderRelayNodes: async (addresses: string[]): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.REORDER_RELAY_NODES, addresses);
+    },
 
     // Contact attempts
     getContactAttempts: async (): Promise<{ success: boolean; contactAttempts: Array<ContactAttempt>; error: string | null }> => {

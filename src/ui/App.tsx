@@ -63,8 +63,8 @@ function App() {
       void loadTorSettings();
     });
 
-    const unsubError = window.kiyeovoAPI.onInitError(() => {
-      // Error handling can be added here if needed
+    const unsubError = window.kiyeovoAPI.onInitError((error) => {
+      setInitStatus(error);
     });
 
 

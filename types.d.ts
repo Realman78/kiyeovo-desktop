@@ -71,6 +71,8 @@ declare global {
             removeRelayNode: (address: string) => Promise<{ success: boolean; error: string | null }>;
             addBootstrapNode: (address: string) => Promise<{ success: boolean; error: string | null }>;
             removeBootstrapNode: (address: string) => Promise<{ success: boolean; error: string | null }>;
+            reorderBootstrapNodes: (addresses: string[]) => Promise<{ success: boolean; error: string | null }>;
+            reorderRelayNodes: (addresses: string[]) => Promise<{ success: boolean; error: string | null }>;
 
             // Contact attempts
             getContactAttempts: () => Promise<{ success: boolean; contactAttempts: Array<ContactAttempt>; error: string | null }>;

@@ -1,4 +1,4 @@
-import { Check, Copy, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Copy, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { Button } from "../../ui/Button";
 import { Input } from "../../ui/Input";
 
@@ -28,6 +28,9 @@ interface ConnectionNodesTabProps {
   onRetry: () => void;
   onCopy: (address: string) => void;
   onRemove: (address: string) => void;
+  onMoveUp?: (index: number) => void;
+  onMoveDown?: (index: number) => void;
+  moveDisabled?: boolean;
 }
 
 export function ConnectionNodesTab({
@@ -50,6 +53,9 @@ export function ConnectionNodesTab({
   onRetry,
   onCopy,
   onRemove,
+  onMoveUp,
+  onMoveDown,
+  moveDisabled = false,
 }: ConnectionNodesTabProps) {
   return (
     <>
@@ -73,14 +79,36 @@ export function ConnectionNodesTab({
             <span className="text-sm text-muted-foreground">{emptyLabel}</span>
           </div>
         ) : (
-          <div className="space-y-2 max-h-48 overflow-y-auto">
-            {nodes.map((node) => (
-              <div key={node.key} className="flex items-center gap-2 p-2 rounded-md bg-secondary/50 border border-border">
+          <div className="space-y-2 max-h-56 overflow-y-auto">
+            {nodes.map((node, index) => (
+              <div key={node.key} className="flex items-center gap-4 p-2 rounded-md bg-secondary/50 border border-border">
                 <div className={`w-2 h-2 rounded-full ${node.connected ? 'bg-success' : 'bg-muted-foreground'}`} />
                 <span className="flex-1 text-sm font-mono text-foreground break-all" title={node.address}>
                   {node.address}
                 </span>
-                <div>
+                <div className="flex items-center">
+                  {onMoveUp && onMoveDown && nodes.length > 1 && (
+                    <div className="flex flex-col">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => onMoveUp(index)}
+                        disabled={moveDisabled || index === 0}
+                        className="w-4! h-4! text-muted-foreground"
+                      >
+                        <ChevronUp className="w-3 h-3" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => onMoveDown(index)}
+                        disabled={moveDisabled || index === nodes.length - 1}
+                        className="w-4! h-4! text-muted-foreground"
+                      >
+                        <ChevronDown className="w-3 h-3" />
+                      </Button>
+                    </div>
+                  )}
                   <Button
                     variant="ghost"
                     size="icon"

@@ -25,6 +25,18 @@ type LoginProps = {
     initStatus: string;
 }
 
+function isTorStartupFailureStatus(status: string): boolean {
+    const normalized = status.toLowerCase();
+    const mentionsAnonymous = normalized.includes('anonymous mode');
+    const mentionsTor = normalized.includes('tor');
+    const isStartupFailure =
+        normalized.includes('tor failed to start')
+        || normalized.includes('anonymous mode cannot continue')
+        || normalized.includes('anonymous mode requires tor startup')
+        || normalized.includes('initialization aborted');
+    return mentionsAnonymous && mentionsTor && isStartupFailure;
+}
+
 export const Login = ({ initStatus }: LoginProps) => {
     const [passwordRequest, setPasswordRequest] = useState<PasswordRequest | null>(null);
     const [password, setPassword] = useState('');
@@ -38,9 +50,7 @@ export const Login = ({ initStatus }: LoginProps) => {
     const [isSwitchingMode, setIsSwitchingMode] = useState(false);
     const [requiresNetworkModeSelection, setRequiresNetworkModeSelection] = useState(false);
     const previousPasswordRequestRef = useRef<PasswordRequest | null>(null);
-    const isTorStartupFailure =
-        initStatus.includes('Tor failed to start') &&
-        initStatus.includes('Anonymous mode cannot continue');
+    const isTorStartupFailure = isTorStartupFailureStatus(initStatus);
 
     useEffect(() => {
         let isMounted = true;

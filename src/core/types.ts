@@ -526,6 +526,8 @@ export const IPC_CHANNELS = {
   REMOVE_RELAY_NODE: 'relay:removeNode',
   ADD_BOOTSTRAP_NODE: 'bootstrap:addNode',
   REMOVE_BOOTSTRAP_NODE: 'bootstrap:removeNode',
+  REORDER_BOOTSTRAP_NODES: 'bootstrap:reorder',
+  REORDER_RELAY_NODES: 'relay:reorder',
 
   // Contact attempts
   GET_CONTACT_ATTEMPTS: 'contactAttempts:get',
