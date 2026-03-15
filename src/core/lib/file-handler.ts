@@ -1,4 +1,4 @@
-import { ChatNode, StreamHandlerContext, ConversationSession, FileChunk, FileOffer, FileOfferResponse, FileTransferMessage, FileTransferProgressEvent, FileTransferCompleteEvent, FileTransferFailedEvent, PendingFileReceivedEvent } from "../types";
+import { ChatNode, StreamHandlerContext, ConversationSession, FileChunk, FileOffer, FileOfferResponse, FileTransferConfirm, FileTransferMessage, FileTransferProgressEvent, FileTransferCompleteEvent, FileTransferFailedEvent, PendingFileReceivedEvent } from "../types";
 import type { Stream } from "@libp2p/interface";
 import { ChatDatabase, Chat } from "./db/database";
 import { readFile, stat, writeFile, mkdir, access } from "fs/promises";
@@ -10,7 +10,7 @@ import { pushable } from "it-pushable";
 import { pipe } from "it-pipe";
 import { StreamHandler } from "./stream-handler.js";
 import mime from "mime-types";
-import { CHUNK_SIZE, DOWNLOADS_DIR, FILE_ACCEPTANCE_TIMEOUT, FILE_OFFER, FILE_OFFER_RESPONSE, MAX_FILE_MESSAGE_SIZE, MAX_FILE_SIZE, MAX_COPY_ATTEMPTS, CHUNK_RECEIVE_TIMEOUT, CHUNK_IDLE_TIMEOUT, FILE_OFFER_RATE_LIMIT, FILE_OFFER_RATE_LIMIT_WINDOW, MAX_PENDING_FILES_PER_PEER, MAX_PENDING_FILES_TOTAL, FILE_REJECTION_COUNTER_RESET_INTERVAL, SILENT_REJECTION_THRESHOLD_GLOBAL, SILENT_REJECTION_THRESHOLD_PER_PEER, getNetworkModeRuntime } from "../constants.js";
+import { CHUNK_SIZE, DOWNLOADS_DIR, FILE_ACCEPTANCE_TIMEOUT, FILE_OFFER, FILE_OFFER_RESPONSE, FILE_TRANSFER_CONFIRM, MAX_FILE_MESSAGE_SIZE, MAX_FILE_SIZE, MAX_COPY_ATTEMPTS, CHUNK_RECEIVE_TIMEOUT, CHUNK_IDLE_TIMEOUT, FILE_OFFER_RATE_LIMIT, FILE_OFFER_RATE_LIMIT_WINDOW, MAX_PENDING_FILES_PER_PEER, MAX_PENDING_FILES_TOTAL, FILE_REJECTION_COUNTER_RESET_INTERVAL, SILENT_REJECTION_THRESHOLD_GLOBAL, SILENT_REJECTION_THRESHOLD_PER_PEER, getNetworkModeRuntime } from "../constants.js";
 import { MessageHandler } from "./message-handler.js";
 import { generalErrorHandler } from "../utils/general-error.js";
 import { EncryptedUserIdentity } from "./encrypted-user-identity.js";
@@ -254,6 +254,7 @@ export class FileHandler {
     let offer: FileOffer | null = null;
     let chat: Chat | null = null;
     let session: ConversationSession | null = null;
+    let offerAccepted = false;
     let pinnedSessionPeerId: string | null = null;
     let chunkTimeout: NodeJS.Timeout | null = null;
     let lastEmittedPercentage = 0;
@@ -561,6 +562,7 @@ export class FileHandler {
 
             // User accepted - start chunk timeout
             console.log(`File transfer accepted, receiving chunks...`);
+            offerAccepted = true;
             const response: FileOfferResponse = {
               type: FILE_OFFER_RESPONSE,
               fileId: offerMsg.fileId,
@@ -714,6 +716,15 @@ export class FileHandler {
           filePath: savePath
         });
       }
+
+      if (offerAccepted) {
+        const confirm: FileTransferConfirm = {
+          type: FILE_TRANSFER_CONFIRM,
+          fileId: offer.fileId,
+          success: true,
+        };
+        writable.push(this.#encodeMessage(confirm));
+      }
     } catch (error: unknown) {
       // Emit failure event
       if (offer && this.onFileTransferFailed && chat) {
@@ -725,13 +736,23 @@ export class FileHandler {
       }
 
       if (offer && (error instanceof Error)) {
-        const response: FileOfferResponse = {
-          type: FILE_OFFER_RESPONSE,
-          fileId: offer.fileId,
-          accepted: false,
-          reason: error.message,
-        };
-        writable.push(this.#encodeMessage(response));
+        if (offerAccepted) {
+          const confirm: FileTransferConfirm = {
+            type: FILE_TRANSFER_CONFIRM,
+            fileId: offer.fileId,
+            success: false,
+            error: error.message,
+          };
+          writable.push(this.#encodeMessage(confirm));
+        } else {
+          const response: FileOfferResponse = {
+            type: FILE_OFFER_RESPONSE,
+            fileId: offer.fileId,
+            accepted: false,
+            reason: error.message,
+          };
+          writable.push(this.#encodeMessage(response));
+        }
       }
       throw error;
     } finally {
@@ -825,7 +846,7 @@ export class FileHandler {
     return { message: JSON.parse(json) as FileTransferMessage, bytesRead: 4 + length };
   }
 
-  async sendFile(targetUsername: string, filePath: string): Promise<void> {
+  async sendFile(targetUsername: string, filePath: string, providedFileId?: string): Promise<void> {
     let chat: any = null;
     let fileId: string = '';
     let stream: Stream | null = null;
@@ -853,7 +874,7 @@ export class FileHandler {
       }
 
       const metadata = await this.#loadFileMetadata(filePath);
-      fileId = randomUUID();
+      fileId = providedFileId && providedFileId.trim() ? providedFileId : randomUUID();
 
       console.log(`Sending ${metadata.filename} (${metadata.size} bytes, ${metadata.totalChunks} chunks)`);
 
@@ -868,6 +889,28 @@ export class FileHandler {
       const activeStream = stream;
       const writable = pushable();
       const sinkPromise = pipe(writable, activeStream.sink);
+      let controlBuffer = new Uint8Array(0);
+      const sourceIterator = activeStream.source[Symbol.asyncIterator]();
+      const readNextControlMessage = async (): Promise<FileTransferMessage> => {
+        for (;;) {
+          const decoded = this.#decodeMessage(controlBuffer);
+          if (decoded) {
+            controlBuffer = controlBuffer.slice(decoded.bytesRead);
+            return decoded.message;
+          }
+
+          const next = await sourceIterator.next();
+          if (next.done) {
+            throw new Error('Stream closed before expected file transfer message');
+          }
+
+          const chunkData = (next.value as unknown as Uint8Array).subarray();
+          const newBuffer = new Uint8Array(controlBuffer.length + chunkData.length);
+          newBuffer.set(controlBuffer);
+          newBuffer.set(chunkData, controlBuffer.length);
+          controlBuffer = newBuffer;
+        }
+      };
       let transferQueued = false;
 
       try {
@@ -905,33 +948,30 @@ export class FileHandler {
         writable.push(this.#encodeMessage(offer));
         console.log(`Sent file offer, waiting for response...`);
 
-        let buffer = new Uint8Array(0);
-        let response: FileOfferResponse | null = null;
+        const readNextMessage = async (): Promise<FileTransferMessage> => {
+          return readNextControlMessage();
+        };
+
+        const readOfferResponse = async (): Promise<FileOfferResponse> => {
+          for (;;) {
+            const message = await readNextMessage();
+            if (message.type === FILE_OFFER_RESPONSE && message.fileId === fileId) {
+              return message;
+            }
+            if (message.type === FILE_TRANSFER_CONFIRM && message.fileId === fileId && !message.success) {
+              throw new Error(message.error || 'File transfer failed before acceptance');
+            }
+          }
+        };
 
         let timeoutId: ReturnType<typeof setTimeout> | null = null;
         const timeoutPromise = new Promise<never>((_, reject) => {
           timeoutId = setTimeout(() => { reject(new Error('Timeout waiting for file acceptance')); }, FILE_ACCEPTANCE_TIMEOUT);
         });
 
-        const readResponse = async (): Promise<FileOfferResponse> => {
-          for await (const chunk of activeStream.source) {
-            const chunkData = (chunk as unknown as Uint8Array).subarray();
-            const newBuffer = new Uint8Array(buffer.length + chunkData.length);
-            newBuffer.set(buffer);
-            newBuffer.set(chunkData, buffer.length);
-            buffer = newBuffer;
-
-            const decoded = this.#decodeMessage(buffer);
-            if (decoded) {
-              buffer = buffer.slice(decoded.bytesRead);
-              return decoded.message as FileOfferResponse;
-            }
-          }
-          throw new Error('Stream closed before response');
-        };
-
+        let response: FileOfferResponse;
         try {
-          response = await Promise.race([readResponse(), timeoutPromise]);
+          response = await Promise.race([readOfferResponse(), timeoutPromise]);
         } finally {
           if (timeoutId) {
             clearTimeout(timeoutId);
@@ -989,6 +1029,49 @@ export class FileHandler {
       }
 
       if (transferQueued) {
+        this.database.updateMessageTransfer(fileId, {
+          file_name: metadata.filename,
+          file_size: metadata.size,
+          file_path: filePath,
+          transfer_status: 'in_progress',
+          transfer_progress: 100
+        });
+
+        console.log(`Waiting for recipient confirmation...`);
+        let confirmTimeoutId: ReturnType<typeof setTimeout> | null = null;
+        const confirmTimeoutPromise = new Promise<never>((_, reject) => {
+          confirmTimeoutId = setTimeout(
+            () => reject(new Error('Timeout waiting for transfer confirmation')),
+            CHUNK_RECEIVE_TIMEOUT
+          );
+        });
+
+        let transferConfirm: FileTransferConfirm;
+        try {
+          const readTransferConfirm = async (): Promise<FileTransferConfirm> => {
+            for (;;) {
+              const message = await readNextControlMessage();
+              if (message.type === FILE_TRANSFER_CONFIRM && message.fileId === fileId) {
+                return message;
+              }
+              if (message.type === FILE_OFFER_RESPONSE && message.fileId === fileId && !message.accepted) {
+                throw new Error(message.reason || 'Transfer rejected after acceptance');
+              }
+            }
+          };
+
+          transferConfirm = await Promise.race([readTransferConfirm(), confirmTimeoutPromise]);
+        } finally {
+          if (confirmTimeoutId) {
+            clearTimeout(confirmTimeoutId);
+            confirmTimeoutId = null;
+          }
+        }
+
+        if (!transferConfirm.success) {
+          throw new Error(transferConfirm.error || 'Recipient failed to save file');
+        }
+
         const messageId = fileId;
         this.database.updateMessageTransfer(messageId, {
           file_name: metadata.filename,
@@ -1008,9 +1091,9 @@ export class FileHandler {
       }
     } catch (error: unknown) {
       const errorText = error instanceof Error ? error.message : 'Unknown error';
-      if (errorText.toLowerCase().includes('timeout waiting for file acceptance') && stream) {
+      if ((errorText.toLowerCase().includes('timeout waiting for file acceptance') || errorText.toLowerCase().includes('timeout waiting for transfer confirmation')) && stream) {
         try {
-          stream.abort(new Error('File offer acceptance timeout'));
+          stream.abort(new Error('File transfer timeout'));
         } catch {
           // best-effort stream cleanup
         }

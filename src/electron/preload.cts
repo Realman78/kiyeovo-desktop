@@ -442,8 +442,8 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     },
 
     // File transfer
-    sendFile: async (peerId: string, filePath: string): Promise<{ success: boolean; error: string | null }> => {
-        return ipcRenderer.invoke(IPC_CHANNELS.SEND_FILE_REQUEST, peerId, filePath);
+    sendFile: async (peerId: string, filePath: string, fileId?: string): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.SEND_FILE_REQUEST, peerId, filePath, fileId);
     },
     acceptFile: async (fileId: string): Promise<{ success: boolean; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.ACCEPT_FILE, fileId);

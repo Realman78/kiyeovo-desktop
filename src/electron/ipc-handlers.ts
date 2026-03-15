@@ -2261,7 +2261,7 @@ function setupFileTransferHandlers(
   getP2PCore: () => P2PCore | null
 ): void {
   // Send file
-  ipcMain.handle(IPC_CHANNELS.SEND_FILE_REQUEST, async (_event, peerId: string, filePath: string) => {
+  ipcMain.handle(IPC_CHANNELS.SEND_FILE_REQUEST, async (_event, peerId: string, filePath: string, fileId?: string) => {
     try {
       const p2pCore = getP2PCore();
       if (!p2pCore) {
@@ -2277,7 +2277,7 @@ function setupFileTransferHandlers(
       }
 
       // Send the file (this will emit progress events internally)
-      await p2pCore.messageHandler.getFileHandler().sendFile(user.username, filePath);
+      await p2pCore.messageHandler.getFileHandler().sendFile(user.username, filePath, fileId);
 
       return { success: true, error: null };
     } catch (error) {

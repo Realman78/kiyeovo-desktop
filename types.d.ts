@@ -233,7 +233,7 @@ declare global {
             setDownloadsDir: (path: string) => Promise<{ success: boolean; error: string | null }>;
 
             // File transfer
-            sendFile: (peerId: string, filePath: string) => Promise<{ success: boolean; error: string | null }>;
+            sendFile: (peerId: string, filePath: string, fileId?: string) => Promise<{ success: boolean; error: string | null }>;
             acceptFile: (fileId: string) => Promise<{ success: boolean; error: string | null }>;
             rejectFile: (fileId: string) => Promise<{ success: boolean; error: string | null }>;
             getPendingFiles: () => Promise<{

@@ -20,11 +20,9 @@ we already went thourgh this and have not found the issue, I will have to invest
 
 ----------------------------
 
-3.2 creator dismantle group
-3.2.1 group info
-3.2.3 request group update
+file transfer invalid tag
 
-UI konstante neka se citaju iz settingsa kako nebi bilo preklapanja
+file default spremanje je u hidden direktorij pa se ne more otvorit
 
 ako prvi put ne oznacin "remember me" onda se nikad ne pamti
 

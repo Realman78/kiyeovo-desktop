@@ -307,6 +307,7 @@ export const IDENTITY_SCRYPT_N = 2 ** 18; // SET THIS TO 19 OR 20 IF YOU HAVE A 
  */
 export const FILE_OFFER = 'file_offer';
 export const FILE_OFFER_RESPONSE = 'file_offer_response';
+export const FILE_TRANSFER_CONFIRM = 'file_transfer_confirm';
 export const CHUNK_SIZE = 32 * 1024; // 32KB
 export const DOWNLOADS_DIR = 'kiyeovo-downloads';
 export const MAX_FILE_MESSAGE_SIZE = 1 * 1024 * 1024; // 1MB for JSON overhead

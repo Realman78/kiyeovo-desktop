@@ -369,18 +369,7 @@ const chatSlice = createSlice({
     },
     // File transfer actions
     updateFileTransferProgress: (state, action: PayloadAction<{ messageId: string; progress: number; chatId: number; filename: string; size: number }>) => {
-      let message = state.messages.find((m) => m.id === action.payload.messageId);
-      if (!message) {
-        message = state.messages.find((m) =>
-          m.chatId === action.payload.chatId &&
-          m.messageType === 'file' &&
-          m.fileName === action.payload.filename &&
-          (m.transferStatus === 'pending' || m.transferStatus === 'in_progress')
-        );
-        if (message) {
-          message.id = action.payload.messageId;
-        }
-      }
+      const message = state.messages.find((m) => m.id === action.payload.messageId);
       if (message) {
         if (message.transferStatus === 'completed' || message.transferStatus === 'failed' || message.transferStatus === 'expired' || message.transferStatus === 'rejected') {
           return;

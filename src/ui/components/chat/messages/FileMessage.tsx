@@ -128,6 +128,9 @@ export const FileMessage: React.FC<FileMessageProps> = ({
       case 'pending':
         return isFromCurrentUser ? 'Awaiting acceptance' : 'Waiting...';
       case 'in_progress':
+        if (isFromCurrentUser && transferProgress >= 100) {
+          return 'Awaiting recipient confirmation';
+        }
         return `${transferProgress}%`;
       case 'completed':
         return 'Completed';

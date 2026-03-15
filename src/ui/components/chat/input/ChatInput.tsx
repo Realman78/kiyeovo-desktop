@@ -280,7 +280,9 @@ export const ChatInput: FC = () => {
         const previousLastMessage = activeChat.lastMessage;
         const previousLastMessageTimestamp = activeChat.lastMessageTimestamp;
         const chatId = activeChat.id;
-        const pendingMessageId = `pending-file-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const pendingMessageId =
+            globalThis.crypto?.randomUUID?.() ??
+            `file-${Date.now()}-${Math.random().toString(36).slice(2)}`;
         const transferExpiresAt = Date.now() + FILE_ACCEPTANCE_TIMEOUT;
         try {
             dispatch(addMessage({
@@ -300,7 +302,7 @@ export const ChatInput: FC = () => {
                 transferExpiresAt
             }));
 
-            const result = await window.kiyeovoAPI.sendFile(activeChat.peerId, filePath);
+            const result = await window.kiyeovoAPI.sendFile(activeChat.peerId, filePath, pendingMessageId);
             if (!result.success) {
                 const errorText = result.error?.toLowerCase() || '';
                 console.log("RESULT ERROR:", result.error);
