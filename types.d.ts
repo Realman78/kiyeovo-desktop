@@ -200,6 +200,7 @@ declare global {
             // Chat settings
             toggleChatMute: (chatId: number) => Promise<{ success: boolean; muted: boolean; error: string | null }>;
             deleteAllMessages: (chatId: number) => Promise<{ success: boolean; error: string | null }>;
+            deleteChat: (chatId: number) => Promise<{ success: boolean; error: string | null }>;
             deleteChatAndUser: (chatId: number, peerId: string) => Promise<{ success: boolean; error: string | null }>;
             updateUsername: (peerId: string, newUsername: string) => Promise<{ success: boolean; error: string | null }>;
 
@@ -271,6 +272,7 @@ declare global {
             getGroupMembers: (chatId: number) => Promise<{ success: boolean; members: Array<{ peerId: string; username: string; status: 'pending' | 'accepted' | 'confirmed' }>; error: string | null }>;
             getGroupInvites: () => Promise<{ success: boolean; invites: Array<{ groupId: string; groupName: string; inviterPeerId: string; inviterUsername: string; inviteId: string; expiresAt: number }>; error: string | null }>;
             respondToGroupInvite: (groupId: string, accept: boolean) => Promise<{ success: boolean; error: string | null }>;
+            requestGroupUpdate: (chatId: number) => Promise<{ success: boolean; error: string | null }>;
             leaveGroup: (chatId: number) => Promise<{ success: boolean; error: string | null }>;
             disbandGroup: (chatId: number) => Promise<{ success: boolean; error: string | null }>;
             kickGroupMember: (chatId: number, targetPeerId: string) => Promise<{ success: boolean; error: string | null }>;

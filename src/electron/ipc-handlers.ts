@@ -1403,6 +1403,28 @@ function setupChatSettingsHandlers(
     }
   });
 
+  ipcMain.handle(IPC_CHANNELS.DELETE_CHAT, async (_event, chatId: number) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+
+      const chat = p2pCore.database.getChatByIdWithUsernameAndLastMsg(chatId, p2pCore.userIdentity.id);
+      if (chat?.type === 'group' && chat.group_id) {
+        p2pCore.database.removePendingAcksForGroup(chat.group_id);
+        p2pCore.database.removeInviteDeliveryAcksForMember(chat.group_id, p2pCore.userIdentity.id);
+      }
+
+      p2pCore.database.deleteChat(chatId);
+      console.log(`[IPC] Chat ${chatId} deleted`);
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to delete chat:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to delete chat' };
+    }
+  });
+
   ipcMain.handle(IPC_CHANNELS.DELETE_CHAT_AND_USER, async (_event, chatId: number, userPeerId: string) => {
     try {
       const p2pCore = getP2PCore();
@@ -2000,6 +2022,25 @@ function setupGroupHandlers(
     } catch (error) {
       console.error('[IPC] Failed to respond to group invite:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to respond to group invite' };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.REQUEST_GROUP_UPDATE, async (_event, chatId: number) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+      if (!Number.isInteger(chatId) || chatId <= 0) {
+        return { success: false, error: 'Invalid group chat ID' };
+      }
+
+      await p2pCore.messageHandler.requestGroupUpdate(chatId);
+      console.log(`[IPC] Requested group update for chat: ${chatId}`);
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to request group update:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to request group update' };
     }
   });
 

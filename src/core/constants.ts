@@ -330,6 +330,7 @@ export const MAX_MESSAGE_CONTENT_LENGTH = 1024;
 export const GROUP_INVITE_LIFETIME = 14 * 24 * 60 * 60 * 1000; // 14 days
 export const GROUP_MAX_MEMBERS = 10;
 export const GROUP_REINVITE_COOLDOWN_MS = 2 * 60 * 1000; // 2 minutes
+export const GROUP_STATE_RESYNC_REQUEST_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 // Keep aligned with direct offline limit for now; can be tuned independently later.
 export const GROUP_MAX_MESSAGES_PER_SENDER = OFFLINE_MESSAGE_LIMIT;
 export const GROUP_ACK_REPUBLISH_STARTUP_DELAY = 60 * 1000; // 60 seconds

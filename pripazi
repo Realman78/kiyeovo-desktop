@@ -18,8 +18,6 @@ we already went thourgh this and have not found the issue, I will have to invest
 
 13.5 Stavi u README da se poveca SCRYPTN_N
 
-12. kada pukne file transfer, download ostane zauvik na 0 - cant replicate
-
 ----------------------------
 
 3.2 creator dismantle group
@@ -27,6 +25,8 @@ we already went thourgh this and have not found the issue, I will have to invest
 3.2.3 request group update
 
 6. PUT to DHT - Key: /kiyeovo-offline/test-shared-secret/Fnct1g9tDqVB7vFXN2QLoDLAKPIKzruAARCVT4gFscY, Original: 1938 bytes -> je li ovaj bucket zapravo uvijek isti za sve trusted korisnike? ako stavi isti secret naravno. vjv da. treba to napomenut u warningu
+
+12. kada pukne file transfer, download ostane zauvik na 0 - cant replicate
 
 UI konstante neka se citaju iz settingsa kako nebi bilo preklapanja
 

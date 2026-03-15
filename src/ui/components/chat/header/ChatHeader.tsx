@@ -21,6 +21,7 @@ import { validateUsername } from "../../../utils/general";
 import { InviteUsersDialog, type GroupInviteDeliveryView } from "./InviteUsersDialog";
 import { INBOUND_INACTIVITY_WARNING_MS, MAX_GROUP_MEMBERS } from "../../../constants";
 import { getGroupStatusMessage, isGroupStatusWaiting } from "../../../utils/groupStatusMessages";
+import { getGroupCreatorLinkState } from "../../../utils/groupCreatorLinkHealth";
 
 type ChatHeaderProps = {
   username: string;
@@ -51,12 +52,14 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteChatAndUserConfirmOpen, setDeleteChatAndUserConfirmOpen] = useState(false);
+  const [deleteGroupChatConfirmOpen, setDeleteGroupChatConfirmOpen] = useState(false);
   const [leaveGroupConfirmOpen, setLeaveGroupConfirmOpen] = useState(false);
   const [isLeavingGroup, setIsLeavingGroup] = useState(false);
   const [kickMemberDialogOpen, setKickMemberDialogOpen] = useState(false);
   const [selectedKickPeerId, setSelectedKickPeerId] = useState<string | null>(null);
   const [isKickingMember, setIsKickingMember] = useState(false);
   const [inviteUsersDialogOpen, setInviteUsersDialogOpen] = useState(false);
+  const [isRequestingGroupUpdate, setIsRequestingGroupUpdate] = useState(false);
   const [isCurrentUserGroupCreator, setIsCurrentUserGroupCreator] = useState(false);
   const [groupInfoDialogOpen, setGroupInfoDialogOpen] = useState(false);
   const [groupInfoLoading, setGroupInfoLoading] = useState(false);
@@ -267,6 +270,11 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
     setDropdownOpen(false);
   };
 
+  const handleDeleteGroupChat = () => {
+    setDeleteGroupChatConfirmOpen(true);
+    setDropdownOpen(false);
+  };
+
   const handleEditUsername = () => {
     setEditUsernameModalOpen(true);
     setDropdownOpen(false);
@@ -401,6 +409,24 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
     }
   };
 
+  const handleRequestGroupUpdate = async () => {
+    if (!chatId || isRequestingGroupUpdate) return;
+    setDropdownOpen(false);
+    setIsRequestingGroupUpdate(true);
+    try {
+      const result = await window.kiyeovoAPI.requestGroupUpdate(chatId);
+      if (!result.success) {
+        toast.error(result.error || 'Failed to request group update');
+        return;
+      }
+      toast.info('Group update request sent');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to request group update');
+    } finally {
+      setIsRequestingGroupUpdate(false);
+    }
+  };
+
   const handleDebugTopics = async () => {
     try {
       const result = await window.kiyeovoAPI.getSubscribedTopics();
@@ -462,6 +488,27 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
     } finally {
       setIsDeleting(false);
       setDeleteConfirmOpen(false);
+    }
+  };
+
+  const confirmDeleteGroupChat = async () => {
+    if (!activeChat || activeChat.type !== 'group') return;
+
+    setIsDeleting(true);
+    try {
+      const result = await window.kiyeovoAPI.deleteChat(activeChat.id);
+      if (!result.success) {
+        toast.error(result.error || 'Failed to delete chat');
+        return;
+      }
+      dispatch(removeChat(activeChat.id));
+      toast.info('Chat deleted');
+      setDeleteGroupChatConfirmOpen(false);
+    } catch (error) {
+      console.error('Failed to delete group chat:', error);
+      toast.error('Failed to delete chat');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -558,6 +605,10 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
   };
 
   const isGroup = chatType === 'group';
+  const resolvedGroupStatus = groupStatus ?? activeChat?.groupStatus;
+  const groupCreatorLinkState = activeChat
+    ? getGroupCreatorLinkState(activeChat, chats, myPeerId)
+    : { broken: false };
   const isFetchingGroupUpdates = isGroup && activeChat?.isFetchingOffline === true;
   const groupStatusMessage = !isGroup ? null : getGroupStatusMessage(groupStatus);
   const showGroupStateMessage = Boolean(groupStatusMessage);
@@ -595,6 +646,18 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
   const leaveConfirmLabel = isCurrentUserGroupCreator
     ? (isLeavingGroup ? 'Disbanding...' : 'Disband Group')
     : (isLeavingGroup ? 'Leaving...' : 'Leave Group');
+  const canShowLeaveOrDisband = isCurrentUserGroupCreator
+    ? resolvedGroupStatus !== 'rekeying' && resolvedGroupStatus !== 'disbanded'
+    : resolvedGroupStatus === 'active';
+  const canRequestGroupUpdate = isGroup
+    && !isCurrentUserGroupCreator
+    && !groupCreatorLinkState.broken
+    && resolvedGroupStatus !== 'invited_pending'
+    && resolvedGroupStatus !== 'left'
+    && resolvedGroupStatus !== 'removed'
+    && resolvedGroupStatus !== 'disbanded';
+  const canDeleteGroupChat = isGroup
+    && (resolvedGroupStatus === 'disbanded' || groupCreatorLinkState.broken);
 
   return <div className={`${showGroupStateMessage || showDirectInactivityWarning ? 'h-20' : 'h-16'} px-6 flex items-center justify-between border-b border-border ${activeChat?.status === 'pending' ? "" : "bg-card/50"}`}>
     <div className="flex items-center gap-3">
@@ -699,6 +762,14 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
                 Check missed messages
               </DropdownMenuItem>
             )}
+            {canRequestGroupUpdate && (
+              <DropdownMenuItem
+                icon={<RefreshCw className="w-4 h-4" />}
+                onClick={handleRequestGroupUpdate}
+              >
+                {isRequestingGroupUpdate ? 'Requesting update...' : 'Request group update'}
+              </DropdownMenuItem>
+            )}
             {groupStatus === 'active' && isCurrentUserGroupCreator && (
               <DropdownMenuItem
                 icon={<UserPlus className="w-4 h-4" />}
@@ -715,12 +786,20 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
                 Remove member
               </DropdownMenuItem>
             )}
-            {groupStatus === 'active' && (
+            {canShowLeaveOrDisband && (
               <DropdownMenuItem
                 icon={<LogOut className="w-4 h-4" />}
                 onClick={handleLeaveGroup}
               >
                 {isCurrentUserGroupCreator ? 'Disband group' : 'Leave group'}
+              </DropdownMenuItem>
+            )}
+            {canDeleteGroupChat && (
+              <DropdownMenuItem
+                icon={<Trash2 className="w-4 h-4" />}
+                onClick={handleDeleteGroupChat}
+              >
+                Delete chat
               </DropdownMenuItem>
             )}
           </>
@@ -845,6 +924,43 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
               <Button
                 variant="destructive"
                 onClick={confirmDeleteChatAndUser}
+                disabled={isDeleting}
+              >
+                {isDeleting ? 'Deleting...' : 'Delete Chat'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <Dialog open={deleteGroupChatConfirmOpen} onOpenChange={setDeleteGroupChatConfirmOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Delete Group Chat</DialogTitle>
+              <DialogDescription>
+                Are you sure you want to delete this group chat? This action cannot be undone.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogBody>
+              <div className="flex items-start gap-2 p-3 bg-warning/10 border border-warning/30 rounded">
+                <AlertCircle className="w-5 h-5 text-warning mt-0.5 shrink-0" />
+                <div className="text-sm text-warning">
+                  <p className="font-semibold mb-1">Local action</p>
+                  <p className="text-xs">
+                    This only removes the chat from your device.
+                  </p>
+                </div>
+              </div>
+            </DialogBody>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setDeleteGroupChatConfirmOpen(false)}
+                disabled={isDeleting}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={confirmDeleteGroupChat}
                 disabled={isDeleting}
               >
                 {isDeleting ? 'Deleting...' : 'Delete Chat'}

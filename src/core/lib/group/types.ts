@@ -11,6 +11,7 @@ export const GroupMessageType = {
   GROUP_LEAVE_REQUEST: 'GROUP_LEAVE_REQUEST',
   GROUP_KICK: 'GROUP_KICK',
   GROUP_DISBAND: 'GROUP_DISBAND',
+  GROUP_STATE_RESYNC_REQUEST: 'GROUP_STATE_RESYNC_REQUEST',
   GROUP_MESSAGE: 'GROUP_MESSAGE',
 } as const;
 
@@ -118,6 +119,16 @@ export interface GroupDisband {
   type: typeof GroupMessageType.GROUP_DISBAND;
   groupId: string;
   creatorPeerId: string;
+  messageId: string;
+  timestamp: number;
+  signature: string;
+}
+
+export interface GroupStateResyncRequest {
+  type: typeof GroupMessageType.GROUP_STATE_RESYNC_REQUEST;
+  groupId: string;
+  requesterPeerId: string;
+  knownKeyVersion: number;
   messageId: string;
   timestamp: number;
   signature: string;
@@ -269,4 +280,5 @@ export type GroupControlMessage =
   | GroupControlAck
   | GroupLeaveRequest
   | GroupKick
-  | GroupDisband;
+  | GroupDisband
+  | GroupStateResyncRequest;

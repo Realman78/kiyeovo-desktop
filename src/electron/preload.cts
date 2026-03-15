@@ -412,6 +412,9 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     deleteAllMessages: async (chatId: number): Promise<{ success: boolean; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.DELETE_ALL_MESSAGES, chatId);
     },
+    deleteChat: async (chatId: number): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.DELETE_CHAT, chatId);
+    },
     deleteChatAndUser: async (chatId: number, userPeerId: string): Promise<{ success: boolean; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.DELETE_CHAT_AND_USER, chatId, userPeerId);
     },
@@ -490,6 +493,9 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     },
     respondToGroupInvite: async (groupId: string, accept: boolean): Promise<{ success: boolean; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.RESPOND_TO_GROUP_INVITE, groupId, accept);
+    },
+    requestGroupUpdate: async (chatId: number): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.REQUEST_GROUP_UPDATE, chatId);
     },
     leaveGroup: async (chatId: number): Promise<{ success: boolean; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.LEAVE_GROUP, chatId);

@@ -566,6 +566,7 @@ export const IPC_CHANNELS = {
   IS_USER_BLOCKED: 'user:isBlocked',
   GET_USER_INFO: 'user:getInfo',
   DELETE_ALL_MESSAGES: 'chat:deleteAllMessages',
+  DELETE_CHAT: 'chat:delete',
   DELETE_CHAT_AND_USER: 'chat:deleteChatAndUser',
   UPDATE_USERNAME: 'chat:updateUsername',
 
@@ -616,6 +617,7 @@ export const IPC_CHANNELS = {
   GET_GROUP_MEMBERS: 'group:getMembers',
   GET_GROUP_INVITES: 'group:getInvites',
   RESPOND_TO_GROUP_INVITE: 'group:respondToInvite',
+  REQUEST_GROUP_UPDATE: 'group:requestUpdate',
   LEAVE_GROUP: 'group:leave',
   DISBAND_GROUP: 'group:disband',
   KICK_GROUP_MEMBER: 'group:kickMember',

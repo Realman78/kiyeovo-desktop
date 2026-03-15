@@ -14,6 +14,7 @@ import {
   GROUP_INFO_REPUBLISH_STARTUP_DELAY,
   GROUP_INFO_REPUBLISH_INTERVAL,
   GROUP_INFO_REPUBLISH_JITTER,
+  GROUP_STATE_RESYNC_REQUEST_COOLDOWN_MS,
   OFFLINE_ACK_MAX_FUTURE_SKEW_MS,
   OFFLINE_MESSAGE_MAX_FUTURE_SKEW_MS,
   ERRORS,
@@ -82,6 +83,7 @@ export class MessageHandler {
   private groupInfoRepublishTimer: ReturnType<typeof setTimeout> | null = null;
   private groupInfoStartupTimer: ReturnType<typeof setTimeout> | null = null;
   private groupControlRetryState = new Map<string, { attempts: number; lastSeenAt: number; lastError: string }>();
+  private groupStateResyncRequestCooldowns = new Map<string, number>();
   private offlineCheckRunSeq = 0;
   private groupOfflineManager: GroupOfflineManager;
   private groupMessaging: GroupMessaging;
@@ -1218,6 +1220,65 @@ export class MessageHandler {
     this.groupMessaging.deactivateGroup(chat.group_id);
   }
 
+  async requestGroupUpdate(chatId: number): Promise<void> {
+    const chat = this.database.getChatByIdWithUsernameAndLastMsg(chatId, this.node.peerId.toString());
+    if (!chat) {
+      throw new Error('Group chat not found');
+    }
+    if (chat.type !== 'group' || !chat.group_id) {
+      throw new Error('Chat is not a group chat');
+    }
+    if (chat.group_creator_peer_id === this.node.peerId.toString()) {
+      throw new Error('Group creator cannot request group update');
+    }
+
+    const status = chat.group_status;
+    if (status === 'left' || status === 'removed' || status === 'disbanded') {
+      throw new Error(`Cannot request group update while group status is ${status}`);
+    }
+
+    const now = Date.now();
+    this.pruneGroupStateResyncRequestCooldowns(now);
+    const lastRequestAt = this.groupStateResyncRequestCooldowns.get(chat.group_id) ?? 0;
+    const elapsed = now - lastRequestAt;
+    if (elapsed < GROUP_STATE_RESYNC_REQUEST_COOLDOWN_MS) {
+      const waitSeconds = Math.ceil((GROUP_STATE_RESYNC_REQUEST_COOLDOWN_MS - elapsed) / 1000);
+      throw new Error(`Please wait ${waitSeconds}s before requesting another group update`);
+    }
+
+    const userIdentity = this.usernameRegistry.getUserIdentity();
+    if (!userIdentity) {
+      throw new Error('User identity not available');
+    }
+
+    const myPeerId = this.node.peerId.toString();
+    const myUser = this.database.getUserByPeerId(myPeerId);
+    const myUsername = myUser?.username || `user_${myPeerId.slice(-8)}`;
+    const responder = new GroupResponder({
+      node: this.node,
+      database: this.database,
+      userIdentity,
+      myPeerId,
+      myUsername,
+      onGroupChatActivated: this.onGroupChatActivated,
+      onGroupMembersUpdated: this.onGroupMembersUpdated,
+      onMessageReceived: this.onMessageReceived,
+      nudgeGroupRefetch: this.nudgePeerGroupRefetch.bind(this),
+    });
+
+    await responder.requestGroupStateResync(chat.group_id);
+    this.groupStateResyncRequestCooldowns.set(chat.group_id, now);
+  }
+
+  private pruneGroupStateResyncRequestCooldowns(now: number): void {
+    const maxAgeMs = GROUP_STATE_RESYNC_REQUEST_COOLDOWN_MS * 4;
+    for (const [groupId, timestamp] of this.groupStateResyncRequestCooldowns.entries()) {
+      if (now - timestamp > maxAgeMs) {
+        this.groupStateResyncRequestCooldowns.delete(groupId);
+      }
+    }
+  }
+
   async retryGroupOfflineBackup(chatId: number, messageId: string): Promise<{ success: boolean; error: string | null }> {
     try {
       await this.groupMessaging.retryOfflineBackup(chatId, messageId);
@@ -1948,6 +2009,12 @@ export class MessageHandler {
             });
           }
           console.log(`[GROUP] Processed GROUP_LEAVE_REQUEST from ${senderInfo.username}`);
+          break;
+        }
+        case GroupMessageType.GROUP_STATE_RESYNC_REQUEST: {
+          const creator = new GroupCreator(deps);
+          await creator.processStateResyncRequest(parsed as any, senderInfo.peer_id);
+          console.log(`[GROUP] Processed GROUP_STATE_RESYNC_REQUEST from ${senderInfo.username}`);
           break;
         }
         case GroupMessageType.GROUP_INVITE_DELIVERED_ACK: {

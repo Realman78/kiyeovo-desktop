@@ -13,6 +13,8 @@ import {
   GROUP_REINVITE_COOLDOWN_MS,
   GROUP_INFO_REPUBLISH_RETRY_BASE_DELAY,
   GROUP_ROTATION_IO_CONCURRENCY,
+  GROUP_MESSAGE_MAX_FUTURE_SKEW_MS,
+  GROUP_STATE_RESYNC_REQUEST_COOLDOWN_MS,
   getNetworkModeRuntime,
 } from '../../constants.js';
 import {
@@ -24,6 +26,7 @@ import {
   type GroupLeaveRequest,
   type GroupKick,
   type GroupDisband,
+  type GroupStateResyncRequest,
   type GroupWelcome,
   type GroupStateUpdate,
   type GroupControlAck,
@@ -66,6 +69,8 @@ export interface GroupCreateResult {
 export class GroupCreator {
   private deps: GroupCreatorDeps;
   private static reinviteCooldowns = new Map<string, number>();
+  private static stateResyncRequestCooldowns = new Map<string, number>();
+  private static readonly STATE_RESYNC_REQUEST_COOLDOWN_CACHE_MAX_ENTRIES = 1000;
   private readonly directOfflineBucketPrefix: string;
   private readonly groupOfflineBucketPrefix: string;
   private readonly groupInfoLatestPrefix: string;
@@ -630,6 +635,102 @@ export class GroupCreator {
     }
   }
 
+  async processStateResyncRequest(request: GroupStateResyncRequest, senderPeerId: string): Promise<void> {
+    const { database, myPeerId } = this.deps;
+    console.log(
+      `[GROUP][TRACE][RESYNC_REQ][IN] group=${request.groupId} from=${senderPeerId.slice(-8)} requester=${request.requesterPeerId.slice(-8)} msgId=${request.messageId} knownKeyVersion=${request.knownKeyVersion}`,
+    );
+
+    const chat = database.getChatByGroupId(request.groupId);
+    if (!chat || chat.created_by !== myPeerId) {
+      console.log(
+        `[GROUP][TRACE][RESYNC_REQ][DROP] group=${request.groupId} reason=not_creator chatExists=${!!chat}`,
+      );
+      return;
+    }
+    if (chat.group_status === 'disbanded') {
+      console.log(
+        `[GROUP][TRACE][RESYNC_REQ][DROP] group=${request.groupId} reason=disbanded`,
+      );
+      return;
+    }
+    if (request.requesterPeerId !== senderPeerId) {
+      console.log(
+        `[GROUP][TRACE][RESYNC_REQ][DROP] group=${request.groupId} msgId=${request.messageId} reason=peer_mismatch payloadPeer=${request.requesterPeerId.slice(-8)} sender=${senderPeerId.slice(-8)}`,
+      );
+      return;
+    }
+    if (!Number.isFinite(request.timestamp) || request.timestamp <= 0) {
+      console.log(
+        `[GROUP][TRACE][RESYNC_REQ][DROP] group=${request.groupId} msgId=${request.messageId} reason=invalid_timestamp`,
+      );
+      return;
+    }
+    if (request.timestamp > Date.now() + GROUP_MESSAGE_MAX_FUTURE_SKEW_MS) {
+      console.log(
+        `[GROUP][TRACE][RESYNC_REQ][DROP] group=${request.groupId} msgId=${request.messageId} reason=future_timestamp ts=${request.timestamp}`,
+      );
+      return;
+    }
+
+    const requester = database.getUserByPeerId(request.requesterPeerId);
+    if (!requester) {
+      console.log(
+        `[GROUP][TRACE][RESYNC_REQ][DROP] group=${request.groupId} reason=unknown_requester requester=${request.requesterPeerId.slice(-8)}`,
+      );
+      return;
+    }
+    this.verifySignature(request, requester.signing_public_key);
+
+    const participantIds = database.getChatParticipants(chat.id).map((participant) => participant.peer_id);
+    const isParticipant = participantIds.includes(request.requesterPeerId);
+    const hasPendingWelcome = database.getPendingAcksForGroup(request.groupId).some(
+      (pending) =>
+        pending.target_peer_id === request.requesterPeerId
+        && pending.message_type === 'GROUP_WELCOME',
+    );
+
+    if (!isParticipant && !hasPendingWelcome) {
+      console.log(
+        `[GROUP][TRACE][RESYNC_REQ][DROP] group=${request.groupId} requester=${request.requesterPeerId.slice(-8)} reason=not_member`,
+      );
+      return;
+    }
+
+    if ((chat.key_version ?? 0) <= 0) {
+      console.log(
+        `[GROUP][TRACE][RESYNC_REQ][SKIP] group=${request.groupId} requester=${request.requesterPeerId.slice(-8)} reason=no_active_key`,
+      );
+      return;
+    }
+
+    const now = Date.now();
+    this.pruneStateResyncRequestCooldowns(now);
+    const cooldownKey = `${request.groupId}|${request.requesterPeerId}`;
+    const lastRequestAt = GroupCreator.stateResyncRequestCooldowns.get(cooldownKey) ?? 0;
+    const elapsed = now - lastRequestAt;
+    if (elapsed < GROUP_STATE_RESYNC_REQUEST_COOLDOWN_MS) {
+      const waitMs = GROUP_STATE_RESYNC_REQUEST_COOLDOWN_MS - elapsed;
+      console.log(
+        `[GROUP][TRACE][RESYNC_REQ][RATE_LIMIT] group=${request.groupId} requester=${request.requesterPeerId.slice(-8)} waitMs=${waitMs}`,
+      );
+      return;
+    }
+    GroupCreator.stateResyncRequestCooldowns.set(cooldownKey, now);
+
+    try {
+      await this.resendCurrentStateToPeer(request.groupId, request.requesterPeerId, 'member_request');
+      console.log(
+        `[GROUP][TRACE][RESYNC_REQ][DONE] group=${request.groupId} requester=${request.requesterPeerId.slice(-8)} msgId=${request.messageId}`,
+      );
+    } catch (error: unknown) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[GROUP][TRACE][RESYNC_REQ][QUEUE_RETRY] group=${request.groupId} requester=${request.requesterPeerId.slice(-8)} reason=${reason}`,
+      );
+    }
+  }
+
   async kickMember(groupId: string, targetPeerId: string): Promise<void> {
     const { database, myPeerId } = this.deps;
     const eventTimestamp = Date.now();
@@ -746,6 +847,28 @@ export class GroupCreator {
       }
       database.transitionChatGroupStatus(chat.id, previousGroupStatus, 'kick_rotation_rollback');
       throw error;
+    }
+  }
+
+  private pruneStateResyncRequestCooldowns(now: number): void {
+    const maxAgeMs = GROUP_STATE_RESYNC_REQUEST_COOLDOWN_MS * 4;
+    for (const [key, timestamp] of GroupCreator.stateResyncRequestCooldowns.entries()) {
+      if (now - timestamp > maxAgeMs) {
+        GroupCreator.stateResyncRequestCooldowns.delete(key);
+      }
+    }
+
+    if (GroupCreator.stateResyncRequestCooldowns.size <= GroupCreator.STATE_RESYNC_REQUEST_COOLDOWN_CACHE_MAX_ENTRIES) {
+      return;
+    }
+
+    const sorted = Array.from(GroupCreator.stateResyncRequestCooldowns.entries())
+      .sort((a, b) => a[1] - b[1]);
+    const overflow = GroupCreator.stateResyncRequestCooldowns.size - GroupCreator.STATE_RESYNC_REQUEST_COOLDOWN_CACHE_MAX_ENTRIES;
+    for (let index = 0; index < overflow; index++) {
+      const entry = sorted[index];
+      if (!entry) break;
+      GroupCreator.stateResyncRequestCooldowns.delete(entry[0]);
     }
   }
 

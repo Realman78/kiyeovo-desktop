@@ -18,6 +18,7 @@ import {
   type GroupLeaveRequest,
   type GroupKick,
   type GroupDisband,
+  type GroupStateResyncRequest,
   type GroupControlAck,
   type GroupInfoLatest,
   type GroupInfoVersioned,
@@ -308,6 +309,47 @@ export class GroupResponder {
     this.applyLocalGroupLeaveState(chat.id, groupId);
     console.log(
       `[GROUP][TRACE][LEAVE][DONE] group=${groupId} creator=${creatorPeerId.slice(-8)} msgId=${signedLeaveRequest.messageId}`,
+    );
+  }
+
+  async requestGroupStateResync(groupId: string): Promise<void> {
+    const { database, myPeerId } = this.deps;
+    const chat = database.getChatByGroupId(groupId);
+    
+    if (!chat) throw new Error(`Group ${groupId} not found`);
+    if (chat.type !== 'group') throw new Error(`Chat ${groupId} is not a group`);
+    if (chat.group_status === 'invited_pending') {
+      throw new Error('Accept the invite first before requesting a group update');
+    }
+    if (chat.group_status === 'left' || chat.group_status === 'removed' || chat.group_status === 'disbanded') {
+      throw new Error(`Cannot request group update while group status is ${chat.group_status}`);
+    }
+
+    const creatorPeerId = chat.group_creator_peer_id;
+    if (!creatorPeerId) throw new Error(`Group ${groupId} has no creator`);
+    if (creatorPeerId === myPeerId) throw new Error('Group creator cannot request group update');
+
+    const isParticipant = database.getChatParticipants(chat.id).some((participant) => participant.peer_id === myPeerId);
+    if (!isParticipant && chat.group_status !== 'awaiting_activation') {
+      throw new Error('You are not an active member of this group');
+    }
+
+    const request: Omit<GroupStateResyncRequest, 'signature'> = {
+      type: GroupMessageType.GROUP_STATE_RESYNC_REQUEST,
+      groupId,
+      requesterPeerId: myPeerId,
+      knownKeyVersion: chat.key_version ?? 0,
+      messageId: randomUUID(),
+      timestamp: Date.now(),
+    };
+    const signedRequest: GroupStateResyncRequest = {
+      ...request,
+      signature: this.sign(request),
+    };
+
+    await this.sendControlMessageToPeer(creatorPeerId, signedRequest);
+    console.log(
+      `[GROUP][TRACE][RESYNC_REQ][SEND] group=${groupId} to=${creatorPeerId.slice(-8)} msgId=${signedRequest.messageId} knownKeyVersion=${signedRequest.knownKeyVersion}`,
     );
   }
 
