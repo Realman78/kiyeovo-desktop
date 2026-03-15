@@ -293,7 +293,7 @@ export class EncryptedUserIdentity {
 
                 if (keytarInstance && response.rememberMe && response.password && !response.useRecoveryPhrase) {
                     try {
-                        await keytarInstance.setPassword('kiyeovo', identity.id, response.password);
+                        await keytarInstance.setPassword('kiyeovo', keychainIdentityId, response.password);
                         console.log('Stored password in OS keychain');
                     } catch (error) {
                         const message = error instanceof Error ? error.message : String(error);
