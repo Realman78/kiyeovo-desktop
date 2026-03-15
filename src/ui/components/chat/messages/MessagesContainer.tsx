@@ -61,6 +61,10 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
   const isLoadingMoreRef = useRef(false);
   const activeChatIdRef = useRef<number | null>(null);
   const loadTokenRef = useRef(0);
+  const topZoneActiveRef = useRef(false);
+  const hasUserInteractedRef = useRef(false);
+  const suppressTopLoadRef = useRef(false);
+  const suppressTopLoadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const myPeerId = useSelector((state: RootState) => state.user.peerId);
   const activeChat = useSelector((state: RootState) => state.chat.activeChat);
   const activePendingKeyExchange = useSelector((state: RootState) => state.chat.activePendingKeyExchange);
@@ -70,6 +74,7 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
   const [error, setError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [isScrollable, setIsScrollable] = useState(true);
   const offsetRef = useRef(0);
   const showEmptyState = !isPending && messages.length === 0;
 
@@ -88,6 +93,30 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
     return `${message.content} at ${formatTimestampToHourMinute(message.eventTimestamp)}.${normalized.includes('joined the group') ? ' This member can only see your messages after this system message, not strictly after the join time.' : ''}`;
   };
 
+  const suppressTopLoadTemporarily = useCallback((durationMs = 180) => {
+    suppressTopLoadRef.current = true;
+    if (suppressTopLoadTimerRef.current) {
+      clearTimeout(suppressTopLoadTimerRef.current);
+    }
+    suppressTopLoadTimerRef.current = setTimeout(() => {
+      suppressTopLoadRef.current = false;
+      suppressTopLoadTimerRef.current = null;
+    }, durationMs);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (suppressTopLoadTimerRef.current) {
+        clearTimeout(suppressTopLoadTimerRef.current);
+        suppressTopLoadTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  const markUserInteraction = useCallback(() => {
+    hasUserInteractedRef.current = true;
+  }, []);
+
   // Initial fetch
   useEffect(() => {
     const chatId = activeChat?.id ?? null;
@@ -99,6 +128,9 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
     setIsLoadingMore(false);
     isLoadingMoreRef.current = false;
     offsetRef.current = 0;
+    topZoneActiveRef.current = false;
+    hasUserInteractedRef.current = false;
+    suppressTopLoadRef.current = false;
 
     const fetchMessages = async () => {
       if (!chatId) return;
@@ -144,6 +176,7 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
           // Restore scroll position after DOM update
           requestAnimationFrame(() => {
             if (container) {
+              suppressTopLoadTemporarily();
               const newScrollHeight = container.scrollHeight;
               container.scrollTop = newScrollHeight - prevScrollHeight;
             }
@@ -159,14 +192,46 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
       isLoadingMoreRef.current = false;
       setIsLoadingMore(false);
     }
-  }, [activeChat?.id, hasMore, dispatch]);
+  }, [activeChat?.id, hasMore, dispatch, suppressTopLoadTemporarily]);
+
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) {
+      setIsScrollable(true);
+      return;
+    }
+
+    let frameId: number | null = null;
+    const updateScrollable = () => {
+      setIsScrollable(container.scrollHeight > container.clientHeight + 1);
+    };
+
+    frameId = requestAnimationFrame(updateScrollable);
+    const onResize = () => updateScrollable();
+    window.addEventListener('resize', onResize);
+
+    return () => {
+      if (frameId !== null) {
+        cancelAnimationFrame(frameId);
+      }
+      window.removeEventListener('resize', onResize);
+    };
+  }, [activeChat?.id, messages.length, isLoadingMore, hasMore, showEmptyState]);
 
   const handleScroll = useCallback(() => {
     const container = scrollContainerRef.current;
-    if (!container || !hasMore || isLoadingMoreRef.current) return;
+    if (!container) return;
+
     const thresholdPx = Math.min(120, Math.max(24, container.clientHeight * 0.08));
-    if (container.scrollTop <= thresholdPx) {
-      console.log("LOADING MORE")
+    const inTopZone = container.scrollTop <= thresholdPx;
+    const wasInTopZone = topZoneActiveRef.current;
+    topZoneActiveRef.current = inTopZone;
+
+    if (suppressTopLoadRef.current || !hasUserInteractedRef.current) {
+      return;
+    }
+
+    if (!wasInTopZone && inTopZone && hasMore && !isLoadingMoreRef.current) {
       void loadMore();
     }
   }, [hasMore, loadMore]);
@@ -193,9 +258,10 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
       return;
     }
     if (messagesEndRef.current) {
+      suppressTopLoadTemporarily();
       messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
-  }, [messages]);
+  }, [messages, suppressTopLoadTemporarily]);
 
   const isTrustedOutOfBand = activeChat?.trusted_out_of_band;
   let previousSenderPeerId: string | null = null;
@@ -294,12 +360,31 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
     }
   }, [activeChat, dispatch, toast]);
 
-  return <div ref={scrollContainerRef} onScroll={handleScroll} className={`flex-1 overflow-y-auto p-6 space-y-2`}>
+  return <div
+    ref={scrollContainerRef}
+    onScroll={handleScroll}
+    onWheel={markUserInteraction}
+    onTouchStart={markUserInteraction}
+    onPointerDown={markUserInteraction}
+    className={`flex-1 overflow-y-auto p-6 space-y-2`}
+  >
     {/* Sentinel for loading older messages */}
-    {hasMore && !showEmptyState && (
+    {hasMore && !showEmptyState && (isLoadingMore || !isScrollable) && (
       <div className="flex justify-center py-2">
         {isLoadingMore && (
           <span className="text-xs text-muted-foreground">Loading older messages...</span>
+        )}
+        {!isLoadingMore && !isScrollable && (
+          <button
+            type="button"
+            className="text-xs rounded border border-border px-3 py-1 text-muted-foreground hover:text-foreground hover:border-foreground/40 transition-colors"
+            onClick={() => {
+              markUserInteraction();
+              void loadMore();
+            }}
+          >
+            Load older messages
+          </button>
         )}
       </div>
     )}
