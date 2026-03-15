@@ -255,6 +255,9 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     restartApp: async (): Promise<{ success: boolean; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.RESTART_APP);
     },
+    quitApp: async (): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.QUIT_APP);
+    },
 
     deleteAccountAndData: async (): Promise<{ success: boolean; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.DELETE_ACCOUNT_AND_DATA);

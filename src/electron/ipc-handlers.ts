@@ -2001,6 +2001,16 @@ function setupAppHandlers(ipcMain: IpcMain, getP2PCore: () => P2PCore | null): v
     }
   });
 
+  ipcMain.handle(IPC_CHANNELS.QUIT_APP, async () => {
+    try {
+      app.quit();
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to quit app:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to quit app' };
+    }
+  });
+
   ipcMain.handle(IPC_CHANNELS.DELETE_ACCOUNT_AND_DATA, async () => {
     try {
       const p2pCore = getP2PCore();

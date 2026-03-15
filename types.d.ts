@@ -174,6 +174,7 @@ declare global {
                 dnsResolution: 'tor' | 'system';
             }) => Promise<{ success: boolean; error: string | null }>;
             restartApp: () => Promise<{ success: boolean; error: string | null }>;
+            quitApp: () => Promise<{ success: boolean; error: string | null }>;
             deleteAccountAndData: () => Promise<{ success: boolean; error: string | null }>;
             backupDatabase: (backupPath: string) => Promise<{ success: boolean; error: string | null }>;
             restoreDatabase: (backupPath: string) => Promise<{ success: boolean; error: string | null }>;

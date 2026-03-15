@@ -580,6 +580,7 @@ export const IPC_CHANNELS = {
   GET_APP_CONFIG: 'settings:getAppConfig',
   SET_APP_CONFIG: 'settings:setAppConfig',
   RESTART_APP: 'app:restart',
+  QUIT_APP: 'app:quit',
   DELETE_ACCOUNT_AND_DATA: 'app:deleteAccountAndData',
   BACKUP_DATABASE: 'app:backupDatabase',
   RESTORE_DATABASE: 'app:restoreDatabase',

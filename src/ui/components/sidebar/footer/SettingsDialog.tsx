@@ -7,7 +7,7 @@ import {
   DialogBody,
 } from "../../ui/Dialog";
 import { Button } from "../../ui/Button";
-import { Bell, BellOff, FolderOpen, Info, Trash2, Database, Settings } from "lucide-react";
+import { Bell, BellOff, FolderOpen, Info, Trash2, Database, Settings, RefreshCw, Power } from "lucide-react";
 import { KiyeovoDialog } from "../header/KiyeovoDialog";
 import { TorSettingsSection } from "./TorSettingsSection";
 import { DeleteAccountDialog } from "./DeleteAccountDialog";
@@ -48,6 +48,8 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
   const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
   const [configDialogOpen, setConfigDialogOpen] = useState(false);
   const [networkMode, setNetworkMode] = useState<NetworkMode>('fast');
+  const [isSwitchingMode, setIsSwitchingMode] = useState(false);
+  const [isQuittingApp, setIsQuittingApp] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -199,6 +201,41 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
     setTorConfirmOpen(false);
   };
 
+  const handleSwitchNetworkMode = async () => {
+    if (isSwitchingMode || isQuittingApp) return;
+
+    const targetMode: NetworkMode = networkMode === 'anonymous' ? 'fast' : 'anonymous';
+    setIsSwitchingMode(true);
+    try {
+      const setResult = await window.kiyeovoAPI.setNetworkMode(targetMode);
+      if (!setResult.success) {
+        toast.error(setResult.error || 'Failed to switch network mode');
+        return;
+      }
+      setNetworkMode(targetMode);
+      await window.kiyeovoAPI.restartApp();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to switch network mode');
+    } finally {
+      setIsSwitchingMode(false);
+    }
+  };
+
+  const handleQuitApp = async () => {
+    if (isQuittingApp || isSwitchingMode) return;
+    setIsQuittingApp(true);
+    try {
+      const result = await window.kiyeovoAPI.quitApp();
+      if (!result.success) {
+        toast.error(result.error || 'Failed to quit app');
+        setIsQuittingApp(false);
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to quit app');
+      setIsQuittingApp(false);
+    }
+  };
+
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
@@ -288,6 +325,30 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
 
                 <div className="flex items-center justify-between p-3 border border-border rounded-lg transition-colors">
                   <div className="flex items-center gap-3">
+                    <RefreshCw className="w-5 h-5 text-primary" />
+                    <div>
+                      <p className="text-sm font-medium text-foreground">
+                        Switch Mode
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Current: {networkMode === 'anonymous' ? 'Anonymous' : 'Fast'} (restarts app)
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => { void handleSwitchNetworkMode(); }}
+                    disabled={isSwitchingMode || isQuittingApp}
+                  >
+                    {isSwitchingMode
+                      ? 'Switching...'
+                      : `Switch to ${networkMode === 'anonymous' ? 'Fast' : 'Anonymous'}`}
+                  </Button>
+                </div>
+
+                <div className="flex items-center justify-between p-3 border border-border rounded-lg transition-colors">
+                  <div className="flex items-center gap-3">
                     <Settings className="w-5 h-5 text-primary" />
                     <div>
                       <p className="text-sm font-medium text-foreground">
@@ -348,6 +409,29 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
                     className="shrink-0"
                   >
                     Delete
+                  </Button>
+                </div>
+
+                <div className="flex items-center justify-between p-3 border border-border rounded-lg transition-colors">
+                  <div className="flex items-center gap-3 flex-1">
+                    <Power className="w-5 h-5 text-primary shrink-0" />
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-foreground">
+                        Quit App
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Close Kiyeovo completely
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => { void handleQuitApp(); }}
+                    disabled={isQuittingApp || isSwitchingMode}
+                    className="shrink-0"
+                  >
+                    {isQuittingApp ? 'Quitting...' : 'Quit'}
                   </Button>
                 </div>
               </div>
