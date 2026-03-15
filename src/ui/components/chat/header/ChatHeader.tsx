@@ -585,7 +585,9 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
   const groupInfoCreatedAt = groupInfoDetails?.createdAt
     ? groupInfoDetails.createdAt.toLocaleString()
     : 'Unknown';
-  const groupInfoMemberCount = groupMembers.length + 1;
+  const confirmedGroupMemberCount = groupMembers.filter((member) => member.status === 'confirmed').length;
+  const invitedOrPendingGroupMemberCount = groupMembers.filter((member) => member.status !== 'confirmed').length;
+  const groupInfoMemberCount = confirmedGroupMemberCount + 1; // Include current user
   const leaveDialogTitle = isCurrentUserGroupCreator ? 'Disband Group' : 'Leave Group';
   const leaveDialogDescription = isCurrentUserGroupCreator
     ? 'Are you sure you want to disband this group?'
@@ -897,7 +899,7 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
                 Details about this group and its members.
               </DialogDescription>
             </DialogHeader>
-            <DialogBody className="space-y-4">
+            <DialogBody className="max-h-[60vh] overflow-y-auto space-y-4">
               {groupInfoLoading ? (
                 <div className="flex items-center justify-center py-8">
                   <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
@@ -908,10 +910,6 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
                     <div className="flex justify-between gap-4">
                       <span className="text-muted-foreground">Name</span>
                       <span className="font-medium text-right">{username}</span>
-                    </div>
-                    <div className="flex justify-between gap-4">
-                      <span className="text-muted-foreground">Group ID</span>
-                      <span className="font-mono text-xs text-right break-all">{groupInfoDetails?.groupId || 'Unknown'}</span>
                     </div>
                     <div className="flex justify-between gap-4">
                       <span className="text-muted-foreground">Status</span>
@@ -936,6 +934,10 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
                     <div className="flex justify-between gap-4">
                       <span className="text-muted-foreground">Members</span>
                       <span className="text-right">{groupInfoMemberCount}</span>
+                    </div>
+                    <div className="flex justify-between gap-4">
+                      <span className="text-muted-foreground">Invited/Pending</span>
+                      <span className="text-right">{invitedOrPendingGroupMemberCount}</span>
                     </div>
                   </div>
                   <div className="border-t border-border pt-3 space-y-2">
