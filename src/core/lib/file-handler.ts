@@ -611,11 +611,24 @@ export class FileHandler {
             console.log(`File transfer accepted, receiving chunks...`);
             offerAccepted = true;
             if (!this.tryBeginPeerTransfer(senderPeerId, offerMsg.fileId, 'receive')) {
+              const busyReason = 'Another file transfer is already active with this peer';
+              this.database.updateMessageTransfer(offerMsg.fileId, {
+                transfer_status: 'failed',
+                transfer_progress: 0,
+                transfer_error: busyReason,
+              });
+              if (this.onFileTransferFailed && chat) {
+                this.onFileTransferFailed({
+                  chatId: chat.id,
+                  messageId: offerMsg.fileId,
+                  error: busyReason,
+                });
+              }
               const busyResponse: FileOfferResponse = {
                 type: FILE_OFFER_RESPONSE,
                 fileId: offerMsg.fileId,
                 accepted: false,
-                reason: 'Another file transfer is already active with this peer',
+                reason: busyReason,
               };
               writable.push(this.#encodeMessage(busyResponse));
               return;

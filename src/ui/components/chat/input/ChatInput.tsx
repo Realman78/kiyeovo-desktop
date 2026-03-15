@@ -32,6 +32,7 @@ export const ChatInput: FC = () => {
     const myPeerId = useSelector((state: RootState) => state.user.peerId);
     const myUsername = useSelector((state: RootState) => state.user.username);
     const isTorActive = useSelector((state: RootState) => state.user.torEnabled);
+    const messages = useSelector((state: RootState) => state.chat.messages);
     const isBlocked = activeChat?.blocked || false;
     const [groupHasOtherMembers, setGroupHasOtherMembers] = useState(true);
 
@@ -75,6 +76,11 @@ export const ChatInput: FC = () => {
         : activeChat?.type === 'group' && !groupHasOtherMembers
             ? 'Cannot send messages to an empty group'
             : null;
+    const hasActiveFileTransfer = !!activeChat && activeChat.type === 'direct' && messages.some((m) =>
+        m.chatId === activeChat.id &&
+        m.messageType === 'file' &&
+        (m.transferStatus === 'in_progress' || (m.transferStatus === 'pending' && m.senderPeerId === myPeerId))
+    );
     const isDisabled = isBlocked || !!groupBlockedReason;
     const sendQueueRef = useRef<Record<number, PendingSendJob[]>>({});
     const processingQueueRef = useRef<Record<number, boolean>>({});
@@ -374,7 +380,7 @@ export const ChatInput: FC = () => {
                 type="button"
                 variant="ghost"
                 size="icon"
-                disabled={isDisabled}
+                disabled={isDisabled || hasActiveFileTransfer}
                 onClick={() => setFileDialogOpen(true)}
                 className="text-sidebar-foreground hover:text-foreground"
             >
@@ -405,6 +411,8 @@ export const ChatInput: FC = () => {
             open={fileDialogOpen}
             onOpenChange={setFileDialogOpen}
             onSend={handleSendFile}
+            transferBlocked={hasActiveFileTransfer}
+            transferBlockedReason="Wait for the current file transfer to finish before selecting another file."
         />
     </>
 }

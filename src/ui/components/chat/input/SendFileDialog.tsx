@@ -15,9 +15,17 @@ interface SendFileDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSend: (filePath: string, fileName: string, fileSize: number) => Promise<void>;
+  transferBlocked?: boolean;
+  transferBlockedReason?: string;
 }
 
-export const SendFileDialog: React.FC<SendFileDialogProps> = ({ open, onOpenChange, onSend }) => {
+export const SendFileDialog: React.FC<SendFileDialogProps> = ({
+  open,
+  onOpenChange,
+  onSend,
+  transferBlocked = false,
+  transferBlockedReason = 'Another file transfer is already active in this chat.',
+}) => {
   const maxFileSize = useAppSelector((state) => state.appConfig.config.maxFileSize);
   const [selectedFile, setSelectedFile] = useState<{ path: string; name: string; size: number } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -49,6 +57,7 @@ export const SendFileDialog: React.FC<SendFileDialogProps> = ({ open, onOpenChan
   }, [selectedFile, maxFileSize]);
 
   const handleBrowse = async () => {
+    if (transferBlocked) return;
     try {
       const result = await window.kiyeovoAPI.showOpenDialog({
         title: 'Select File',
@@ -82,7 +91,7 @@ export const SendFileDialog: React.FC<SendFileDialogProps> = ({ open, onOpenChan
   };
 
   const handleSend = () => {
-    if (!selectedFile || sizeError) return;
+    if (transferBlocked || !selectedFile || sizeError) return;
 
     const filePath = selectedFile.path;
     const fileName = selectedFile.name;
@@ -108,6 +117,11 @@ export const SendFileDialog: React.FC<SendFileDialogProps> = ({ open, onOpenChan
         </DialogHeader>
 
         <DialogBody>
+          {transferBlocked && (
+            <div className="border border-amber-500/30 rounded-lg p-3 bg-amber-500/10 text-amber-300 text-sm mb-3">
+              {transferBlockedReason}
+            </div>
+          )}
           {selectedFile ? (
             <div className="border border-border rounded-lg p-4 bg-muted">
               <div className="flex items-start justify-between">
@@ -130,7 +144,7 @@ export const SendFileDialog: React.FC<SendFileDialogProps> = ({ open, onOpenChan
           ) : (
             <div className="border-2 border-dashed border-border rounded-lg p-8 text-center">
               <p className="text-muted-foreground mb-3">No file selected</p>
-              <Button onClick={handleBrowse} variant="outline">
+              <Button onClick={handleBrowse} variant="outline" disabled={transferBlocked}>
                 <FileUp className="w-4 h-4 mr-2" />
                 Browse Files
               </Button>
@@ -148,7 +162,7 @@ export const SendFileDialog: React.FC<SendFileDialogProps> = ({ open, onOpenChan
           </Button>
           <Button
             onClick={handleSend}
-            disabled={!selectedFile || isLoading || !!sizeError}
+            disabled={transferBlocked || !selectedFile || isLoading || !!sizeError}
           >
             {isLoading ? 'Sending...' : 'Send'}
           </Button>
