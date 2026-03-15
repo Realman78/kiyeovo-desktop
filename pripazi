@@ -1,11 +1,7 @@
 1.0.4 delete user & chat, ako si creator nemores ih vise izbacit iz tog chata - izgleda da moren ipak
   - jako cudno kada alice zbrise chada i onda ga izbaci iz grupe
 
-MAJOR: Je li prva poruka u direct conversationu ne enkriptirana??
-
 1.0.5 promijeni ikonu aplikacije ovisno o modu
-
-1.0.6 dodaj debounce na inpute
 
 ux improvement - dodaj switch mode i quit app u settingse
 

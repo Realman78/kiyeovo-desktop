@@ -57,7 +57,6 @@ function mapDbMessage(msg: Message & { sender_username?: string }): ChatMessage 
 export const MessagesContainer = ({ messages, isPending }: MessagesContainerProps) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const sentinelRef = useRef<HTMLDivElement>(null);
   const skipNextAutoScrollRef = useRef(false);
   const isLoadingMoreRef = useRef(false);
   const activeChatIdRef = useRef<number | null>(null);
@@ -72,6 +71,7 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
   const [hasMore, setHasMore] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const offsetRef = useRef(0);
+  const showEmptyState = !isPending && messages.length === 0;
 
   const getMembershipInfoTooltip = (message: ChatMessage): string | null => {
     if (message.messageType !== 'system' || !message.eventTimestamp) {
@@ -161,24 +161,15 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
     }
   }, [activeChat?.id, hasMore, dispatch]);
 
-  // IntersectionObserver for sentinel at top
-  useEffect(() => {
-    const sentinel = sentinelRef.current;
+  const handleScroll = useCallback(() => {
     const container = scrollContainerRef.current;
-    if (!sentinel || !container) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0].isIntersecting) {
-          void loadMore();
-        }
-      },
-      { root: container, threshold: 0 }
-    );
-
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [loadMore]);
+    if (!container || !hasMore || isLoadingMoreRef.current) return;
+    const thresholdPx = Math.min(120, Math.max(24, container.clientHeight * 0.08));
+    if (container.scrollTop <= thresholdPx) {
+      console.log("LOADING MORE")
+      void loadMore();
+    }
+  }, [hasMore, loadMore]);
 
   useEffect(() => {
     if (activeChat?.justCreated && messages.length === 0) {
@@ -206,7 +197,6 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
     }
   }, [messages]);
 
-  const showEmptyState = !isPending && messages.length === 0;
   const isTrustedOutOfBand = activeChat?.trusted_out_of_band;
   let previousSenderPeerId: string | null = null;
   let senderStreak = 0;
@@ -304,10 +294,10 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
     }
   }, [activeChat, dispatch, toast]);
 
-  return <div ref={scrollContainerRef} className={`flex-1 overflow-y-auto p-6 space-y-2`}>
+  return <div ref={scrollContainerRef} onScroll={handleScroll} className={`flex-1 overflow-y-auto p-6 space-y-2`}>
     {/* Sentinel for loading older messages */}
     {hasMore && !showEmptyState && (
-      <div ref={sentinelRef} className="flex justify-center py-2">
+      <div className="flex justify-center py-2">
         {isLoadingMore && (
           <span className="text-xs text-muted-foreground">Loading older messages...</span>
         )}
