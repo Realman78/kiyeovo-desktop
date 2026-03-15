@@ -4,6 +4,7 @@ import type { ConversationSession, PendingKeyExchange } from '../types.js';
 export class SessionManager {
   private conversationSessions: Map<string, ConversationSession> = new Map();
   private pendingKeyExchanges: Map<string, PendingKeyExchange> = new Map();
+  private sessionPins: Map<string, number> = new Map();
   private readonly SESSION_TIMEOUT = 5 * 60 * 1000; // 5 minutes
 
   getSession(peerId: string): ConversationSession | null {
@@ -47,6 +48,7 @@ export class SessionManager {
       session.receivingKey.fill(0);
       this.conversationSessions.delete(peerId);
     }
+    this.sessionPins.delete(peerId);
   }
 
   /**
@@ -79,9 +81,33 @@ export class SessionManager {
     }
   }
 
+  pinSession(peerId: string): boolean {
+    if (!this.conversationSessions.has(peerId)) {
+      return false;
+    }
+    this.sessionPins.set(peerId, (this.sessionPins.get(peerId) ?? 0) + 1);
+    return true;
+  }
+
+  unpinSession(peerId: string): void {
+    const current = this.sessionPins.get(peerId) ?? 0;
+    if (current <= 1) {
+      this.sessionPins.delete(peerId);
+      return;
+    }
+    this.sessionPins.set(peerId, current - 1);
+  }
+
+  isSessionPinned(peerId: string): boolean {
+    return (this.sessionPins.get(peerId) ?? 0) > 0;
+  }
+
   cleanupExpiredSessions(): void {
     const now = Date.now();
     for (const [peerId, session] of this.conversationSessions.entries()) {
+      if (this.isSessionPinned(peerId)) {
+        continue;
+      }
       if (now - session.lastUsed > this.SESSION_TIMEOUT) {
         console.log(`Cleaning up expired session for ${peerId.slice(0, 8)}...`);
         this.clearSession(peerId);
@@ -129,6 +155,7 @@ export class SessionManager {
     for (const peerId of this.pendingKeyExchanges.keys()) {
       this.removePendingKeyExchange(peerId);
     }
+    this.sessionPins.clear();
   }
 
   /**

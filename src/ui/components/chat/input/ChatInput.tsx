@@ -330,8 +330,6 @@ export const ChatInput: FC = () => {
                     status,
                     transferError: result.error || (status === 'expired' ? 'Offer expired' : 'Offer rejected')
                 }));
-            } else {
-                toast.success('File transfer started');
             }
         } catch (error) {
             console.error('Error sending file:', error);

@@ -382,6 +382,9 @@ const chatSlice = createSlice({
         }
       }
       if (message) {
+        if (message.transferStatus === 'completed' || message.transferStatus === 'failed' || message.transferStatus === 'expired' || message.transferStatus === 'rejected') {
+          return;
+        }
         message.fileName = action.payload.filename;
         message.fileSize = action.payload.size;
         message.transferProgress = action.payload.progress;

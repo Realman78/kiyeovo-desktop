@@ -125,9 +125,9 @@ export class FileHandler {
     }, FILE_REJECTION_COUNTER_RESET_INTERVAL);
   }
 
-  // Emit for first 5 chunks, then only every 10% increment
+  // Emit for first 10 chunks, then only every 10% increment
   #shouldEmitProgress(currentChunk: number, totalChunks: number, lastEmittedPercentage: number): { shouldEmit: boolean; newPercentage: number } {
-    if (currentChunk <= 5) {
+    if (currentChunk <= 10) {
       const percentage = Math.floor((currentChunk / totalChunks) * 100);
       return { shouldEmit: true, newPercentage: percentage };
     }
@@ -254,6 +254,7 @@ export class FileHandler {
     let offer: FileOffer | null = null;
     let chat: Chat | null = null;
     let session: ConversationSession | null = null;
+    let pinnedSessionPeerId: string | null = null;
     let chunkTimeout: NodeJS.Timeout | null = null;
     let lastEmittedPercentage = 0;
 
@@ -458,6 +459,18 @@ export class FileHandler {
               writable.push(this.#encodeMessage(response));
               return;
             }
+            if (!this.messageHandler.getSessionManager().pinSession(senderPeerId)) {
+              const response: FileOfferResponse = {
+                type: FILE_OFFER_RESPONSE,
+                fileId: offer.fileId,
+                accepted: false,
+                reason: 'No active session',
+              };
+              writable.push(this.#encodeMessage(response));
+              return;
+            }
+            pinnedSessionPeerId = senderPeerId;
+            this.messageHandler.getSessionManager().updateSessionUsage(senderPeerId);
 
             // Persist pending offer as a message (single row per file)
             await this.database.createMessage({
@@ -587,6 +600,7 @@ export class FileHandler {
             const encrypted = Buffer.from(fileChunk.data, 'base64');
             const cipher = xchacha20poly1305(session.receivingKey, nonce);
             const decrypted = Buffer.from(cipher.decrypt(encrypted));
+            this.messageHandler.getSessionManager().updateSessionUsage(senderPeerId);
 
             // Verify chunk hash
             const actualHash = blake3(decrypted).toString('hex');
@@ -730,6 +744,9 @@ export class FileHandler {
       if (offer) {
         this.pendingFileAcceptances.delete(offer.fileId);
       }
+      if (pinnedSessionPeerId) {
+        this.messageHandler.getSessionManager().unpinSession(pinnedSessionPeerId);
+      }
 
       writable.end();
       await sinkPromise;
@@ -812,10 +829,17 @@ export class FileHandler {
     let chat: any = null;
     let fileId: string = '';
     let stream: Stream | null = null;
+    let pinnedSessionPeerId: string | null = null;
     try {
       const { session, peerId: targetPeerId } = await this.messageHandler.ensureUserSession(targetUsername, '', true);
+      const targetPeerIdStr = targetPeerId.toString();
+      if (!this.messageHandler.getSessionManager().pinSession(targetPeerIdStr)) {
+        throw new Error('No active session');
+      }
+      pinnedSessionPeerId = targetPeerIdStr;
+      this.messageHandler.getSessionManager().updateSessionUsage(targetPeerIdStr);
       console.log("SESSION ESTABLISHED", session, targetPeerId)
-      chat = this.database.getChatByPeerId(targetPeerId.toString());
+      chat = this.database.getChatByPeerId(targetPeerIdStr);
       if (chat?.type !== 'direct' || !chat.id) throw new Error('Chat not found');
 
       // Validate file size before loading metadata
@@ -844,6 +868,7 @@ export class FileHandler {
       const activeStream = stream;
       const writable = pushable();
       const sinkPromise = pipe(writable, activeStream.sink);
+      let transferQueued = false;
 
       try {
         await this.database.createMessage({
@@ -925,12 +950,14 @@ export class FileHandler {
           throw new Error(`File rejected: ${reason}`);
         }
         console.log(`File accepted, sending chunks...`);
+        this.messageHandler.getSessionManager().updateSessionUsage(targetPeerIdStr);
 
         // Send chunks sequentially
         const chunks = this.#createEncryptedChunks(metadata.buffer, fileId, session);
         let lastEmittedPercentage = 0;
         for (const chunk of chunks) {
           writable.push(this.#encodeMessage(chunk));
+          this.messageHandler.getSessionManager().updateSessionUsage(targetPeerIdStr);
           console.log(`Sent chunk ${chunk.index + 1}/${chunks.length}`);
 
           // Emit progress event (throttled: first 5 chunks, then every 10%)
@@ -955,6 +982,13 @@ export class FileHandler {
         }
 
         console.log(`All chunks sent`);
+        transferQueued = true;
+      } finally {
+        writable.end();
+        await sinkPromise;
+      }
+
+      if (transferQueued) {
         const messageId = fileId;
         this.database.updateMessageTransfer(messageId, {
           file_name: metadata.filename,
@@ -964,8 +998,6 @@ export class FileHandler {
           transfer_progress: 100
         });
 
-
-        // Emit completion event
         if (this.onFileTransferComplete) {
           this.onFileTransferComplete({
             chatId: chat.id,
@@ -973,9 +1005,6 @@ export class FileHandler {
             filePath: filePath // For sender, filePath is the source file
           });
         }
-      } finally {
-        writable.end();
-        await sinkPromise;
       }
     } catch (error: unknown) {
       const errorText = error instanceof Error ? error.message : 'Unknown error';
@@ -1017,6 +1046,10 @@ export class FileHandler {
 
       generalErrorHandler(error);
       throw error;
+    } finally {
+      if (pinnedSessionPeerId) {
+        this.messageHandler.getSessionManager().unpinSession(pinnedSessionPeerId);
+      }
     }
   }
 }
