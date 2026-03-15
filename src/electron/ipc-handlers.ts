@@ -13,7 +13,7 @@ import { ChatDatabase } from '../core/lib/db/database.js';
 import { DEFAULT_FAST_RELAY_MULTIADDRS } from '../core/default-relay-nodes.js';
 import { ensureAppDataDir } from '../core/utils/miscellaneous.js';
 import { homedir } from 'os';
-import { basename, join } from 'path';
+import { basename, isAbsolute, join, resolve as resolvePath } from 'path';
 import { copyFile, stat } from 'fs/promises';
 
 function requestAppRestart(): void {
@@ -2343,8 +2343,9 @@ function setupFileTransferHandlers(
   // Open file location
   ipcMain.handle(IPC_CHANNELS.OPEN_FILE_LOCATION, async (_event, filePath: string) => {
     try {
-      console.log(`[IPC] Opening file location: ${filePath}`);
-      shell.showItemInFolder(filePath);
+      const normalizedPath = isAbsolute(filePath) ? filePath : resolvePath(process.cwd(), filePath);
+      console.log(`[IPC] Opening file location: ${normalizedPath}`);
+      shell.showItemInFolder(normalizedPath);
 
       return { success: true, error: null };
     } catch (error) {

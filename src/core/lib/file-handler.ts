@@ -2,7 +2,7 @@ import { ChatNode, StreamHandlerContext, ConversationSession, FileChunk, FileOff
 import type { Stream } from "@libp2p/interface";
 import { ChatDatabase, Chat } from "./db/database";
 import { readFile, stat, writeFile, mkdir, access } from "fs/promises";
-import { basename, extname } from "path";
+import { basename, extname, isAbsolute, resolve } from "path";
 import { blake3 } from "@napi-rs/blake-hash";
 import { xchacha20poly1305 } from "@noble/ciphers/chacha";
 import { randomBytes, randomUUID } from "crypto";
@@ -708,6 +708,11 @@ export class FileHandler {
               );
               if (shouldEmit) {
                 lastEmittedPercentage = newPercentage;
+                const progress = Math.floor(((fileChunk.index + 1) / offer.totalChunks) * 100);
+                this.database.updateMessageTransfer(offer.fileId, {
+                  transfer_status: 'in_progress',
+                  transfer_progress: progress,
+                });
                 this.onFileTransferProgress({
                   chatId: chat.id,
                   messageId: offer.fileId,
@@ -744,7 +749,10 @@ export class FileHandler {
       }
 
       // Get downloads directory from settings or use default
-      const downloadsDir = this.database.getSetting('downloads_directory') || DOWNLOADS_DIR;
+      const configuredDownloadsDir = this.database.getSetting('downloads_directory') || DOWNLOADS_DIR;
+      const downloadsDir = isAbsolute(configuredDownloadsDir)
+        ? configuredDownloadsDir
+        : resolve(process.cwd(), configuredDownloadsDir);
       await mkdir(downloadsDir, { recursive: true });
 
       // Find unique filename by adding "_copy_MMDD_HHMMSS_mm" when a collision exists.
@@ -1087,6 +1095,10 @@ export class FileHandler {
         }
         console.log(`File accepted, sending chunks...`);
         this.messageHandler.getSessionManager().updateSessionUsage(targetPeerIdStr);
+        this.database.updateMessageTransfer(fileId, {
+          transfer_status: 'in_progress',
+          transfer_progress: 0,
+        });
 
         // Send chunks sequentially
         const chunks = this.#createEncryptedChunks(metadata.buffer, fileId, session);
@@ -1105,6 +1117,11 @@ export class FileHandler {
             );
             if (shouldEmit) {
               lastEmittedPercentage = newPercentage;
+              const progress = Math.floor(((chunk.index + 1) / chunks.length) * 100);
+              this.database.updateMessageTransfer(fileId, {
+                transfer_status: 'in_progress',
+                transfer_progress: progress,
+              });
               this.onFileTransferProgress({
                 chatId: chat.id,
                 messageId: fileId,
