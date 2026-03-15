@@ -1,21 +1,67 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { finalizeSendingMessage, setMessages, updateChat, updateLocalMessageSendState, type ChatMessage } from "../../../state/slices/chatSlice";
+import { finalizeSendingMessage, prependMessages, setMessages, updateChat, updateLocalMessageSendState, type ChatMessage } from "../../../state/slices/chatSlice";
 import type { RootState } from "../../../state/store";
 import { useDispatch, useSelector } from "react-redux";
 import { formatTimestampToHourMinute } from "../../../utils/dateUtils";
 import { PendingNotifications } from "./PendingNotifications";
 import { MessageRow } from "./MessageRow";
 import type { MessageSentStatus } from "../../../types";
-import { FILE_ACCEPTANCE_TIMEOUT, SHOW_TIMESTAMP_INTERVAL } from "../../../constants";
+import { FILE_ACCEPTANCE_TIMEOUT, INITIAL_MESSAGES_LIMIT, LOAD_MORE_MESSAGES_LIMIT, SHOW_TIMESTAMP_INTERVAL } from "../../../constants";
 import { useToast } from "../../ui/use-toast";
+import type { Message } from "../../../../core/lib/db/database";
 
 type MessagesContainerProps = {
   messages: ChatMessage[];
   isPending: boolean;
 }
 
+function mapDbMessage(msg: Message & { sender_username?: string }): ChatMessage {
+  let fileName = msg.file_name;
+  let fileSize = msg.file_size;
+  if (msg.message_type === 'file' && (!fileName || fileSize === undefined)) {
+    const match = msg.content?.match(/^(.*)\s+\((\d+)\s+bytes\)$/);
+    if (match) {
+      fileName = fileName || match[1];
+      if (fileSize === undefined) fileSize = Number(match[2]);
+    }
+  }
+  const inferredTransferStatus =
+    msg.transfer_status ??
+    (msg.message_type === 'file' ? 'completed' : undefined);
+
+  const transferExpiresAt =
+    msg.message_type === 'file' && msg.transfer_status === 'pending'
+      ? msg.timestamp.getTime() + FILE_ACCEPTANCE_TIMEOUT
+      : undefined;
+
+  return {
+    id: msg.id,
+    chatId: msg.chat_id,
+    senderPeerId: msg.sender_peer_id,
+    senderUsername: msg.sender_username || 'UNKNOWN',
+    content: msg.content,
+    timestamp: msg.timestamp.getTime(),
+    eventTimestamp: msg.event_timestamp ? msg.event_timestamp.getTime() : undefined,
+    messageType: msg.message_type as 'text' | 'file' | 'image' | 'system',
+    messageSentStatus: 'online' as MessageSentStatus,
+    fileName,
+    fileSize,
+    filePath: msg.file_path,
+    transferStatus: inferredTransferStatus as 'pending' | 'in_progress' | 'completed' | 'failed' | 'expired' | 'rejected' | undefined,
+    transferProgress: msg.transfer_progress,
+    transferError: msg.transfer_error,
+    transferExpiresAt
+  };
+}
+
 export const MessagesContainer = ({ messages, isPending }: MessagesContainerProps) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const skipNextAutoScrollRef = useRef(false);
+  const isLoadingMoreRef = useRef(false);
+  const activeChatIdRef = useRef<number | null>(null);
+  const loadTokenRef = useRef(0);
   const myPeerId = useSelector((state: RootState) => state.user.peerId);
   const activeChat = useSelector((state: RootState) => state.chat.activeChat);
   const activePendingKeyExchange = useSelector((state: RootState) => state.chat.activePendingKeyExchange);
@@ -23,16 +69,9 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
   const { toast } = useToast();
 
   const [error, setError] = useState<string | null>(null);
-
-  const parseFileContent = (content: string | null | undefined): { fileName?: string; fileSize?: number } => {
-    if (!content) return {};
-    const match = content.match(/^(.*)\s+\((\d+)\s+bytes\)$/);
-    if (!match) return {};
-    return {
-      fileName: match[1],
-      fileSize: Number(match[2])
-    };
-  };
+  const [hasMore, setHasMore] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const offsetRef = useRef(0);
 
   const getMembershipInfoTooltip = (message: ChatMessage): string | null => {
     if (message.messageType !== 'system' || !message.eventTimestamp) {
@@ -49,60 +88,97 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
     return `${message.content} at ${formatTimestampToHourMinute(message.eventTimestamp)}.${normalized.includes('joined the group') ? ' This member can only see your messages after this system message, not strictly after the join time.' : ''}`;
   };
 
+  // Initial fetch
   useEffect(() => {
+    const chatId = activeChat?.id ?? null;
+    activeChatIdRef.current = chatId;
+    loadTokenRef.current += 1;
+    const requestToken = loadTokenRef.current;
+    setError(null);
+    setHasMore(true);
+    setIsLoadingMore(false);
+    isLoadingMoreRef.current = false;
+    offsetRef.current = 0;
+
     const fetchMessages = async () => {
-      if (activeChat) {
-        const result = await window.kiyeovoAPI.getMessages(activeChat.id);
-        if (result.success) {
-          const messages = result.messages.map(msg => {
-            let fileName = msg.file_name;
-            let fileSize = msg.file_size;
-            if (msg.message_type === 'file' && (!fileName || fileSize === undefined)) {
-              const parsed = parseFileContent(msg.content);
-              fileName = fileName || parsed.fileName;
-              if (fileSize === undefined) {
-                fileSize = parsed.fileSize;
-              }
-            }
-            const inferredTransferStatus =
-              msg.transfer_status ??
-              (msg.message_type === 'file'
-                ? 'completed'
-                : undefined);
-
-            const transferExpiresAt =
-              msg.message_type === 'file' && msg.transfer_status === 'pending'
-                ? msg.timestamp.getTime() + FILE_ACCEPTANCE_TIMEOUT
-                : undefined;
-
-            return {
-              id: msg.id,
-              chatId: msg.chat_id,
-              senderPeerId: msg.sender_peer_id,
-              senderUsername: msg.sender_username || 'UNKNOWN',
-              content: msg.content,
-              timestamp: msg.timestamp.getTime(),
-              eventTimestamp: msg.event_timestamp ? msg.event_timestamp.getTime() : undefined,
-              messageType: msg.message_type as 'text' | 'file' | 'image' | 'system',
-              messageSentStatus: 'online' as MessageSentStatus,
-              // File transfer fields
-              fileName,
-              fileSize,
-              filePath: msg.file_path,
-              transferStatus: inferredTransferStatus as 'pending' | 'in_progress' | 'completed' | 'failed' | 'expired' | 'rejected' | undefined,
-              transferProgress: msg.transfer_progress,
-              transferError: msg.transfer_error,
-              transferExpiresAt
-            }
-          });
-          dispatch(setMessages(messages));
-        } else {
-          setError(result.error || 'Failed to fetch messages');
-        }
+      if (!chatId) return;
+      const result = await window.kiyeovoAPI.getMessages(chatId, INITIAL_MESSAGES_LIMIT, 0);
+      if (loadTokenRef.current !== requestToken || activeChatIdRef.current !== chatId) {
+        return;
+      }
+      if (result.success) {
+        const mapped = result.messages.map(mapDbMessage);
+        dispatch(setMessages(mapped));
+        offsetRef.current = mapped.length;
+        setHasMore(mapped.length >= INITIAL_MESSAGES_LIMIT);
+      } else {
+        setError(result.error || 'Failed to fetch messages');
       }
     }
-    fetchMessages();
-  }, [activeChat]);
+    void fetchMessages();
+  }, [activeChat?.id, dispatch]);
+
+  // Load more on scroll to top
+  const loadMore = useCallback(async () => {
+    const chatId = activeChat?.id;
+    if (!chatId || isLoadingMoreRef.current || !hasMore) return;
+
+    isLoadingMoreRef.current = true;
+    setIsLoadingMore(true);
+    const requestToken = loadTokenRef.current;
+    const container = scrollContainerRef.current;
+    const prevScrollHeight = container?.scrollHeight ?? 0;
+
+    try {
+      const result = await window.kiyeovoAPI.getMessages(chatId, LOAD_MORE_MESSAGES_LIMIT, offsetRef.current);
+      if (loadTokenRef.current !== requestToken || activeChatIdRef.current !== chatId) {
+        return;
+      }
+      if (result.success) {
+        const mapped = result.messages.map(mapDbMessage);
+        if (mapped.length > 0) {
+          skipNextAutoScrollRef.current = true;
+          dispatch(prependMessages(mapped));
+          offsetRef.current += mapped.length;
+
+          // Restore scroll position after DOM update
+          requestAnimationFrame(() => {
+            if (container) {
+              const newScrollHeight = container.scrollHeight;
+              container.scrollTop = newScrollHeight - prevScrollHeight;
+            }
+          });
+        }
+        if (mapped.length < LOAD_MORE_MESSAGES_LIMIT) {
+          setHasMore(false);
+        }
+      }
+    } catch (err) {
+      console.error('[MessagesContainer] Failed to load more messages:', err);
+    } finally {
+      isLoadingMoreRef.current = false;
+      setIsLoadingMore(false);
+    }
+  }, [activeChat?.id, hasMore, dispatch]);
+
+  // IntersectionObserver for sentinel at top
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    const container = scrollContainerRef.current;
+    if (!sentinel || !container) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          void loadMore();
+        }
+      },
+      { root: container, threshold: 0 }
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [loadMore]);
 
   useEffect(() => {
     if (activeChat?.justCreated && messages.length === 0) {
@@ -121,12 +197,14 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
   }, [activeChat?.justCreated, activeChat?.id, messages.length, dispatch]);
 
   useEffect(() => {
-    // TODO scroll to bottom on first open and when I send a new message,
-    // not when a new message is received
+    if (skipNextAutoScrollRef.current) {
+      skipNextAutoScrollRef.current = false;
+      return;
+    }
     if (messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
-  }, [messagesEndRef, messages]);
+  }, [messages]);
 
   const showEmptyState = !isPending && messages.length === 0;
   const isTrustedOutOfBand = activeChat?.trusted_out_of_band;
@@ -226,7 +304,15 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
     }
   }, [activeChat, dispatch, toast]);
 
-  return <div className={`flex-1 overflow-y-auto p-6 space-y-2`}>
+  return <div ref={scrollContainerRef} className={`flex-1 overflow-y-auto p-6 space-y-2`}>
+    {/* Sentinel for loading older messages */}
+    {hasMore && !showEmptyState && (
+      <div ref={sentinelRef} className="flex justify-center py-2">
+        {isLoadingMore && (
+          <span className="text-xs text-muted-foreground">Loading older messages...</span>
+        )}
+      </div>
+    )}
     {showEmptyState && (
       <div className="w-full flex justify-center items-center h-full">
         <div className="text-center max-w-md">

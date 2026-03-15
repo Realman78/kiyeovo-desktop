@@ -922,16 +922,15 @@ function setupMessageHandlers(
   ipcMain: IpcMain,
   getP2PCore: () => P2PCore | null
 ): void {
-  ipcMain.handle(IPC_CHANNELS.GET_MESSAGES, async (_event, chatId: number) => {
+  ipcMain.handle(IPC_CHANNELS.GET_MESSAGES, async (_event, chatId: number, limit?: number, offset?: number) => {
     try {
       const p2pCore = getP2PCore();
       if (!p2pCore) {
         return { success: false, messages: [], error: 'P2P core not initialized' };
       }
 
-      console.log(`[IPC] Fetching messages for chat: ${chatId}`);
-      const messages = p2pCore.database.getMessagesByChatId(chatId);
-      console.log(`[IPC] Found ${messages.length} messages`);
+      const messages = p2pCore.database.getMessagesByChatId(chatId, limit, offset);
+      console.log(`[IPC] Fetched ${messages.length} messages for chat ${chatId} (limit=${limit ?? 'all'}, offset=${offset ?? 0})`);
 
       return { success: true, messages, error: null };
     } catch (error) {

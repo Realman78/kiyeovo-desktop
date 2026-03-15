@@ -100,7 +100,7 @@ declare global {
             }>;
             
             // Message events
-            getMessages: (chatId: number) => Promise<{ success: boolean; messages: Array<Message & { sender_username?: string }>; error: string | null }>;
+            getMessages: (chatId: number, limit?: number, offset?: number) => Promise<{ success: boolean; messages: Array<Message & { sender_username?: string }>; error: string | null }>;
             onMessageReceived: (callback: (data: MessageReceivedEvent) => void) => () => void;
 
             // Offline message events

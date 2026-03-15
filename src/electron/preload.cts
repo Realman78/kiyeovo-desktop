@@ -316,8 +316,8 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     },
 
     // Messages
-    getMessages: async (chatId: number): Promise<{ success: boolean; messages: Array<Message>; error: string | null }> => {
-        return ipcRenderer.invoke(IPC_CHANNELS.GET_MESSAGES, chatId);
+    getMessages: async (chatId: number, limit?: number, offset?: number): Promise<{ success: boolean; messages: Array<Message>; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.GET_MESSAGES, chatId, limit, offset);
     },
 
     // Pending key exchange events

@@ -292,6 +292,13 @@ const chatSlice = createSlice({
     setMessages: (state, action: PayloadAction<ChatMessage[]>) => {
       state.messages = [...action.payload].sort(compareMessageOrder);
     },
+    prependMessages: (state, action: PayloadAction<ChatMessage[]>) => {
+      const existingIds = new Set(state.messages.map(m => m.id));
+      const newMessages = action.payload.filter(m => !existingIds.has(m.id));
+      if (newMessages.length > 0) {
+        state.messages = [...newMessages, ...state.messages].sort(compareMessageOrder);
+      }
+    },
     addSendingMessage: (state, action: PayloadAction<ChatMessage>) => {
       if (!state.sendingMessages.some((m) => m.id === action.payload.id)) {
         state.sendingMessages.push(action.payload);
@@ -451,6 +458,7 @@ export const {
   addContactAttempt,
   removeContactAttempt,
   setMessages,
+  prependMessages,
   addSendingMessage,
   removeSendingMessage,
   finalizeSendingMessage,

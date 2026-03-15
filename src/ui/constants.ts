@@ -2,6 +2,8 @@ export const MAX_FILE_MESSAGE_SIZE = 1 * 1024 * 1024; // 1MB for JSON overhead
 export const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB max file size
 export const FILE_ACCEPTANCE_TIMEOUT = 5 * 60 * 1000; // 5 minutes
 export const SHOW_TIMESTAMP_INTERVAL = 15 * 60 * 1000;
+export const INITIAL_MESSAGES_LIMIT = 50;
+export const LOAD_MORE_MESSAGES_LIMIT = 50;
 
 export const TOR_CONFIG = {
   DEFAULT_SOCKS_HOST: '127.0.0.1',
