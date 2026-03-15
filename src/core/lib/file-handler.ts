@@ -38,12 +38,14 @@ export class FileHandler {
       senderId: string;
       senderUsername: string;
       expiresAt: number;
-      decision?: 'rejected' | 'expired';
+      decision?: 'rejected' | 'expired' | 'shutdown';
     }
   >();
   private fileOfferTimestamps = new Map<string, number[]>();
   private perPeerPendingRejections = new Map<string, number>(); // Track "too many pending from you" rejections per peer
   private globalPendingRejectionsCount = 0; // Track total "too many global pending" rejections
+  private activeTransfersByPeer = new Map<string, { fileId: string; direction: 'send' | 'receive' }>();
+  private activeTransferStreams = new Map<string, Stream>();
   private onFileTransferProgress: (data: FileTransferProgressEvent) => void;
   private onFileTransferComplete: (data: FileTransferCompleteEvent) => void;
   private onFileTransferFailed: (data: FileTransferFailedEvent) => void;
@@ -67,13 +69,9 @@ export class FileHandler {
     this.onFileTransferFailed = onFileTransferFailed;
     this.onPendingFileReceived = onPendingFileReceived;
     this.fileTransferProtocol = getNetworkModeRuntime(this.database.getSessionNetworkMode()).config.fileTransferProtocol;
-    const expiredCount = this.database.expirePendingFileOffers(FILE_ACCEPTANCE_TIMEOUT);
-    if (expiredCount > 0) {
-      console.log(`[FileHandler] Expired ${expiredCount} pending file offer(s) on startup`);
-    }
-    const failedCount = this.database.failInProgressFileTransfers();
+    const failedCount = this.database.failNonTerminalFileTransfers('Transfer interrupted (app restart/close)');
     if (failedCount > 0) {
-      console.log(`[FileHandler] Marked ${failedCount} in-progress file transfer(s) as failed on startup`);
+      console.log(`[FileHandler] Marked ${failedCount} non-terminal file transfer(s) as failed on startup`);
     }
     this.#setupProtocolHandler();
     this.#setupRejectionCounterReset();
@@ -123,6 +121,33 @@ export class FileHandler {
       this.perPeerPendingRejections.clear();
       this.globalPendingRejectionsCount = 0;
     }, FILE_REJECTION_COUNTER_RESET_INTERVAL);
+  }
+
+  private tryBeginPeerTransfer(peerId: string, fileId: string, direction: 'send' | 'receive'): boolean {
+    if (this.activeTransfersByPeer.has(peerId)) {
+      return false;
+    }
+    this.activeTransfersByPeer.set(peerId, { fileId, direction });
+    return true;
+  }
+
+  private endPeerTransfer(peerId: string, fileId: string): void {
+    const active = this.activeTransfersByPeer.get(peerId);
+    if (active && active.fileId === fileId) {
+      this.activeTransfersByPeer.delete(peerId);
+    }
+  }
+
+  private trackTransferStream(fileId: string, stream: Stream): void {
+    this.activeTransferStreams.set(fileId, stream);
+  }
+
+  private untrackTransferStream(fileId: string): void {
+    this.activeTransferStreams.delete(fileId);
+  }
+
+  private isPeerTransferActive(peerId: string): boolean {
+    return this.activeTransfersByPeer.has(peerId);
   }
 
   // Emit for first 10 chunks, then only every 10% increment
@@ -256,6 +281,7 @@ export class FileHandler {
     let session: ConversationSession | null = null;
     let offerAccepted = false;
     let pinnedSessionPeerId: string | null = null;
+    let activePeerTransferStarted = false;
     let chunkTimeout: NodeJS.Timeout | null = null;
     let lastEmittedPercentage = 0;
 
@@ -446,6 +472,17 @@ export class FileHandler {
               return;
             }
 
+            if (this.isPeerTransferActive(senderPeerId)) {
+              const response: FileOfferResponse = {
+                type: FILE_OFFER_RESPONSE,
+                fileId: offer.fileId,
+                accepted: false,
+                reason: 'Another file transfer is already active with this peer',
+              };
+              writable.push(this.#encodeMessage(response));
+              return;
+            }
+
             // Require an existing direct chat and active session before accepting file transfers.
             // We intentionally send an explicit rejection so sender does not hang waiting for response.
             chat = this.database.getChatByPeerId(senderPeerId);
@@ -537,8 +574,18 @@ export class FileHandler {
             if (!accepted) {
               const pending = this.pendingFileAcceptances.get(offerMsg.fileId);
               const decision = pending?.decision ?? 'expired';
-              const transferStatus = decision === 'rejected' ? 'rejected' : 'expired';
-              const transferError = decision === 'rejected' ? 'Offer rejected' : 'Offer expired';
+              const transferStatus =
+                decision === 'rejected'
+                  ? 'rejected'
+                  : decision === 'shutdown'
+                    ? 'failed'
+                    : 'expired';
+              const transferError =
+                decision === 'rejected'
+                  ? 'Offer rejected'
+                  : decision === 'shutdown'
+                    ? 'Transfer interrupted (app shutdown)'
+                    : 'Offer expired';
 
               this.database.updateMessageTransfer(offerMsg.fileId, {
                 transfer_status: transferStatus,
@@ -563,6 +610,18 @@ export class FileHandler {
             // User accepted - start chunk timeout
             console.log(`File transfer accepted, receiving chunks...`);
             offerAccepted = true;
+            if (!this.tryBeginPeerTransfer(senderPeerId, offerMsg.fileId, 'receive')) {
+              const busyResponse: FileOfferResponse = {
+                type: FILE_OFFER_RESPONSE,
+                fileId: offerMsg.fileId,
+                accepted: false,
+                reason: 'Another file transfer is already active with this peer',
+              };
+              writable.push(this.#encodeMessage(busyResponse));
+              return;
+            }
+            activePeerTransferStarted = true;
+            this.trackTransferStream(offerMsg.fileId, stream);
             const response: FileOfferResponse = {
               type: FILE_OFFER_RESPONSE,
               fileId: offerMsg.fileId,
@@ -765,6 +824,12 @@ export class FileHandler {
       if (offer) {
         this.pendingFileAcceptances.delete(offer.fileId);
       }
+      if (offer && activePeerTransferStarted) {
+        this.endPeerTransfer(senderPeerId, offer.fileId);
+      }
+      if (offer) {
+        this.untrackTransferStream(offer.fileId);
+      }
       if (pinnedSessionPeerId) {
         this.messageHandler.getSessionManager().unpinSession(pinnedSessionPeerId);
       }
@@ -851,6 +916,7 @@ export class FileHandler {
     let fileId: string = '';
     let stream: Stream | null = null;
     let pinnedSessionPeerId: string | null = null;
+    let activePeerId: string | null = null;
     try {
       const { session, peerId: targetPeerId } = await this.messageHandler.ensureUserSession(targetUsername, '', true);
       const targetPeerIdStr = targetPeerId.toString();
@@ -875,6 +941,10 @@ export class FileHandler {
 
       const metadata = await this.#loadFileMetadata(filePath);
       fileId = providedFileId && providedFileId.trim() ? providedFileId : randomUUID();
+      if (!this.tryBeginPeerTransfer(targetPeerIdStr, fileId, 'send')) {
+        throw new Error('Another file transfer is already active with this peer');
+      }
+      activePeerId = targetPeerIdStr;
 
       console.log(`Sending ${metadata.filename} (${metadata.size} bytes, ${metadata.totalChunks} chunks)`);
 
@@ -885,6 +955,7 @@ export class FileHandler {
         protocol: this.fileTransferProtocol,
         context: 'file_transfer_send',
       });
+      this.trackTransferStream(fileId, stream);
 
       const activeStream = stream;
       const writable = pushable();
@@ -1130,9 +1201,44 @@ export class FileHandler {
       generalErrorHandler(error);
       throw error;
     } finally {
+      if (activePeerId && fileId) {
+        this.endPeerTransfer(activePeerId, fileId);
+      }
+      if (fileId) {
+        this.untrackTransferStream(fileId);
+      }
       if (pinnedSessionPeerId) {
         this.messageHandler.getSessionManager().unpinSession(pinnedSessionPeerId);
       }
+    }
+  }
+
+  cleanup(): void {
+    for (const [fileId, stream] of this.activeTransferStreams.entries()) {
+      try {
+        stream.abort(new Error('File transfer interrupted: application shutdown'));
+      } catch {
+        // best-effort shutdown cleanup
+      } finally {
+        this.activeTransferStreams.delete(fileId);
+      }
+    }
+    this.activeTransfersByPeer.clear();
+
+    for (const [fileId, pending] of this.pendingFileAcceptances.entries()) {
+      try {
+        pending.decision = 'shutdown';
+        pending.resolve(false);
+      } catch {
+        // no-op
+      } finally {
+        this.pendingFileAcceptances.delete(fileId);
+      }
+    }
+
+    const failed = this.database.failNonTerminalFileTransfers('Transfer interrupted (app shutdown)');
+    if (failed > 0) {
+      console.log(`[FileHandler] Shutdown cleanup marked ${failed} transfer(s) as failed`);
     }
   }
 }

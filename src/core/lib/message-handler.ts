@@ -1739,6 +1739,7 @@ export class MessageHandler {
   }
 
   cleanup(): void {
+    this.fileHandler.cleanup();
     this.groupMessaging.cleanup();
 
     if (this.groupAckStartupTimer) {

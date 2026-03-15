@@ -307,12 +307,15 @@ export const ChatInput: FC = () => {
                 const errorText = result.error?.toLowerCase() || '';
                 console.log("RESULT ERROR:", result.error);
                 const failedBeforePersist = errorText.includes('dial request has no valid addresses');
+                const transferBusy = errorText.includes('already active with this peer');
                 if (failedBeforePersist) {
                     toast.error('Cannot send file to offline user');
+                } else if (transferBusy) {
+                    toast.error('Another file transfer is already active with this peer');
                 } else if (!errorText.includes('timeout waiting for file acceptance') && !errorText.includes('rejected')) {
                     toast.error(result.error || 'Failed to send file');
                 }
-                if (failedBeforePersist) {
+                if (failedBeforePersist || transferBusy) {
                     dispatch(removeMessageById({ messageId: pendingMessageId, chatId }));
                     dispatch(updateChat({
                         id: chatId,
@@ -338,7 +341,8 @@ export const ChatInput: FC = () => {
             toast.error(error instanceof Error ? error.message : 'Failed to send file');
             const errorText = error instanceof Error ? error.message.toLowerCase() : '';
             const failedBeforePersist = errorText.includes('dial request has no valid addresses');
-            if (failedBeforePersist) {
+            const transferBusy = errorText.includes('already active with this peer');
+            if (failedBeforePersist || transferBusy) {
                 dispatch(removeMessageById({ messageId: pendingMessageId, chatId }));
                 dispatch(updateChat({
                     id: chatId,

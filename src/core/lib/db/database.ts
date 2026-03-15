@@ -1902,6 +1902,26 @@ export class ChatDatabase {
         return result.changes ?? 0;
     }
 
+    failNonTerminalFileTransfers(reason: string = 'Transfer interrupted'): number {
+        const stmt = this.db.prepare(`
+            UPDATE messages
+            SET transfer_status = 'failed', transfer_error = ?
+            WHERE message_type = 'file'
+              AND transfer_status IN (
+                'pending',
+                'in_progress',
+                'connecting',
+                'awaiting_acceptance',
+                'uploading',
+                'awaiting_confirmation',
+                'incoming_pending_user',
+                'downloading'
+              )
+        `);
+        const result = stmt.run(reason);
+        return result.changes ?? 0;
+    }
+
     getMessagesByChatId(chatId: number, limit: number = 50, offset: number = 0): Array<Message & { sender_username?: string | undefined }> {
         const stmt = this.db.prepare(`
             SELECT * FROM (
