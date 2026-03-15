@@ -1540,6 +1540,7 @@ export class GroupCreator {
       offlineMessage,
       userIdentity.signingPrivateKey,
       database,
+      { bypassControlReserve: true },
     );
     console.log(
       `[GROUP][TRACE][SEND][DHT_OK] to=${peerId.slice(-8)} bucket=*${bucketTag} offlineMsgId=${offlineMessage.id} ${this.describeControlMessage(message)}`,

@@ -5,7 +5,7 @@ import type { ChatNode, OfflineCheckCacheEntry, OfflineMessage, OfflineMessageSt
 import { ed25519 } from '@noble/curves/ed25519';
 import { sha256 } from '@noble/hashes/sha2';
 import { generalErrorHandler } from '../utils/general-error.js';
-import { MAX_MESSAGES_PER_STORE, MESSAGE_TTL } from '../constants.js';
+import { MAX_MESSAGES_PER_STORE, MESSAGE_TTL, OFFLINE_CONTROL_MESSAGE_RESERVE } from '../constants.js';
 import type { ChatDatabase } from './db/database.js';
 import { QueryEvent } from '@libp2p/kad-dht';
 
@@ -57,13 +57,25 @@ export class OfflineMessageManager {
         bucketKey: string,
         message: OfflineMessage,
         signingPrivateKey: Uint8Array,
-        database: ChatDatabase
+        database: ChatDatabase,
+        options?: {
+            bypassControlReserve?: boolean;
+        }
     ): Promise<void> {
         return OfflineMessageManager.withBucketMutationLock(bucketKey, async () => {
             try {
                 const local = database.getOfflineSentMessages(bucketKey);
                 const messages: OfflineMessage[] = OfflineMessageManager.filterExpiredMessages(local.messages);
                 let version = local.version;
+                const bypassControlReserve = options?.bypassControlReserve === true;
+                const userCapacityLimit = Math.max(0, MAX_MESSAGES_PER_STORE - OFFLINE_CONTROL_MESSAGE_RESERVE);
+
+                if (!bypassControlReserve && messages.length >= userCapacityLimit) {
+                    throw new Error(
+                        `Offline message reserve reached (${messages.length}/${userCapacityLimit}); ` +
+                        `${OFFLINE_CONTROL_MESSAGE_RESERVE} slots reserved for group control messages`,
+                    );
+                }
 
                 if (messages.length >= MAX_MESSAGES_PER_STORE) {
                     throw new Error(`Offline message store full (${messages.length}/${MAX_MESSAGES_PER_STORE})`);
