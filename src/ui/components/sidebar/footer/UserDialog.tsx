@@ -273,7 +273,7 @@ const UserDialog = ({ open, onOpenChange, onRegister, backendError, isRegisterin
                 </DialogHeader>
 
                 <form onSubmit={handleSubmit}>
-                    <DialogBody className="space-y-4">
+                    <DialogBody className="space-y-4 max-h-[60vh] overflow-y-auto">
                         <div>
                             <label className="block text-sm font-bold text-foreground mb-2">
                                 Peer ID
