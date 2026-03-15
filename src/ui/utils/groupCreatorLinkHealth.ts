@@ -12,6 +12,7 @@ export function getGroupCreatorLinkState(
   myPeerId?: string | null
 ): GroupCreatorLinkState {
   if (chat.type !== 'group') return { broken: false };
+  if (chat.groupStatus === 'disbanded') return { broken: false };
 
   const creatorPeerId = chat.groupCreatorPeerId;
   if (!creatorPeerId || !myPeerId || creatorPeerId === myPeerId) {

@@ -18,6 +18,7 @@ export const ChatPreview: FC<ChatPreviewProps> = ({ chat, onSelectChat, selected
     const creatorLinkState = getGroupCreatorLinkState(chat, chats, myPeerId);
     const isAwaitingActivation = chat.type === 'group' && chat.groupStatus === 'awaiting_activation';
     const isArchivedGroup = chat.type === 'group' && chat.groupStatus === 'removed';
+    const isDisbandedGroup = chat.type === 'group' && chat.groupStatus === 'disbanded';
     const groupStatusMessage = chat.type === 'group' ? getGroupStatusMessage(chat.groupStatus) : null;
     const previewText = creatorLinkState.broken
         ? 'Creator link is broken. Group updates are paused.'
@@ -40,7 +41,12 @@ export const ChatPreview: FC<ChatPreviewProps> = ({ chat, onSelectChat, selected
                                 Archived
                             </span>
                         )}
-                        {creatorLinkState.broken && (
+                        {isDisbandedGroup && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-destructive/15 text-destructive uppercase tracking-wide shrink-0">
+                                Disbanded
+                            </span>
+                        )}
+                        {!isDisbandedGroup && creatorLinkState.broken && (
                             <span className="text-[10px] px-1.5 py-0.5 rounded bg-destructive/15 text-destructive uppercase tracking-wide shrink-0">
                                 Broken
                             </span>

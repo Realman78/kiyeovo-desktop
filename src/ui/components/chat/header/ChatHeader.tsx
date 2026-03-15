@@ -29,6 +29,16 @@ type ChatHeaderProps = {
   groupStatus?: string;
   chatId?: number;
 }
+
+type GroupInfoDetails = {
+  groupId: string;
+  keyVersion: number;
+  groupStatus: string;
+  createdByPeerId: string;
+  creatorUsername: string;
+  createdAt: Date | null;
+};
+
 export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: ChatHeaderProps) => {
   const activeChat = useSelector((state: RootState) => state.chat.activeChat);
   const chats = useSelector((state: RootState) => state.chat.chats);
@@ -48,6 +58,9 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
   const [isKickingMember, setIsKickingMember] = useState(false);
   const [inviteUsersDialogOpen, setInviteUsersDialogOpen] = useState(false);
   const [isCurrentUserGroupCreator, setIsCurrentUserGroupCreator] = useState(false);
+  const [groupInfoDialogOpen, setGroupInfoDialogOpen] = useState(false);
+  const [groupInfoLoading, setGroupInfoLoading] = useState(false);
+  const [groupInfoDetails, setGroupInfoDetails] = useState<GroupInfoDetails | null>(null);
   const [editUsernameModalOpen, setEditUsernameModalOpen] = useState(false);
   const [newUsername, setNewUsername] = useState(username);
   const [validationError, setValidationError] = useState("");
@@ -69,6 +82,45 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
   useEffect(() => {
     fetchGroupMembers();
   }, [chatType, chatId]);
+
+  const loadGroupInfo = async () => {
+    if (chatType !== 'group' || !chatId) return;
+    setGroupInfoLoading(true);
+    try {
+      const [chatResult, membersResult] = await Promise.all([
+        window.kiyeovoAPI.getChatById(chatId),
+        window.kiyeovoAPI.getGroupMembers(chatId),
+      ]);
+
+      if (membersResult.success) {
+        setGroupMembers(membersResult.members);
+      }
+
+      if (chatResult.success && chatResult.chat) {
+        const chat = chatResult.chat;
+        setGroupInfoDetails({
+          groupId: chat.group_id || '',
+          keyVersion: chat.key_version ?? 0,
+          groupStatus: chat.group_status || chat.status || 'unknown',
+          createdByPeerId: chat.group_creator_peer_id || chat.created_by || '',
+          creatorUsername: chat.group_creator_username || activeChat?.groupCreatorUsername || '',
+          createdAt: chat.created_at ? new Date(chat.created_at) : null,
+        });
+      } else {
+        setGroupInfoDetails(null);
+      }
+    } catch (error) {
+      console.error('Failed to load group info:', error);
+      setGroupInfoDetails(null);
+    } finally {
+      setGroupInfoLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!groupInfoDialogOpen) return;
+    void loadGroupInfo();
+  }, [groupInfoDialogOpen, chatType, chatId]);
 
   const refreshGroupCreatorPermission = async () => {
     if (chatType !== 'group' || !chatId) {
@@ -222,6 +274,11 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
 
   const handleLeaveGroup = () => {
     setLeaveGroupConfirmOpen(true);
+    setDropdownOpen(false);
+  };
+
+  const handleAboutGroup = () => {
+    setGroupInfoDialogOpen(true);
     setDropdownOpen(false);
   };
 
@@ -438,18 +495,38 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
 
     setIsLeavingGroup(true);
     try {
-      const result = await window.kiyeovoAPI.leaveGroup(activeChat.id);
+      const result = isCurrentUserGroupCreator
+        ? await window.kiyeovoAPI.disbandGroup(activeChat.id)
+        : await window.kiyeovoAPI.leaveGroup(activeChat.id);
       if (!result.success) {
-        toast.error(result.error || 'Failed to leave group');
+        toast.error(result.error || (isCurrentUserGroupCreator ? 'Failed to disband group' : 'Failed to leave group'));
         return;
       }
 
-      dispatch(removeChat(activeChat.id));
-      toast.info('You left the group');
+      if (isCurrentUserGroupCreator) {
+        const refreshed = await window.kiyeovoAPI.getChatById(activeChat.id);
+        if (refreshed.success && refreshed.chat) {
+          dispatch(updateChat({
+            id: activeChat.id,
+            updates: {
+              status: refreshed.chat.status,
+              groupStatus: refreshed.chat.group_status,
+            },
+          }));
+        } else {
+          dispatch(updateChat({
+            id: activeChat.id,
+            updates: { groupStatus: 'disbanded' },
+          }));
+        }
+      } else {
+        dispatch(removeChat(activeChat.id));
+      }
+      toast.info(isCurrentUserGroupCreator ? 'Group disbanded' : 'You left the group');
       setLeaveGroupConfirmOpen(false);
     } catch (error) {
       console.error('Failed to leave group:', error);
-      toast.error('Failed to leave group');
+      toast.error(isCurrentUserGroupCreator ? 'Failed to disband group' : 'Failed to leave group');
     } finally {
       setIsLeavingGroup(false);
     }
@@ -500,6 +577,22 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
     .filter((member) => member.status === 'pending')
     .map((member) => ({ peerId: member.peerId, username: member.username }));
   const kickableMembers = groupMembers.filter((member) => member.status === 'confirmed');
+  const groupInfoCreatorName = isCurrentUserGroupCreator
+    ? 'You'
+    : (groupInfoDetails?.creatorUsername || activeChat?.groupCreatorUsername || 'Unknown');
+  const groupInfoCreatorPeerId = groupInfoDetails?.createdByPeerId || activeChat?.groupCreatorPeerId || 'Unknown';
+  const groupInfoStatus = groupInfoDetails?.groupStatus || groupStatus || 'unknown';
+  const groupInfoCreatedAt = groupInfoDetails?.createdAt
+    ? groupInfoDetails.createdAt.toLocaleString()
+    : 'Unknown';
+  const groupInfoMemberCount = groupMembers.length + 1;
+  const leaveDialogTitle = isCurrentUserGroupCreator ? 'Disband Group' : 'Leave Group';
+  const leaveDialogDescription = isCurrentUserGroupCreator
+    ? 'Are you sure you want to disband this group?'
+    : 'Are you sure you want to leave this group?';
+  const leaveConfirmLabel = isCurrentUserGroupCreator
+    ? (isLeavingGroup ? 'Disbanding...' : 'Disband Group')
+    : (isLeavingGroup ? 'Leaving...' : 'Leave Group');
 
   return <div className={`${showGroupStateMessage || showDirectInactivityWarning ? 'h-20' : 'h-16'} px-6 flex items-center justify-between border-b border-border ${activeChat?.status === 'pending' ? "" : "bg-card/50"}`}>
     <div className="flex items-center gap-3">
@@ -550,7 +643,7 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
               <div className="flex items-center gap-1">
                 <AlertCircle className="w-3 h-3 text-warning" />
                 <span className="text-xs text-warning">
-                  This contact has not sent activity for over 30 days.
+                  No activity from this contact for over 30 days.
                 </span>
               </div>
             )}
@@ -584,7 +677,7 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
           <>
             <DropdownMenuItem
               icon={<Info className="w-4 h-4" />}
-              onClick={() => setDropdownOpen(false)}
+              onClick={handleAboutGroup}
             >
               About group
             </DropdownMenuItem>
@@ -625,7 +718,7 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
                 icon={<LogOut className="w-4 h-4" />}
                 onClick={handleLeaveGroup}
               >
-                Leave group
+                {isCurrentUserGroupCreator ? 'Disband group' : 'Leave group'}
               </DropdownMenuItem>
             )}
           </>
@@ -760,9 +853,9 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
         <Dialog open={leaveGroupConfirmOpen} onOpenChange={setLeaveGroupConfirmOpen}>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>Leave Group</DialogTitle>
+              <DialogTitle>{leaveDialogTitle}</DialogTitle>
               <DialogDescription>
-                Are you sure you want to leave this group?
+                {leaveDialogDescription}
               </DialogDescription>
             </DialogHeader>
             <DialogBody>
@@ -771,7 +864,9 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
                 <div className="text-sm text-warning">
                   <p className="font-semibold mb-1">Consequences</p>
                   <p className="text-xs">
-                    You will stop receiving new group messages and cannot send to this group. Rejoining requires a new invite from the group creator.
+                    {isCurrentUserGroupCreator
+                      ? 'Members will receive a disband notification and this chat will become read-only with a disbanded status.'
+                      : 'You will stop receiving new group messages and cannot send to this group. Rejoining requires a new invite from the group creator.'}
                   </p>
                 </div>
               </div>
@@ -789,7 +884,90 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
                 onClick={confirmLeaveGroup}
                 disabled={isLeavingGroup}
               >
-                {isLeavingGroup ? 'Leaving...' : 'Leave Group'}
+                {leaveConfirmLabel}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <Dialog open={groupInfoDialogOpen} onOpenChange={setGroupInfoDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Group Info</DialogTitle>
+              <DialogDescription>
+                Details about this group and its members.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogBody className="space-y-4">
+              {groupInfoLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between gap-4">
+                      <span className="text-muted-foreground">Name</span>
+                      <span className="font-medium text-right">{username}</span>
+                    </div>
+                    <div className="flex justify-between gap-4">
+                      <span className="text-muted-foreground">Group ID</span>
+                      <span className="font-mono text-xs text-right break-all">{groupInfoDetails?.groupId || 'Unknown'}</span>
+                    </div>
+                    <div className="flex justify-between gap-4">
+                      <span className="text-muted-foreground">Status</span>
+                      <span className="text-right">{groupInfoStatus}</span>
+                    </div>
+                    <div className="flex justify-between gap-4">
+                      <span className="text-muted-foreground">Key version</span>
+                      <span className="font-mono text-right">{groupInfoDetails?.keyVersion ?? 0}</span>
+                    </div>
+                    <div className="flex justify-between gap-4">
+                      <span className="text-muted-foreground">Creator</span>
+                      <span className="text-right">{groupInfoCreatorName}</span>
+                    </div>
+                    <div className="flex justify-between gap-4">
+                      <span className="text-muted-foreground">Creator peer ID</span>
+                      <span className="font-mono text-xs text-right break-all">{groupInfoCreatorPeerId}</span>
+                    </div>
+                    <div className="flex justify-between gap-4">
+                      <span className="text-muted-foreground">Created</span>
+                      <span className="text-right">{groupInfoCreatedAt}</span>
+                    </div>
+                    <div className="flex justify-between gap-4">
+                      <span className="text-muted-foreground">Members</span>
+                      <span className="text-right">{groupInfoMemberCount}</span>
+                    </div>
+                  </div>
+                  <div className="border-t border-border pt-3 space-y-2">
+                    <h4 className="text-sm font-medium">Member list</h4>
+                    <div className="max-h-56 overflow-y-auto border border-border rounded-md">
+                      <div className="px-3 py-2.5 border-b border-border text-sm flex items-center justify-between">
+                        <span>You</span>
+                        <span className="text-xs text-muted-foreground">{isCurrentUserGroupCreator ? 'creator' : 'member'}</span>
+                      </div>
+                      {groupMembers.length === 0 ? (
+                        <div className="p-3 text-sm text-muted-foreground">No other members yet.</div>
+                      ) : (
+                        groupMembers
+                          .slice()
+                          .sort((a, b) => a.username.localeCompare(b.username))
+                          .map((member) => (
+                            <div key={member.peerId} className="px-3 py-2.5 border-b border-border last:border-b-0 text-sm flex items-center justify-between gap-3">
+                              <span className="truncate">{member.username}</span>
+                              <span className="text-xs text-muted-foreground whitespace-nowrap">
+                                {member.status === 'confirmed' ? 'member' : member.status === 'accepted' ? 'awaiting activation' : 'invited'}
+                              </span>
+                            </div>
+                          ))
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+            </DialogBody>
+            <DialogFooter>
+              <Button type="button" onClick={() => setGroupInfoDialogOpen(false)}>
+                Close
               </Button>
             </DialogFooter>
           </DialogContent>

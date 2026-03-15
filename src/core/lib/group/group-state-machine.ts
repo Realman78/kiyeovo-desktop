@@ -6,6 +6,7 @@ const ALLOWED_TRANSITIONS: Record<GroupStatus, ReadonlySet<GroupStatus>> = {
     'invite_expired',
     'left',
     'removed',
+    'disbanded',
     'rekeying',
     'active',
   ]),
@@ -13,17 +14,20 @@ const ALLOWED_TRANSITIONS: Record<GroupStatus, ReadonlySet<GroupStatus>> = {
     'active',
     'left',
     'removed',
+    'disbanded',
     'invite_expired',
   ]),
   active: new Set<GroupStatus>([
     'rekeying',
     'left',
     'removed',
+    'disbanded',
   ]),
   rekeying: new Set<GroupStatus>([
     'active',
     'left',
     'removed',
+    'disbanded',
     // Creator may roll back first-join rotation to invited_pending on failure.
     'invited_pending',
   ]),
@@ -31,17 +35,23 @@ const ALLOWED_TRANSITIONS: Record<GroupStatus, ReadonlySet<GroupStatus>> = {
     // Re-invite path.
     'invited_pending',
     'awaiting_activation',
+    'disbanded',
   ]),
   removed: new Set<GroupStatus>([
     // Re-invite path.
     'invited_pending',
     'awaiting_activation',
+    'disbanded',
+  ]),
+  disbanded: new Set<GroupStatus>([
+    // no transitions out
   ]),
   invite_expired: new Set<GroupStatus>([
     'invited_pending',
     'awaiting_activation',
     'left',
     'removed',
+    'disbanded',
   ]),
 };
 

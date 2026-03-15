@@ -10,6 +10,8 @@ export function getGroupStatusMessage(groupStatus?: string): string | null {
       return 'You left this group.';
     case 'removed':
       return 'You were removed from this group.';
+    case 'disbanded':
+      return 'This group was disbanded by the creator.';
     default:
       return null;
   }

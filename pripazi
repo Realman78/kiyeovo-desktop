@@ -16,6 +16,10 @@ we already went thourgh this and have not found the issue, I will have to invest
 
 2.8.0 [NUDGE][SEND_FAIL] peer=fz9zYUjU group=32398e08 reason=Remote closed connection during opening -> 2 korisnika u isto vrime prihvate, skuzi zac se jedan aktivira puno kasnije
 
+13.5 Stavi u README da se poveca SCRYPTN_N
+
+12. kada pukne file transfer, download ostane zauvik na 0 - cant replicate
+
 ----------------------------
 
 3.2 creator dismantle group
@@ -24,14 +28,7 @@ we already went thourgh this and have not found the issue, I will have to invest
 
 6. PUT to DHT - Key: /kiyeovo-offline/test-shared-secret/Fnct1g9tDqVB7vFXN2QLoDLAKPIKzruAARCVT4gFscY, Original: 1938 bytes -> je li ovaj bucket zapravo uvijek isti za sve trusted korisnike? ako stavi isti secret naravno. vjv da. treba to napomenut u warningu
 
-10. prva poruka u sesiji nemore bit file - Also, I found a bug where I cant send a file as a first message in a session because it says "key exchange init signature verification failed" - remember, the key exchange happens at the beginning of every session, not just the first ever contact
-
-11. dok alice ceka boba da prihvati file exchange dok je prva poruka, nemore slat poruke
-
-12. kada pukne file transfer, download ostane zauvik na 0
-
-13.5 Stavi u README da se poveca SCRYPTN_N
-
+UI konstante neka se citaju iz settingsa kako nebi bilo preklapanja
 
 15. app security
 1. sandbox: false (line 122)

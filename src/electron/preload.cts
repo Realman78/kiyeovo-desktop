@@ -494,6 +494,9 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     leaveGroup: async (chatId: number): Promise<{ success: boolean; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.LEAVE_GROUP, chatId);
     },
+    disbandGroup: async (chatId: number): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.DISBAND_GROUP, chatId);
+    },
     kickGroupMember: async (chatId: number, targetPeerId: string): Promise<{ success: boolean; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.KICK_GROUP_MEMBER, chatId, targetPeerId);
     },

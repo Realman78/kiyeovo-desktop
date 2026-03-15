@@ -2018,6 +2018,25 @@ function setupGroupHandlers(
     }
   });
 
+  ipcMain.handle(IPC_CHANNELS.DISBAND_GROUP, async (_event, chatId: number) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: 'P2P core not initialized' };
+      }
+      if (!Number.isInteger(chatId) || chatId <= 0) {
+        return { success: false, error: 'Invalid group chat ID' };
+      }
+
+      await p2pCore.messageHandler.disbandGroup(chatId);
+      console.log(`[IPC] Disbanded group chat: ${chatId}`);
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[IPC] Failed to disband group:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to disband group' };
+    }
+  });
+
   ipcMain.handle(IPC_CHANNELS.KICK_GROUP_MEMBER, async (_event, chatId: number, targetPeerId: string) => {
     try {
       const p2pCore = getP2PCore();

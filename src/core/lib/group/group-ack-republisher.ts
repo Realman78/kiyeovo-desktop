@@ -173,6 +173,9 @@ export class GroupAckRepublisher {
     if (pending.message_type === 'GROUP_KICK') {
       return this.evaluateKickPendingAck(pending, payload);
     }
+    if (pending.message_type === 'GROUP_DISBAND') {
+      return this.evaluateDisbandPendingAck(pending, payload);
+    }
     return { action: 'remove', reason: 'invalid_type' };
   }
 
@@ -191,6 +194,9 @@ export class GroupAckRepublisher {
     const myPeerId = this.deps.node.peerId.toString();
     if (!chat || chat.created_by !== myPeerId) {
       return { action: 'remove', reason: !chat ? 'group_missing' : 'not_creator' };
+    }
+    if (chat.group_status === 'disbanded') {
+      return { action: 'remove', reason: 'group_missing' };
     }
 
     // If target already joined, invite row is stale.
@@ -224,7 +230,12 @@ export class GroupAckRepublisher {
 
     const chat = this.deps.database.getChatByGroupId(pending.group_id, this.deps.networkMode);
     if (!chat) return { action: 'remove', reason: 'group_missing' };
-    if (chat.group_status === 'invite_expired' || chat.group_status === 'left' || chat.group_status === 'removed') {
+    if (
+      chat.group_status === 'invite_expired'
+      || chat.group_status === 'left'
+      || chat.group_status === 'removed'
+      || chat.group_status === 'disbanded'
+    ) {
       return { action: 'remove', reason: 'group_missing' };
     }
     if (chat.group_creator_peer_id !== pending.target_peer_id) {
@@ -250,6 +261,9 @@ export class GroupAckRepublisher {
     if (!chat || chat.created_by !== myPeerId) {
       return { action: 'remove', reason: !chat ? 'group_missing' : 'not_creator' };
     }
+    if (chat.group_status === 'disbanded') {
+      return { action: 'remove', reason: 'group_missing' };
+    }
 
     const isParticipant = this.deps.database.getChatParticipants(chat.id)
       .some((p) => p.peer_id === pending.target_peer_id);
@@ -272,9 +286,28 @@ export class GroupAckRepublisher {
     if (!chat || chat.created_by !== myPeerId) {
       return { action: 'remove', reason: !chat ? 'group_missing' : 'not_creator' };
     }
+    if (chat.group_status === 'disbanded') {
+      return { action: 'remove', reason: 'group_missing' };
+    }
 
     // Kick targets are intentionally removed from participants during rotation,
     // so this row remains valid even when target is no longer in roster.
+    return { action: 'republish' };
+  }
+
+  private evaluateDisbandPendingAck(pending: GroupPendingAck, payload: Record<string, unknown>): PendingActionResult {
+    const messageId = typeof payload.messageId === 'string' ? payload.messageId : null;
+    const timestamp = typeof payload.timestamp === 'number' ? payload.timestamp : null;
+    if (!messageId || timestamp === null || !Number.isFinite(timestamp) || timestamp <= 0) {
+      return { action: 'remove', reason: 'invalid_payload' };
+    }
+
+    const chat = this.deps.database.getChatByGroupId(pending.group_id, this.deps.networkMode);
+    const myPeerId = this.deps.node.peerId.toString();
+    if (!chat || chat.created_by !== myPeerId) {
+      return { action: 'remove', reason: !chat ? 'group_missing' : 'not_creator' };
+    }
+
     return { action: 'republish' };
   }
 

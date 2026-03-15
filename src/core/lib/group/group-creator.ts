@@ -23,6 +23,7 @@ import {
   type GroupInviteResponseAck,
   type GroupLeaveRequest,
   type GroupKick,
+  type GroupDisband,
   type GroupWelcome,
   type GroupStateUpdate,
   type GroupControlAck,
@@ -380,6 +381,23 @@ export class GroupCreator {
       throw new Error(`Not creator of group ${response.groupId}`);
     }
 
+    // Group was disbanded locally; ACK responder so they stop retrying.
+    if (chat.group_status === 'disbanded') {
+      const responder = database.getUserByPeerId(response.responderPeerId);
+      if (!responder) {
+        console.log(
+          `[GROUP][TRACE][RESP][DROP] group=${response.groupId} from=${response.responderPeerId.slice(-8)} reason=unknown_sender_after_disband`,
+        );
+        return;
+      }
+      this.verifySignature(response, responder.signing_public_key);
+      await this.sendInviteResponseAck(response);
+      console.log(
+        `[GROUP][TRACE][RESP][DISBANDED_ACK_ONLY] group=${response.groupId} from=${response.responderPeerId.slice(-8)} msgId=${response.messageId}`,
+      );
+      return;
+    }
+
     // Reconstruct invite state from pending_acks (survives restart)
     const pendingAcks = database.getPendingAcksForGroup(response.groupId);
     const inviteCandidates = pendingAcks.filter(
@@ -495,6 +513,12 @@ export class GroupCreator {
     if (!chat || chat.created_by !== myPeerId) {
       console.log(
         `[GROUP][TRACE][LEAVE][DROP] group=${request.groupId} reason=not_creator chatExists=${!!chat}`,
+      );
+      return;
+    }
+    if (chat.group_status === 'disbanded') {
+      console.log(
+        `[GROUP][TRACE][LEAVE][DROP] group=${request.groupId} from=${senderPeerId.slice(-8)} reason=group_disbanded`,
       );
       return;
     }
@@ -629,6 +653,9 @@ export class GroupCreator {
     if (chat.group_status === 'rekeying') {
       throw new Error(`Group ${groupId} is already rekeying`);
     }
+    if (chat.group_status === 'disbanded') {
+      throw new Error(`Group ${groupId} is already disbanded`);
+    }
 
     const targetUser = database.getUserByPeerId(targetPeerId);
     const previousGroupStatus = (chat.group_status ?? 'active') as GroupStatus;
@@ -722,6 +749,69 @@ export class GroupCreator {
     }
   }
 
+  async disbandGroup(groupId: string): Promise<void> {
+    const { database, myPeerId } = this.deps;
+    const chat = database.getChatByGroupId(groupId);
+    if (!chat || chat.created_by !== myPeerId) {
+      throw new Error(`Not creator of group ${groupId}`);
+    }
+    if (chat.type !== 'group') {
+      throw new Error(`Chat for group ${groupId} is not a group chat`);
+    }
+    if (chat.group_status === 'disbanded') {
+      return;
+    }
+    if (chat.group_status === 'rekeying') {
+      throw new Error(`Group ${groupId} is already rekeying`);
+    }
+
+    const participantPeerIds = database
+      .getChatParticipants(chat.id)
+      .map((participant) => participant.peer_id)
+      .filter((peerId) => peerId !== myPeerId);
+    const pendingInviteTargets = new Set(
+      database.getPendingAcksForGroup(groupId)
+        .filter((pending) => pending.message_type === 'GROUP_INVITE')
+        .map((pending) => pending.target_peer_id),
+    );
+    const disbandTargets = Array.from(
+      new Set([
+        ...participantPeerIds,
+        ...pendingInviteTargets,
+      ]),
+    ).filter((peerId) => peerId !== myPeerId);
+    const disbandTimestamp = Date.now();
+
+    // Drop stale queued controls for this group and keep only disband notifications.
+    database.removePendingAcksForGroup(groupId);
+    database.removeInviteDeliveryAcksForMember(groupId, myPeerId);
+    for (const peerId of disbandTargets) {
+      database.removeInviteDeliveryAcksForMember(groupId, peerId);
+    }
+
+    let sent = 0;
+    let queued = 0;
+    for (const targetPeerId of disbandTargets) {
+      // eslint-disable-next-line no-await-in-loop
+      const delivered = await this.sendGroupDisband(groupId, targetPeerId, disbandTimestamp);
+      if (delivered) sent++;
+      else queued++;
+    }
+
+    database.transitionChatGroupStatus(chat.id, 'disbanded', 'creator_disband_local');
+    database.updateChatStatus(chat.id, 'active');
+    await this.appendDisbandSystemMessage(chat.id, groupId, disbandTimestamp);
+    this.deps.onGroupMembersUpdated?.({
+      chatId: chat.id,
+      groupId,
+      memberPeerId: myPeerId,
+    });
+
+    console.log(
+      `[GROUP][TRACE][DISBAND][DONE] group=${groupId} targets=${disbandTargets.length} sent=${sent} queued=${queued}`,
+    );
+  }
+
   async handleInviteDeliveredAck(ack: GroupInviteDeliveredAck, senderPeerId: string): Promise<void> {
     const { database, myPeerId } = this.deps;
     console.log(
@@ -792,7 +882,7 @@ export class GroupCreator {
 
     // Map the acked message type to the pending ack type
     const ackType = ack.ackedMessageType as AckMessageType;
-    if (ackType === 'GROUP_WELCOME' || ackType === 'GROUP_STATE_UPDATE' || ackType === 'GROUP_KICK') {
+    if (ackType === 'GROUP_WELCOME' || ackType === 'GROUP_STATE_UPDATE' || ackType === 'GROUP_KICK' || ackType === 'GROUP_DISBAND') {
       // Verify the ACK matches the currently pending message to prevent stale/duplicate ACKs
       // from clearing a newer pending entry for the same member+type.
       const pendingAcks = database.getPendingAcksForGroup(ack.groupId);
@@ -1211,6 +1301,44 @@ export class GroupCreator {
     );
   }
 
+  private async sendGroupDisband(
+    groupId: string,
+    targetPeerId: string,
+    disbandTimestamp: number,
+  ): Promise<boolean> {
+    const user = this.deps.database.getUserByPeerId(targetPeerId);
+    if (!user) {
+      console.warn(
+        `[GROUP][TRACE][DISBAND][SKIP_UNKNOWN_USER] group=${groupId} to=${targetPeerId.slice(-8)}`,
+      );
+      return false;
+    }
+
+    const disband: Omit<GroupDisband, 'signature'> = {
+      type: GroupMessageType.GROUP_DISBAND,
+      groupId,
+      creatorPeerId: this.deps.myPeerId,
+      messageId: randomUUID(),
+      timestamp: disbandTimestamp,
+    };
+    const signedDisband: GroupDisband = {
+      ...disband,
+      signature: this.sign(disband),
+    };
+    this.deps.database.insertPendingAck(groupId, targetPeerId, 'GROUP_DISBAND', JSON.stringify(signedDisband));
+
+    try {
+      await this.sendControlMessageToPeer(targetPeerId, signedDisband);
+      return true;
+    } catch (error: unknown) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[GROUP][TRACE][DISBAND][QUEUE_RETRY] group=${groupId} to=${targetPeerId.slice(-8)} reason=${reason}`,
+      );
+      return false;
+    }
+  }
+
   private async publishGroupInfoRecords(
     groupId: string,
     keyVersion: number,
@@ -1588,6 +1716,39 @@ export class GroupCreator {
         : `${resolvedUsername} was removed from the group`;
     const appliedTimestamp = Date.now();
 
+    await this.deps.database.createMessage({
+      id: messageId,
+      chat_id: chatId,
+      sender_peer_id: this.deps.myPeerId,
+      content,
+      message_type: 'system',
+      timestamp: new Date(appliedTimestamp),
+      event_timestamp: new Date(eventTimestamp),
+    });
+
+    this.deps.onMessageReceived?.({
+      chatId,
+      messageId,
+      content,
+      senderPeerId: this.deps.myPeerId,
+      senderUsername: this.deps.myUsername,
+      timestamp: appliedTimestamp,
+      eventTimestamp,
+      messageSentStatus: 'online',
+      messageType: 'system',
+    });
+  }
+
+  private async appendDisbandSystemMessage(
+    chatId: number,
+    groupId: string,
+    eventTimestamp: number,
+  ): Promise<void> {
+    const messageId = `group-system-disband-${groupId}`;
+    if (this.deps.database.messageExists(messageId)) return;
+
+    const content = 'You disbanded this group.';
+    const appliedTimestamp = Date.now();
     await this.deps.database.createMessage({
       id: messageId,
       chat_id: chatId,

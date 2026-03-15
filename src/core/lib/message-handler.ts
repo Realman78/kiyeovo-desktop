@@ -1183,6 +1183,41 @@ export class MessageHandler {
     }
   }
 
+  async disbandGroup(chatId: number): Promise<void> {
+    const chat = this.database.getChatByIdWithUsernameAndLastMsg(chatId, this.node.peerId.toString());
+    if (!chat) {
+      throw new Error('Group chat not found');
+    }
+    if (chat.type !== 'group' || !chat.group_id) {
+      throw new Error('Chat is not a group chat');
+    }
+
+    const userIdentity = this.usernameRegistry.getUserIdentity();
+    if (!userIdentity) {
+      throw new Error('User identity not available');
+    }
+
+    const myPeerId = this.node.peerId.toString();
+    const myUser = this.database.getUserByPeerId(myPeerId);
+    const myUsername = myUser?.username || `user_${myPeerId.slice(-8)}`;
+    const creator = new GroupCreator({
+      node: this.node,
+      database: this.database,
+      userIdentity,
+      myPeerId,
+      myUsername,
+      onGroupMembersUpdated: this.onGroupMembersUpdated,
+      onMessageReceived: this.onMessageReceived,
+      nudgeGroupRefetch: this.nudgePeerGroupRefetch.bind(this),
+      onRegisterPrevEpochGrace: (groupId: string, keyVersion: number) => {
+        this.groupMessaging.registerGraceContextForEpoch(groupId, keyVersion);
+      },
+    });
+
+    await creator.disbandGroup(chat.group_id);
+    this.groupMessaging.deactivateGroup(chat.group_id);
+  }
+
   async retryGroupOfflineBackup(chatId: number, messageId: string): Promise<{ success: boolean; error: string | null }> {
     try {
       await this.groupMessaging.retryOfflineBackup(chatId, messageId);
@@ -1841,7 +1876,11 @@ export class MessageHandler {
                 : 'was_rekeying';
             this.scheduleGroupStateUpdateCatchup(updatedChat.id, groupId, trigger);
           }
-          if (updatedChat?.group_status === 'removed' || updatedChat?.group_status === 'left') {
+          if (
+            updatedChat?.group_status === 'removed'
+            || updatedChat?.group_status === 'left'
+            || updatedChat?.group_status === 'disbanded'
+          ) {
             this.groupMessaging.deactivateGroup(groupId);
           } else {
             await this.groupMessaging.subscribeToGroupTopic(groupId).catch((error: unknown) => {
@@ -1863,6 +1902,16 @@ export class MessageHandler {
             this.groupMessaging.deactivateGroup(groupId);
           }
           console.log(`[GROUP] Processed GROUP_KICK from ${senderInfo.username}`);
+          break;
+        }
+        case GroupMessageType.GROUP_DISBAND: {
+          const responder = new GroupResponder(deps);
+          const groupId = (parsed as { groupId: string }).groupId;
+          const disbandApplied = await responder.handleGroupDisband(parsed as any);
+          if (disbandApplied) {
+            this.groupMessaging.deactivateGroup(groupId);
+          }
+          console.log(`[GROUP] Processed GROUP_DISBAND from ${senderInfo.username}`);
           break;
         }
 

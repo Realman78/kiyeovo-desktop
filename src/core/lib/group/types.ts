@@ -10,6 +10,7 @@ export const GroupMessageType = {
   GROUP_CONTROL_ACK: 'GROUP_CONTROL_ACK',
   GROUP_LEAVE_REQUEST: 'GROUP_LEAVE_REQUEST',
   GROUP_KICK: 'GROUP_KICK',
+  GROUP_DISBAND: 'GROUP_DISBAND',
   GROUP_MESSAGE: 'GROUP_MESSAGE',
 } as const;
 
@@ -22,6 +23,7 @@ export type GroupStatus =
   | 'rekeying'
   | 'left'
   | 'removed'
+  | 'disbanded'
   | 'invite_expired';
 
 export type GroupMembershipEvent = 'join' | 'leave' | 'kick';
@@ -107,6 +109,15 @@ export interface GroupKick {
   groupId: string;
   keyVersion: number;
   kickedPeerId: string;
+  messageId: string;
+  timestamp: number;
+  signature: string;
+}
+
+export interface GroupDisband {
+  type: typeof GroupMessageType.GROUP_DISBAND;
+  groupId: string;
+  creatorPeerId: string;
   messageId: string;
   timestamp: number;
   signature: string;
@@ -235,7 +246,8 @@ export type AckMessageType =
   | 'GROUP_INVITE_RESPONSE'
   | 'GROUP_WELCOME'
   | 'GROUP_STATE_UPDATE'
-  | 'GROUP_KICK';
+  | 'GROUP_KICK'
+  | 'GROUP_DISBAND';
 
 export interface PendingAck {
   groupId: string;
@@ -256,4 +268,5 @@ export type GroupControlMessage =
   | GroupStateUpdate
   | GroupControlAck
   | GroupLeaveRequest
-  | GroupKick;
+  | GroupKick
+  | GroupDisband;

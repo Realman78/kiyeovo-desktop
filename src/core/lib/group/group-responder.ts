@@ -17,6 +17,7 @@ import {
   type GroupStateUpdate,
   type GroupLeaveRequest,
   type GroupKick,
+  type GroupDisband,
   type GroupControlAck,
   type GroupInfoLatest,
   type GroupInfoVersioned,
@@ -170,7 +171,8 @@ export class GroupResponder {
     const isTerminalStatus =
       chat.group_status === 'removed'
       || chat.group_status === 'left'
-      || chat.group_status === 'invite_expired';
+      || chat.group_status === 'invite_expired'
+      || chat.group_status === 'disbanded';
     if (chat.group_status !== 'invited_pending' && !isTerminalStatus) {
       throw new Error(`Cannot respond to group ${groupId} in status ${chat.group_status}`);
     }
@@ -271,6 +273,10 @@ export class GroupResponder {
     }
     if (chat.group_status === 'removed') {
       this.applyLocalGroupRemovedState(chat.id, groupId);
+      return;
+    }
+    if (chat.group_status === 'disbanded') {
+      this.applyLocalGroupDisbandedState(chat.id, groupId);
       return;
     }
 
@@ -521,7 +527,7 @@ export class GroupResponder {
     );
     this.verifySignature(update, creator.signing_public_key);
 
-    if (chat.group_status === 'left' || chat.group_status === 'removed') {
+    if (chat.group_status === 'left' || chat.group_status === 'removed' || chat.group_status === 'disbanded') {
       await this.sendControlAck(
         creatorPeerId,
         update.groupId,
@@ -680,7 +686,7 @@ export class GroupResponder {
     }
 
     const currentKeyVersion = chat.key_version ?? 0;
-    if (chat.group_status === 'removed') {
+    if (chat.group_status === 'removed' || chat.group_status === 'disbanded') {
       this.deps.onGroupMembersUpdated?.({
         chatId: chat.id,
         groupId: kick.groupId,
@@ -735,6 +741,90 @@ export class GroupResponder {
     );
     console.log(
       `[GROUP][TRACE][KICK][APPLY] group=${kick.groupId} msgId=${kick.messageId} keyVersion=${kick.keyVersion}`,
+    );
+    return true;
+  }
+
+  async handleGroupDisband(disband: GroupDisband): Promise<boolean> {
+    const { database } = this.deps;
+    const chat = database.getChatByGroupId(disband.groupId);
+    const fallbackCreator = database.getUserByPeerId(disband.creatorPeerId);
+    if (!Number.isFinite(disband.timestamp) || disband.timestamp <= 0) {
+      console.log(`[GROUP][TRACE][DISBAND][DROP] group=${disband.groupId} msgId=${disband.messageId} reason=invalid_timestamp`);
+      return false;
+    }
+    const normalizedDisbandTimestamp = this.normalizeRemoteEventTimestamp(
+      disband.timestamp,
+      'DISBAND',
+      disband.groupId,
+      disband.messageId,
+    );
+
+    if (!chat) {
+      if (!fallbackCreator) {
+        console.log(`[GROUP][TRACE][DISBAND][DROP] group=${disband.groupId} reason=unknown_group_and_creator`);
+        return false;
+      }
+      this.verifySignature(disband, fallbackCreator.signing_public_key);
+      this.expirePendingGroupInviteNotifications(disband.groupId);
+      await this.sendControlAck(
+        disband.creatorPeerId,
+        disband.groupId,
+        GroupMessageType.GROUP_DISBAND,
+        disband.messageId,
+      );
+      console.log(`[GROUP][TRACE][DISBAND][ACK_ONLY_NO_CHAT] group=${disband.groupId} msgId=${disband.messageId}`);
+      return true;
+    }
+
+    const creatorPeerId = chat.group_creator_peer_id;
+    if (!creatorPeerId) {
+      console.log(`[GROUP][TRACE][DISBAND][DROP] group=${disband.groupId} reason=no_creator`);
+      return false;
+    }
+    if (creatorPeerId !== disband.creatorPeerId) {
+      console.log(
+        `[GROUP][TRACE][DISBAND][DROP] group=${disband.groupId} msgId=${disband.messageId} reason=creator_mismatch expected=${creatorPeerId.slice(-8)} got=${disband.creatorPeerId.slice(-8)}`,
+      );
+      return false;
+    }
+
+    const creator = fallbackCreator ?? database.getUserByPeerId(creatorPeerId);
+    if (!creator) {
+      console.log(`[GROUP][TRACE][DISBAND][DROP] group=${disband.groupId} reason=unknown_creator creator=${creatorPeerId.slice(-8)}`);
+      return false;
+    }
+
+    this.verifySignature(disband, creator.signing_public_key);
+
+    if (chat.group_status !== 'disbanded') {
+      this.applyLocalGroupDisbandedState(chat.id, disband.groupId);
+      await this.appendDisbandSystemMessage(
+        chat.id,
+        disband.groupId,
+        creatorPeerId,
+        creator.username,
+        normalizedDisbandTimestamp,
+      );
+      this.deps.onGroupMembersUpdated?.({
+        chatId: chat.id,
+        groupId: disband.groupId,
+        memberPeerId: creatorPeerId,
+      });
+      console.log(
+        `[GROUP][TRACE][DISBAND][APPLY] group=${disband.groupId} msgId=${disband.messageId}`,
+      );
+    } else {
+      console.log(
+        `[GROUP][TRACE][DISBAND][DUPLICATE] group=${disband.groupId} msgId=${disband.messageId}`,
+      );
+    }
+
+    await this.sendControlAck(
+      creatorPeerId,
+      disband.groupId,
+      GroupMessageType.GROUP_DISBAND,
+      disband.messageId,
     );
     return true;
   }
@@ -1212,9 +1302,34 @@ export class GroupResponder {
     database.deleteGroupOfflineSentMessagesByPrefix(`${this.groupOfflineBucketPrefix}/${groupId}/`);
   }
 
+  private applyLocalGroupDisbandedState(chatId: number, groupId: string): void {
+    const { database, myPeerId } = this.deps;
+    database.transitionChatGroupStatus(chatId, 'disbanded' satisfies GroupStatus, 'local_disband_applied');
+    database.updateChatStatus(chatId, 'active');
+    database.removePendingAcksForGroup(groupId);
+    database.removeInviteDeliveryAcksForMember(groupId, myPeerId);
+    database.deleteGroupOfflineSentMessagesByPrefix(`${this.groupOfflineBucketPrefix}/${groupId}/`);
+    this.expirePendingGroupInviteNotifications(groupId);
+  }
+
+  private expirePendingGroupInviteNotifications(groupId: string): void {
+    const notifications = this.deps.database.getAllNotifications();
+    for (const notification of notifications) {
+      if (notification.notification_type !== 'group_invitation' || notification.status !== 'pending') continue;
+      try {
+        const payload = JSON.parse(notification.notification_data) as { groupId?: string };
+        if (payload.groupId === groupId) {
+          this.deps.database.updateNotificationStatus(notification.id, 'expired');
+        }
+      } catch {
+        continue;
+      }
+    }
+  }
+
   private normalizeRemoteEventTimestamp(
     timestamp: number,
-    messageType: 'STATE_UPDATE' | 'KICK',
+    messageType: 'STATE_UPDATE' | 'KICK' | 'DISBAND',
     groupId: string,
     messageId: string,
   ): number {
@@ -1256,6 +1371,41 @@ export class GroupResponder {
           : `${resolvedUsername} was removed from the group`;
     const appliedTimestamp = Date.now();
 
+    await this.deps.database.createMessage({
+      id: messageId,
+      chat_id: chatId,
+      sender_peer_id: senderPeerId,
+      content,
+      message_type: 'system',
+      timestamp: new Date(appliedTimestamp),
+      event_timestamp: new Date(eventTimestamp),
+    });
+
+    this.deps.onMessageReceived?.({
+      chatId,
+      messageId,
+      content,
+      senderPeerId,
+      senderUsername,
+      timestamp: appliedTimestamp,
+      eventTimestamp,
+      messageSentStatus: 'online',
+      messageType: 'system',
+    });
+  }
+
+  private async appendDisbandSystemMessage(
+    chatId: number,
+    groupId: string,
+    senderPeerId: string,
+    senderUsername: string,
+    eventTimestamp: number,
+  ): Promise<void> {
+    const messageId = `group-system-disband-${groupId}`;
+    if (this.deps.database.messageExists(messageId)) return;
+
+    const content = 'This group was disbanded by the creator.';
+    const appliedTimestamp = Date.now();
     await this.deps.database.createMessage({
       id: messageId,
       chat_id: chatId,
