@@ -124,11 +124,21 @@ export class FileHandler {
     }, FILE_REJECTION_COUNTER_RESET_INTERVAL);
   }
 
+  private trace(scope: 'SEND' | 'RECV' | 'CORE', peerId: string, fileId: string | null, event: string, extra?: string): void {
+    const peerSuffix = peerId ? peerId.slice(-8) : 'unknown';
+    const fileLabel = fileId && fileId.trim() ? fileId : 'n/a';
+    const details = extra ? ` ${extra}` : '';
+    console.log(`[FILE][TRACE][${scope}] peer=*${peerSuffix} file=${fileLabel} event=${event}${details}`);
+  }
+
   private tryBeginPeerTransfer(peerId: string, fileId: string, direction: 'send' | 'receive'): boolean {
-    if (this.activeTransfersByPeer.has(peerId)) {
+    const active = this.activeTransfersByPeer.get(peerId);
+    if (active) {
+      this.trace(direction === 'send' ? 'SEND' : 'RECV', peerId, fileId, 'PEER_TRANSFER_BLOCKED', `activeFile=${active.fileId} activeDirection=${active.direction}`);
       return false;
     }
     this.activeTransfersByPeer.set(peerId, { fileId, direction });
+    this.trace(direction === 'send' ? 'SEND' : 'RECV', peerId, fileId, 'PEER_TRANSFER_BEGIN', `direction=${direction}`);
     return true;
   }
 
@@ -136,15 +146,18 @@ export class FileHandler {
     const active = this.activeTransfersByPeer.get(peerId);
     if (active && active.fileId === fileId) {
       this.activeTransfersByPeer.delete(peerId);
+      this.trace(active.direction === 'send' ? 'SEND' : 'RECV', peerId, fileId, 'PEER_TRANSFER_END', `direction=${active.direction}`);
     }
   }
 
   private trackTransferStream(fileId: string, stream: Stream): void {
     this.activeTransferStreams.set(fileId, stream);
+    this.trace('CORE', '', fileId, 'STREAM_TRACKED');
   }
 
   private untrackTransferStream(fileId: string): void {
-    this.activeTransferStreams.delete(fileId);
+    const existed = this.activeTransferStreams.delete(fileId);
+    this.trace('CORE', '', fileId, 'STREAM_UNTRACKED', `existed=${existed}`);
   }
 
   private isPeerTransferActive(peerId: string): boolean {
@@ -285,6 +298,7 @@ export class FileHandler {
     let activePeerTransferStarted = false;
     let chunkTimeout: NodeJS.Timeout | null = null;
     let lastEmittedPercentage = 0;
+    this.trace('RECV', senderPeerId, null, 'STREAM_OPEN');
 
     try {
       let buffer = new Uint8Array(0);
@@ -304,7 +318,13 @@ export class FileHandler {
         buffer = newBuffer;
 
         for (;;) {
-          const decoded = this.#decodeMessage(buffer);
+          let decoded: { message: FileTransferMessage; bytesRead: number } | null;
+          try {
+            decoded = this.#decodeMessage(buffer);
+          } catch (error: unknown) {
+            this.trace('RECV', senderPeerId, offer?.fileId ?? null, 'DECODE_ERROR', `bufferBytes=${buffer.length} err=${error instanceof Error ? error.message : 'unknown'}`);
+            throw error;
+          }
           if (!decoded) break;
 
           buffer = buffer.slice(decoded.bytesRead);
@@ -313,6 +333,7 @@ export class FileHandler {
           if (message.type === FILE_OFFER) {
             const offerMsg = message;
             offer = offerMsg;
+            this.trace('RECV', senderPeerId, offerMsg.fileId, 'OFFER_RECEIVED', `size=${offerMsg.size} chunks=${offerMsg.totalChunks}`);
 
             // Global pending files limit
             const maxPendingTotal = this.getMaxPendingFilesTotal();
@@ -598,6 +619,7 @@ export class FileHandler {
 
               console.log(`File transfer from ${sender.username} expired or rejected`);
               console.log(`To block future file transfers from ${sender.username}, use: block-user ${sender.username}`);
+              this.trace('RECV', senderPeerId, offerMsg.fileId, 'OFFER_NOT_ACCEPTED', `decision=${transferStatus}`);
               const response: FileOfferResponse = {
                 type: FILE_OFFER_RESPONSE,
                 fileId: offerMsg.fileId,
@@ -611,6 +633,7 @@ export class FileHandler {
             // User accepted - start chunk timeout
             console.log(`File transfer accepted, receiving chunks...`);
             offerAccepted = true;
+            this.trace('RECV', senderPeerId, offerMsg.fileId, 'OFFER_ACCEPTED');
             if (!this.tryBeginPeerTransfer(senderPeerId, offerMsg.fileId, 'receive')) {
               const busyReason = 'Another file transfer is already active with this peer';
               this.database.updateMessageTransfer(offerMsg.fileId, {
@@ -631,6 +654,7 @@ export class FileHandler {
                 accepted: false,
                 reason: busyReason,
               };
+              this.trace('RECV', senderPeerId, offerMsg.fileId, 'OFFER_ACCEPT_FAILED_BUSY');
               writable.push(this.#encodeMessage(busyResponse));
               return;
             }
@@ -642,6 +666,7 @@ export class FileHandler {
               accepted: true,
             };
             writable.push(this.#encodeMessage(response));
+            this.trace('RECV', senderPeerId, offerMsg.fileId, 'OFFER_ACCEPT_SENT');
 
             // Set per-chunk idle timeout (resets after each chunk received)
             // If no chunk is received for CHUNK_IDLE_TIMEOUT, transfer is stalled
@@ -726,6 +751,14 @@ export class FileHandler {
           }
         }
       }
+
+      this.trace(
+        'RECV',
+        senderPeerId,
+        offer?.fileId ?? null,
+        'SOURCE_ENDED',
+        `offerSeen=${!!offer} receivedChunks=${receivedChunks.size}${offer ? `/${offer.totalChunks}` : ''} bufferedBytes=${buffer.length}`,
+      );
 
       if (!offer) throw new Error('No offer received');
 
@@ -815,9 +848,11 @@ export class FileHandler {
           fileId: offer.fileId,
           success: true,
         };
+        this.trace('RECV', senderPeerId, offer.fileId, 'CONFIRM_SUCCESS_SENT');
         writable.push(this.#encodeMessage(confirm));
       }
     } catch (error: unknown) {
+      this.trace('RECV', senderPeerId, offer?.fileId ?? null, 'ERROR', `err=${error instanceof Error ? error.message : 'unknown'}`);
       // Emit failure event
       if (offer && this.onFileTransferFailed && chat) {
         this.onFileTransferFailed({
@@ -835,7 +870,12 @@ export class FileHandler {
             success: false,
             error: error.message,
           };
-          writable.push(this.#encodeMessage(confirm));
+          try {
+            this.trace('RECV', senderPeerId, offer.fileId, 'CONFIRM_FAILURE_SENT', `reason=${error.message}`);
+            writable.push(this.#encodeMessage(confirm));
+          } catch (pushError: unknown) {
+            this.trace('RECV', senderPeerId, offer.fileId, 'CONFIRM_FAILURE_SEND_FAILED', `err=${pushError instanceof Error ? pushError.message : 'unknown'}`);
+          }
         } else {
           const response: FileOfferResponse = {
             type: FILE_OFFER_RESPONSE,
@@ -843,7 +883,12 @@ export class FileHandler {
             accepted: false,
             reason: error.message,
           };
-          writable.push(this.#encodeMessage(response));
+          try {
+            this.trace('RECV', senderPeerId, offer.fileId, 'OFFER_REJECTION_SENT', `reason=${error.message}`);
+            writable.push(this.#encodeMessage(response));
+          } catch (pushError: unknown) {
+            this.trace('RECV', senderPeerId, offer.fileId, 'OFFER_REJECTION_SEND_FAILED', `err=${pushError instanceof Error ? pushError.message : 'unknown'}`);
+          }
         }
       }
       throw error;
@@ -867,8 +912,10 @@ export class FileHandler {
         this.messageHandler.getSessionManager().unpinSession(pinnedSessionPeerId);
       }
 
+      this.trace('RECV', senderPeerId, offer?.fileId ?? null, 'WRITABLE_END');
       writable.end();
       await sinkPromise;
+      this.trace('RECV', senderPeerId, offer?.fileId ?? null, 'SINK_RESOLVED');
     }
   }
 
@@ -941,7 +988,12 @@ export class FileHandler {
     if (data.length < 4 + length) return null;
     const jsonBytes = data.slice(4, 4 + length);
     const json = new TextDecoder().decode(jsonBytes);
-    return { message: JSON.parse(json) as FileTransferMessage, bytesRead: 4 + length };
+    try {
+      return { message: JSON.parse(json) as FileTransferMessage, bytesRead: 4 + length };
+    } catch (error: unknown) {
+      console.log(`[FILE][TRACE][DECODE] parse_error frameLength=${length} bufferLength=${data.length} err=${error instanceof Error ? error.message : 'unknown'}`);
+      throw error;
+    }
   }
 
   async sendFile(targetUsername: string, filePath: string, providedFileId?: string): Promise<void> {
@@ -989,6 +1041,7 @@ export class FileHandler {
         context: 'file_transfer_send',
       });
       this.trackTransferStream(fileId, stream);
+      this.trace('SEND', targetPeerIdStr, fileId, 'STREAM_OPEN');
 
       const activeStream = stream;
       const writable = pushable();
@@ -997,7 +1050,13 @@ export class FileHandler {
       const sourceIterator = activeStream.source[Symbol.asyncIterator]();
       const readNextControlMessage = async (): Promise<FileTransferMessage> => {
         for (;;) {
-          const decoded = this.#decodeMessage(controlBuffer);
+          let decoded: { message: FileTransferMessage; bytesRead: number } | null;
+          try {
+            decoded = this.#decodeMessage(controlBuffer);
+          } catch (error: unknown) {
+            this.trace('SEND', targetPeerIdStr, fileId, 'DECODE_ERROR', `bufferBytes=${controlBuffer.length} err=${error instanceof Error ? error.message : 'unknown'}`);
+            throw error;
+          }
           if (decoded) {
             controlBuffer = controlBuffer.slice(decoded.bytesRead);
             return decoded.message;
@@ -1005,6 +1064,7 @@ export class FileHandler {
 
           const next = await sourceIterator.next();
           if (next.done) {
+            this.trace('SEND', targetPeerIdStr, fileId, 'SOURCE_ENDED_WAITING_CONTROL', `bufferBytes=${controlBuffer.length}`);
             throw new Error('Stream closed before expected file transfer message');
           }
 
@@ -1051,6 +1111,7 @@ export class FileHandler {
         offer.signature = Buffer.from(signature).toString('base64');
         writable.push(this.#encodeMessage(offer));
         console.log(`Sent file offer, waiting for response...`);
+        this.trace('SEND', targetPeerIdStr, fileId, 'OFFER_SENT', `size=${metadata.size} chunks=${metadata.totalChunks}`);
 
         const readNextMessage = async (): Promise<FileTransferMessage> => {
           return readNextControlMessage();
@@ -1094,6 +1155,7 @@ export class FileHandler {
           throw new Error(`File rejected: ${reason}`);
         }
         console.log(`File accepted, sending chunks...`);
+        this.trace('SEND', targetPeerIdStr, fileId, 'OFFER_ACCEPTED');
         this.messageHandler.getSessionManager().updateSessionUsage(targetPeerIdStr);
         this.database.updateMessageTransfer(fileId, {
           transfer_status: 'in_progress',
@@ -1135,10 +1197,13 @@ export class FileHandler {
         }
 
         console.log(`All chunks sent`);
+        this.trace('SEND', targetPeerIdStr, fileId, 'ALL_CHUNKS_SENT');
         transferQueued = true;
       } finally {
+        this.trace('SEND', targetPeerIdStr, fileId, 'WRITABLE_END');
         writable.end();
         await sinkPromise;
+        this.trace('SEND', targetPeerIdStr, fileId, 'SINK_RESOLVED');
       }
 
       if (transferQueued) {
@@ -1151,6 +1216,7 @@ export class FileHandler {
         });
 
         console.log(`Waiting for recipient confirmation...`);
+        this.trace('SEND', targetPeerIdStr, fileId, 'WAITING_CONFIRM');
         let confirmTimeoutId: ReturnType<typeof setTimeout> | null = null;
         const confirmTimeoutPromise = new Promise<never>((_, reject) => {
           confirmTimeoutId = setTimeout(
@@ -1184,6 +1250,7 @@ export class FileHandler {
         if (!transferConfirm.success) {
           throw new Error(transferConfirm.error || 'Recipient failed to save file');
         }
+        this.trace('SEND', targetPeerIdStr, fileId, 'CONFIRM_SUCCESS_RECEIVED');
 
         const messageId = fileId;
         this.database.updateMessageTransfer(messageId, {
@@ -1204,6 +1271,7 @@ export class FileHandler {
       }
     } catch (error: unknown) {
       const errorText = error instanceof Error ? error.message : 'Unknown error';
+      this.trace('SEND', activePeerId ?? '', fileId || null, 'ERROR', `err=${errorText}`);
       if ((errorText.toLowerCase().includes('timeout waiting for file acceptance') || errorText.toLowerCase().includes('timeout waiting for transfer confirmation')) && stream) {
         try {
           stream.abort(new Error('File transfer timeout'));
@@ -1243,6 +1311,7 @@ export class FileHandler {
       generalErrorHandler(error);
       throw error;
     } finally {
+      this.trace('SEND', activePeerId ?? '', fileId || null, 'FINALIZE');
       if (activePeerId && fileId) {
         this.endPeerTransfer(activePeerId, fileId);
       }
