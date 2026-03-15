@@ -15,7 +15,7 @@ import { MessageHandler } from "./message-handler.js";
 import { generalErrorHandler } from "../utils/general-error.js";
 import { EncryptedUserIdentity } from "./encrypted-user-identity.js";
 import { dialProtocolWithRelayFallback } from "./protocol-dialer.js";
-import { formatCopyTimestamp } from "../utils/miscellaneous";
+import { formatCopyTimestamp } from "../utils/miscellaneous.js";
 
 interface FileMetadata {
   buffer: Buffer
