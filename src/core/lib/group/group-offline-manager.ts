@@ -8,6 +8,7 @@ import type { ChatDatabase, Chat } from '../db/database.js';
 import type { EncryptedUserIdentity } from '../encrypted-user-identity.js';
 import {
   CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES,
+  GROUP_MESSAGE_MAX_FUTURE_SKEW_MS,
   GROUP_MAX_MESSAGES_PER_SENDER,
   GROUP_OFFLINE_CLEANUP_INTERVAL_MS,
   GROUP_OFFLINE_LOCAL_CACHE_MAX_ENTRIES,
@@ -449,6 +450,20 @@ export class GroupOfflineManager {
         for (const msg of orderedMessages) {
           const messageId = this.getOfflineMessageId(msg);
           if (msg.groupId !== chat.group_id || msg.keyVersion !== epoch.key_version) continue;
+          if (!Number.isFinite(msg.timestamp) || msg.timestamp <= 0) {
+            console.warn(
+              `[GROUP-OFFLINE][DROP] chat=${chat.id} epoch=${epoch.key_version} sender=${senderPeerId.slice(-8)} ` +
+              `msgId=${messageId} reason=invalid_timestamp ts=${String(msg.timestamp)}`,
+            );
+            continue;
+          }
+          if (msg.timestamp > Date.now() + GROUP_MESSAGE_MAX_FUTURE_SKEW_MS) {
+            console.warn(
+              `[GROUP-OFFLINE][DROP] chat=${chat.id} epoch=${epoch.key_version} sender=${senderPeerId.slice(-8)} ` +
+              `msgId=${messageId} reason=timestamp_too_far_future ts=${msg.timestamp}`,
+            );
+            continue;
+          }
           if (
             epoch.used_until !== null
             && msg.timestamp > epoch.used_until + GROUP_ROTATION_GRACE_WINDOW_MS
@@ -1026,7 +1041,8 @@ export class GroupOfflineManager {
 
   private filterLiveMessages(messages: GroupOfflineMessage[], now: number): GroupOfflineMessage[] {
     const cutoff = now - GROUP_OFFLINE_MESSAGE_TTL_MS;
-    return messages.filter((msg) => msg.timestamp >= cutoff);
+    const maxAllowedTimestamp = now + GROUP_MESSAGE_MAX_FUTURE_SKEW_MS;
+    return messages.filter((msg) => msg.timestamp >= cutoff && msg.timestamp <= maxAllowedTimestamp);
   }
 
   private getCachedStore(bucketKey: string): GroupOfflineStore | null {

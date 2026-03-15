@@ -475,7 +475,7 @@ export class GroupCreator {
     console.log(
       `[GROUP][TRACE][RESP][WELCOME] group=${response.groupId} to=${response.responderPeerId.slice(-8)} action=send_group_welcome`,
     );
-    await this.sendGroupWelcome(response.groupId, response.responderPeerId, response.timestamp);
+    await this.sendGroupWelcome(response.groupId, response.responderPeerId, Date.now());
 
     // Remove invite only after welcome path succeeds.
     database.removePendingAck(response.groupId, response.responderPeerId, 'GROUP_INVITE');

@@ -5,7 +5,12 @@ import type { ChatNode, OfflineCheckCacheEntry, OfflineMessage, OfflineMessageSt
 import { ed25519 } from '@noble/curves/ed25519';
 import { sha256 } from '@noble/hashes/sha2';
 import { generalErrorHandler } from '../utils/general-error.js';
-import { MAX_MESSAGES_PER_STORE, MESSAGE_TTL, OFFLINE_CONTROL_MESSAGE_RESERVE } from '../constants.js';
+import {
+    MAX_MESSAGES_PER_STORE,
+    MESSAGE_TTL,
+    OFFLINE_CONTROL_MESSAGE_RESERVE,
+    OFFLINE_MESSAGE_MAX_FUTURE_SKEW_MS,
+} from '../constants.js';
 import type { ChatDatabase } from './db/database.js';
 import { QueryEvent } from '@libp2p/kad-dht';
 
@@ -439,6 +444,23 @@ export class OfflineMessageManager {
             // 4. Verify bucket_key
             if (message.signed_payload.bucket_key !== expectedBucketKey) {
                 console.log('Offline message bucket_key mismatch');
+                return false;
+            }
+
+            if (!Number.isFinite(message.timestamp) || message.timestamp <= 0) {
+                console.log('Offline message timestamp invalid');
+                return false;
+            }
+            if (!Number.isFinite(message.signed_payload.timestamp) || message.signed_payload.timestamp <= 0) {
+                console.log('Offline message signed timestamp invalid');
+                return false;
+            }
+            if (message.timestamp !== message.signed_payload.timestamp) {
+                console.log('Offline message timestamp mismatch between payload and metadata');
+                return false;
+            }
+            if (message.timestamp > Date.now() + OFFLINE_MESSAGE_MAX_FUTURE_SKEW_MS) {
+                console.log('Offline message timestamp too far in future');
                 return false;
             }
 

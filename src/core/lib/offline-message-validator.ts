@@ -4,7 +4,12 @@ import { gunzipSync, gunzip } from 'zlib';
 import { promisify } from 'util';
 import { fromBase64Url } from './base64url.js';
 import { generalErrorHandler } from '../utils/general-error.js';
-import { MAX_MESSAGES_PER_STORE, MESSAGE_TTL, NETWORK_MODE_CONFIG } from '../constants.js';
+import {
+  MAX_MESSAGES_PER_STORE,
+  MESSAGE_TTL,
+  NETWORK_MODE_CONFIG,
+  OFFLINE_MESSAGE_MAX_FUTURE_SKEW_MS,
+} from '../constants.js';
 
 const gunzipAsync = promisify(gunzip);
 const OFFLINE_BUCKET_PREFIXES = Object.values(NETWORK_MODE_CONFIG).map((config) => config.dhtNamespaces.offline);
@@ -178,6 +183,19 @@ function validateStoreSignature(
     throw new Error(`Store version mismatch: ${store.version} vs ${store.store_signed_payload.version}`);
   }
 
+  if (!Number.isFinite(store.last_updated) || store.last_updated <= 0) {
+    throw new Error('Store last_updated invalid');
+  }
+  if (!Number.isFinite(store.store_signed_payload.timestamp) || store.store_signed_payload.timestamp <= 0) {
+    throw new Error('Store signed timestamp invalid');
+  }
+  if (store.last_updated !== store.store_signed_payload.timestamp) {
+    throw new Error('Store timestamp mismatch between payload and metadata');
+  }
+  if (store.last_updated > Date.now() + OFFLINE_MESSAGE_MAX_FUTURE_SKEW_MS) {
+    throw new Error('Store timestamp too far in future');
+  }
+
   // Verify store signature
   const payloadBytes = new TextEncoder().encode(JSON.stringify(store.store_signed_payload));
   const signatureBytes = Buffer.from(store.store_signature, 'base64');
@@ -210,6 +228,18 @@ function validateSingleMessage(
     throw new Error(`Message ${msg.id} bucket_key mismatch: signed for different bucket`);
   }
 
+  if (!Number.isFinite(msg.timestamp) || msg.timestamp <= 0) {
+    throw new Error(`Message ${msg.id} timestamp invalid`);
+  }
+  if (!Number.isFinite(msg.signed_payload.timestamp) || msg.signed_payload.timestamp <= 0) {
+    throw new Error(`Message ${msg.id} signed timestamp invalid`);
+  }
+
+  // Timestamp used by receivers must be exactly what was signed.
+  if (msg.timestamp !== msg.signed_payload.timestamp) {
+    throw new Error(`Message ${msg.id} timestamp mismatch with signed payload`);
+  }
+
   // 2. Verify content_hash matches SHA256(encrypted_content)
   const contentBytes = Buffer.from(msg.content, 'base64');
   const actualContentHash = Buffer.from(sha256(contentBytes)).toString('base64');
@@ -235,6 +265,9 @@ function validateSingleMessage(
 
   // 5. Check timestamp freshness (optional but good practice)
   const now = Date.now();
+  if (msg.timestamp > now + OFFLINE_MESSAGE_MAX_FUTURE_SKEW_MS) {
+    throw new Error(`Message ${msg.id} timestamp invalid: too far in future`);
+  }
   const messageAge = now - msg.timestamp;
 
   if (messageAge > MESSAGE_TTL) {

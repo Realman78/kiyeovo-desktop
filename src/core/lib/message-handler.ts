@@ -14,6 +14,8 @@ import {
   GROUP_INFO_REPUBLISH_STARTUP_DELAY,
   GROUP_INFO_REPUBLISH_INTERVAL,
   GROUP_INFO_REPUBLISH_JITTER,
+  OFFLINE_ACK_MAX_FUTURE_SKEW_MS,
+  OFFLINE_MESSAGE_MAX_FUTURE_SKEW_MS,
   ERRORS,
   getNetworkModeRuntime,
 } from '../constants.js';
@@ -1417,6 +1419,19 @@ export class MessageHandler {
           continue;
         }
 
+        if (!Number.isFinite(msg.timestamp) || msg.timestamp <= 0) {
+          console.log(
+            `[OFFLINE][MSG][SKIP] run=${runId} msgId=${msg.id} peer=${bucketInfo.peerId.slice(-8)} reason=timestamp_invalid msgTs=${msg.timestamp}`,
+          );
+          continue;
+        }
+        if (msg.timestamp > Date.now() + OFFLINE_MESSAGE_MAX_FUTURE_SKEW_MS) {
+          console.log(
+            `[OFFLINE][MSG][SKIP] run=${runId} msgId=${msg.id} peer=${bucketInfo.peerId.slice(-8)} reason=timestamp_too_far_future msgTs=${msg.timestamp}`,
+          );
+          continue;
+        }
+
         // Skip messages we've already processed (based on last read timestamp)
         if (msg.timestamp <= bucketInfo.lastReadTimestamp) {
           console.log(
@@ -1536,6 +1551,18 @@ export class MessageHandler {
   // Process an ACK from a peer - clear acknowledged messages from our bucket.
   private async processOfflineAck(peerId: string, ackTimestamp: number): Promise<void> {
     try {
+      if (!Number.isFinite(ackTimestamp) || ackTimestamp <= 0) {
+        console.log(`[OFFLINE][ACK_CLEAR][SKIP] peer=${peerId.slice(-8)} reason=invalid_ack_timestamp ackTs=${ackTimestamp}`);
+        return;
+      }
+      const maxAllowedAckTs = Date.now() + OFFLINE_ACK_MAX_FUTURE_SKEW_MS;
+      if (ackTimestamp > maxAllowedAckTs) {
+        console.log(
+          `[OFFLINE][ACK_CLEAR][SKIP] peer=${peerId.slice(-8)} reason=ack_too_far_future ackTs=${ackTimestamp} maxAllowed=${maxAllowedAckTs}`,
+        );
+        return;
+      }
+
       const userIdentity = this.usernameRegistry.getUserIdentity();
       if (!userIdentity) {
         console.log('Cannot process ACK - no user identity');

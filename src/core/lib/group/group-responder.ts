@@ -6,7 +6,7 @@ import type { ChatDatabase } from '../db/database.js';
 import type { EncryptedUserIdentity } from '../encrypted-user-identity.js';
 import { OfflineMessageManager } from '../offline-message-manager.js';
 import { toBase64Url } from '../base64url.js';
-import { getNetworkModeRuntime } from '../../constants.js';
+import { GROUP_MESSAGE_MAX_FUTURE_SKEW_MS, getNetworkModeRuntime } from '../../constants.js';
 import {
   GroupMessageType,
   type GroupInvite,
@@ -513,6 +513,12 @@ export class GroupResponder {
       );
       return;
     }
+    const normalizedEventTimestamp = this.normalizeRemoteEventTimestamp(
+      update.timestamp,
+      'STATE_UPDATE',
+      update.groupId,
+      update.messageId,
+    );
     this.verifySignature(update, creator.signing_public_key);
 
     if (chat.group_status === 'left' || chat.group_status === 'removed') {
@@ -553,7 +559,7 @@ export class GroupResponder {
         update.roster.find((entry) => entry.peerId === update.targetPeerId)?.username,
         creatorPeerId,
         creator.username,
-        update.timestamp,
+        normalizedEventTimestamp,
       );
       await this.sendControlAck(
         creatorPeerId,
@@ -615,7 +621,7 @@ export class GroupResponder {
         update.roster.find((entry) => entry.peerId === update.targetPeerId)?.username,
         creatorPeerId,
         creator.username,
-        update.timestamp,
+        normalizedEventTimestamp,
       );
     } else {
       console.log(
@@ -657,6 +663,12 @@ export class GroupResponder {
       console.log(`[GROUP][TRACE][KICK][DROP] group=${kick.groupId} msgId=${kick.messageId} reason=invalid_timestamp`);
       return false;
     }
+    const normalizedKickTimestamp = this.normalizeRemoteEventTimestamp(
+      kick.timestamp,
+      'KICK',
+      kick.groupId,
+      kick.messageId,
+    );
 
     this.verifySignature(kick, creator.signing_public_key);
 
@@ -713,7 +725,7 @@ export class GroupResponder {
       this.deps.myUsername,
       creatorPeerId,
       creator.username,
-      kick.timestamp,
+      normalizedKickTimestamp,
     );
     await this.sendControlAck(
       creatorPeerId,
@@ -1198,6 +1210,22 @@ export class GroupResponder {
     database.removeInviteDeliveryAcksForMember(groupId, myPeerId);
     // Keep cursors/seqs so post-removal catch-up can resume without rescanning from scratch.
     database.deleteGroupOfflineSentMessagesByPrefix(`${this.groupOfflineBucketPrefix}/${groupId}/`);
+  }
+
+  private normalizeRemoteEventTimestamp(
+    timestamp: number,
+    messageType: 'STATE_UPDATE' | 'KICK',
+    groupId: string,
+    messageId: string,
+  ): number {
+    const now = Date.now();
+    if (timestamp > now + GROUP_MESSAGE_MAX_FUTURE_SKEW_MS) {
+      console.warn(
+        `[GROUP][TRACE][${messageType}][TIMESTAMP_CLAMP] group=${groupId} msgId=${messageId} remoteTs=${timestamp} clampedTs=${now}`,
+      );
+      return now;
+    }
+    return timestamp;
   }
 
   private async appendMembershipSystemMessage(

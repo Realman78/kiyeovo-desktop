@@ -2,6 +2,7 @@ import { ed25519 } from '@noble/curves/ed25519';
 import { gunzipSync } from 'zlib';
 import { fromBase64Url } from '../base64url.js';
 import {
+  GROUP_MESSAGE_MAX_FUTURE_SKEW_MS,
   GROUP_MAX_MESSAGES_PER_SENDER,
   GROUP_OFFLINE_STORE_MAX_COMPRESSED_BYTES,
   NETWORK_MODE_CONFIG,
@@ -112,6 +113,19 @@ export async function groupOfflineMessageValidator(
   if (store.version !== store.storeSignedPayload.version) {
     throw new Error('Store version mismatch');
   }
+  if (!Number.isFinite(store.lastUpdated) || store.lastUpdated <= 0) {
+    throw new Error('Store lastUpdated invalid');
+  }
+  if (!Number.isFinite(store.storeSignedPayload.timestamp) || store.storeSignedPayload.timestamp <= 0) {
+    throw new Error('Store signed timestamp invalid');
+  }
+  if (store.lastUpdated !== store.storeSignedPayload.timestamp) {
+    throw new Error('Store timestamp mismatch');
+  }
+  const now = Date.now();
+  if (store.lastUpdated > now + GROUP_MESSAGE_MAX_FUTURE_SKEW_MS) {
+    throw new Error('Store timestamp too far in future');
+  }
 
   // Validate highestSeq consistency
   if (store.messages.length > 0) {
@@ -149,6 +163,12 @@ export async function groupOfflineMessageValidator(
     }
     if (msg.keyVersion !== pathKeyVersionNum) {
       throw new Error(`Message ${messageId} keyVersion mismatch: payload=${msg.keyVersion}, keyPath=${pathKeyVersion}`);
+    }
+    if (!Number.isFinite(msg.timestamp) || msg.timestamp <= 0) {
+      throw new Error(`Message ${messageId} timestamp invalid`);
+    }
+    if (msg.timestamp > now + GROUP_MESSAGE_MAX_FUTURE_SKEW_MS) {
+      throw new Error(`Message ${messageId} timestamp too far in future`);
     }
 
     const canonicalUnsigned = toCanonicalUnsignedMessage(msg);
@@ -270,6 +290,9 @@ export async function groupInfoLatestValidator(
     }
     if (!Number.isFinite(record.lastUpdated) || record.lastUpdated <= 0) {
       throw new Error(`Invalid lastUpdated: ${String(record.lastUpdated)}`);
+    }
+    if (record.lastUpdated > Date.now() + GROUP_MESSAGE_MAX_FUTURE_SKEW_MS) {
+      throw new Error(`Invalid lastUpdated: too far in future (${record.lastUpdated})`);
     }
 
     if (!record.creatorSignature) {
@@ -399,6 +422,9 @@ export async function groupInfoVersionedValidator(
     }
     if (!Number.isFinite(record.activatedAt) || record.activatedAt <= 0) {
       throw new Error(`Invalid activatedAt: ${String(record.activatedAt)}`);
+    }
+    if (record.activatedAt > Date.now() + GROUP_MESSAGE_MAX_FUTURE_SKEW_MS) {
+      throw new Error(`Invalid activatedAt: too far in future (${record.activatedAt})`);
     }
     if (typeof record.prevVersionHash !== 'string') {
       throw new Error('Invalid prevVersionHash');
