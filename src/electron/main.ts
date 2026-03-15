@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -106,7 +106,7 @@ function setupMinimalMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-function getWindowBrandingForMode(mode: NetworkMode): { title: string; icon: string | Electron.NativeImage } {
+function getWindowBrandingForMode(mode: NetworkMode): { title: string; icon: string } {
   const iconsDir = app.isPackaged
     ? path.join(process.resourcesPath, 'icons')
     : path.join(__dirname, '..', '..', 'resources', 'icons');
@@ -119,11 +119,10 @@ function getWindowBrandingForMode(mode: NetworkMode): { title: string; icon: str
     };
   }
 
-  const anonymousSvgPath = path.join(iconsDir, 'app-icon-anonymous.svg');
-  const anonymousIcon = nativeImage.createFromPath(anonymousSvgPath);
+  const anonymousIconPath = path.join(iconsDir, 'app-icon-anonymous.png');
   return {
     title: 'Kiyeovo (anonymous)',
-    icon: anonymousIcon.isEmpty() ? fastIconPath : anonymousIcon,
+    icon: fs.existsSync(anonymousIconPath) ? anonymousIconPath : fastIconPath,
   };
 }
 
@@ -156,6 +155,10 @@ function createMainWindow() {
   // Keep dock/taskbar branding aligned with the current network mode.
   if (process.platform === 'darwin' && app.dock) {
     app.dock.setIcon(branding.icon);
+  }
+  if (process.platform === 'linux') {
+    // Some Linux DEs ignore constructor icon unless applied after creation.
+    win.setIcon(branding.icon);
   }
 
   const enforceWindowTitle = () => {
