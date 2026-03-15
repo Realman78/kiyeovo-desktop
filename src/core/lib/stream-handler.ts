@@ -72,7 +72,7 @@ export class StreamHandler {
    * Log received message information
    */
   static logReceivedMessage(message: EncryptedMessage): void {
-    console.log('message :>> ', message);
+    console.log('message :>> ', message, Date.now());
   }
 
   /**

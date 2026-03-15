@@ -8,6 +8,7 @@ import type { ChatNode, ConversationSession, AuthenticatedEncryptedMessage, Mess
 import { EncryptedUserIdentity } from './encrypted-user-identity.js';
 import { SessionManager } from './session-manager.js';
 import {
+  KEY_EXCHANGE_MAX_FUTURE_SKEW_MS,
   KEY_EXCHANGE_RATE_LIMIT_DEFAULT,
   KEY_ROTATION_TIMEOUT,
   MAX_KEY_EXCHANGE_AGE,
@@ -553,7 +554,7 @@ export class KeyExchange {
 
     // Replay attack prevention
     const messageAge = Date.now() - message.timestamp;
-    if (messageAge > MAX_KEY_EXCHANGE_AGE || messageAge < 0) {
+    if (messageAge > MAX_KEY_EXCHANGE_AGE || messageAge < -KEY_EXCHANGE_MAX_FUTURE_SKEW_MS) {
       throw new Error('Key exchange message too old or future-dated');
     }
   }
@@ -1262,7 +1263,7 @@ export class KeyExchange {
 
     // Timestamp freshness check (replay attack prevention)
     const messageAge = Date.now() - (message.timestamp || 0);
-    if (messageAge > MAX_KEY_EXCHANGE_AGE || messageAge < 0) {
+    if (messageAge > MAX_KEY_EXCHANGE_AGE || messageAge < -KEY_EXCHANGE_MAX_FUTURE_SKEW_MS) {
       console.error('Key rotation message too old or future-dated');
       return;
     }
@@ -1401,7 +1402,7 @@ export class KeyExchange {
 
     // Timestamp freshness check (replay attack prevention)
     const responseAge = Date.now() - (message.timestamp || 0);
-    if (responseAge > MAX_KEY_EXCHANGE_AGE || responseAge < 0) {
+    if (responseAge > MAX_KEY_EXCHANGE_AGE || responseAge < -KEY_EXCHANGE_MAX_FUTURE_SKEW_MS) {
       console.error('Key rotation response too old or future-dated');
       this.rejectRotationPromise(remoteId, new Error('Key rotation response timestamp invalid'));
       return;

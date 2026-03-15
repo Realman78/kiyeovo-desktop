@@ -18,9 +18,6 @@ we already went thourgh this and have not found the issue, I will have to invest
 
 ----------------------------
 
-2.8 BITNA OPTIMIZIACIJA: in clearAcknowledgedMessages, why dont we just remove "await OfflineMessageManager.putToDHT(node, bucketKey, signedStore);" ? the line 287 already saves to database. that means that the next time we go to send a message, we will just be sending the cleanMessages + new message
- - Claude je potvrdil da je dobra
-
 3.2 creator dismantle group
 3.2.1 group info
 3.2.3 request group update

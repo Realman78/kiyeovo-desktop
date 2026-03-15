@@ -300,7 +300,7 @@ export class OfflineMessageManager {
                 signingPrivateKey
             );
 
-            await OfflineMessageManager.putToDHT(node, bucketKey, signedStore);
+            // Local save is sufficient, next outbound write will publish pruned state.
             database.saveOfflineSentMessages(bucketKey, cleanMessages, version);
 
             console.log(
