@@ -508,7 +508,7 @@ export class KeyExchange {
     // Get my own username for responses
     const myPeerId = this.node.peerId.toString();
     const myUser = this.database.getUserByPeerId(myPeerId);
-    const myUsername = myUser?.username || `user_${myPeerId.slice(-8)}`;
+    const myUsername = this.usernameRegistry.getCurrentUsername() || myUser?.username || `user_${myPeerId.slice(-8)}`;
 
     try {
       if (message.content === 'key_exchange_init') {
