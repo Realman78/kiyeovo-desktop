@@ -69,11 +69,12 @@ export class OfflineMessageManager {
     ): Promise<void> {
         return OfflineMessageManager.withBucketMutationLock(bucketKey, async () => {
             try {
-                const local = database.getOfflineSentMessages(bucketKey);
-                const messages: OfflineMessage[] = OfflineMessageManager.filterExpiredMessages(local.messages);
-                let version = local.version;
                 const bypassControlReserve = options?.bypassControlReserve === true;
                 const userCapacityLimit = Math.max(0, MAX_MESSAGES_PER_STORE - OFFLINE_CONTROL_MESSAGE_RESERVE);
+                const local = database.getOfflineSentMessages(bucketKey);
+
+                const messages: OfflineMessage[] = OfflineMessageManager.filterExpiredMessages(local.messages);
+                let version = local.version;
 
                 if (!bypassControlReserve && messages.length >= userCapacityLimit) {
                     throw new Error(
@@ -86,9 +87,8 @@ export class OfflineMessageManager {
                     throw new Error(`Offline message store full (${messages.length}/${MAX_MESSAGES_PER_STORE})`);
                 }
 
-                const bucketTag = bucketKey.slice(-12);
                 console.log(
-                    `[OFFLINE][WRITE][START] bucket=*${bucketTag} prevVersion=${version} prevCount=${messages.length} appendMsgId=${message.id} appendType=${message.message_type}`
+                    `[OFFLINE][WRITE][START] bucket=${bucketKey.slice(-12)} appendType=${message.message_type}`
                 );
                 messages.push(message);
                 version++;
@@ -102,11 +102,9 @@ export class OfflineMessageManager {
                 );
 
                 await OfflineMessageManager.putToDHT(node, bucketKey, signedStore);
-
                 database.saveOfflineSentMessages(bucketKey, messages, version);
-                console.log(
-                    `[OFFLINE][WRITE][DONE] bucket=*${bucketTag} newVersion=${version} newCount=${messages.length} appendedMsgId=${message.id}`
-                );
+
+                console.log(`[OFFLINE][WRITE][DONE] bucket=*${bucketKey.slice(-12)} newVersion=${version} newCount=${messages.length}`);
             } catch (error: unknown) {
                 generalErrorHandler(error);
                 throw error;

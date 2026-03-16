@@ -1068,32 +1068,28 @@ export class MessageHandler {
       // Silently handle cancelled key exchanges - user intentionally cancelled
       if (err instanceof Error && err.message === 'KEY_EXCHANGE_CANCELLED') {
         console.log(`Message not sent - key exchange was cancelled by user`);
-        return { success: true, messageSentStatus: null, error: null }; // Return success to avoid showing error
+        return { success: true, messageSentStatus: null, error: null };
       }
 
       console.error(`Failed to send message to ${targetUsernameOrPeerId}: ${err instanceof Error ? err.message : String(err)}`);
       try {
         const errorText = String(err instanceof Error ? err.message : err).toLowerCase();
         console.log("errorText :>> ", errorText);
+
         const shouldFallbackOffline = /econnrefused|user is offline|all multiaddr dials failed|message timeout|socks|tor transport|enetunreach|no valid addresses|ehostunreach|etimedout|limited connection|no_reservation|no reservation|failed to connect via relay with status/.test(errorText);
         if (shouldFallbackOffline) {
           console.log(`Trying to send offline message to ${targetUsernameOrPeerId}`);
+
           // Use user from key exchange if available, otherwise query database
-          if (!user) {
-            const dbUser = this.database.getUserByPeerIdThenUsername(targetUsernameOrPeerId);
-            if (dbUser && !this.database.getChatByPeerId(dbUser.peer_id)) {
-              throw new Error(`${targetUsernameOrPeerId} is offline`);
-            }
-            user = dbUser ?? null;
-          }
+          user ||= this.database.getUserByPeerIdThenUsername(targetUsernameOrPeerId) ?? null;
           if (!user) throw new Error('User not found in database');
 
-          // Get the shared secret part of the bucket key
           const bucketSecret = this.database.getOfflineBucketSecretByPeerId(user.peer_id);
           if (!bucketSecret) {
-            throw new Error('Offline bucket secret not found');
+            const error = !!this.database.getChatByPeerId(user.peer_id) 
+              ? 'Offline fallback unavailable right now' : 'Direct channel not established yet'
+            throw new Error(error);
           }
-          // Standard construction works for both ECDH-derived and random secrets
           const writeBucketKey = this.keyExchange.constructWriteBucketKey(bucketSecret);
 
           const strippedMessage = await this.storeOfflineMessageDB(user, writeBucketKey, message);
@@ -1343,7 +1339,7 @@ export class MessageHandler {
       const userIdentity = this.usernameRegistry.getUserIdentity();
       if (!userIdentity) throw new Error('User identity not available');
 
-      // Get my own username from database (last registered username) or generate fallback
+      // Get last registered username or generate fallback
       const myPeerId = this.node.peerId.toString();
       const myUser = this.database.getUserByPeerId(myPeerId);
       const myUsername = myUser?.username || `user_${myPeerId.slice(-8)}`;
@@ -1353,13 +1349,11 @@ export class MessageHandler {
       const lastAckSent = this.database.getOfflineLastAckSentByPeerId(user.peer_id);
       const shouldSendAck = lastReadTimestamp > lastAckSent;
 
-      // Create offline message encrypted with recipient's RSA public key
-      // The bucket key is included in the signature for DHT validation
       const offlineMessage = OfflineMessageManager.createOfflineMessage(
         this.node.peerId.toString(),
         myUsername,
         message,
-        Buffer.from(user.offline_public_key, 'base64').toString(), // RSA public key (PEM)
+        Buffer.from(user.offline_public_key, 'base64').toString(),
         userIdentity.signingPrivateKey,
         writeBucketKey,
         shouldSendAck ? lastReadTimestamp : undefined
