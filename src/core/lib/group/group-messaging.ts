@@ -8,7 +8,7 @@ import {
   GROUP_MESSAGE_MAX_AGE_MS,
   GROUP_MESSAGE_MAX_FUTURE_SKEW_MS,
   GROUP_OLD_TOPIC_SUBSCRIPTION_GRACE_MS,
-  GROUP_PUBLISH_RETRYABLE_ERROR_PLACEHOLDER,
+  GROUP_PUBLISH_RETRYABLE_ERROR,
   GROUP_PUBLISH_RETRY_DELAY_MS,
   GROUP_TOPIC_RECONCILE_INTERVAL,
   getNetworkModeRuntime,
@@ -59,8 +59,6 @@ export class GroupMessaging {
   private started = false;
   private reconcileInFlight = false;
   private heartbeatInFlight = false;
-  // In-memory only for V1: if app restarts before retry, user must resend/ignore warning.
-  // TODO: persist failed offline backup retries in DB if we need restart-safe retries.
   private readonly pendingOfflineBackups = new Map<string, GroupContentMessage>();
   private readonly rekeyContextMissTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -643,10 +641,7 @@ export class GroupMessaging {
 
   private isRetryablePublishError(error: unknown): boolean {
     const errorText = error instanceof Error ? error.message : String(error);
-    return (
-      errorText.includes('PublishError.NoPeersSubscribedToTopic') ||
-      errorText.includes(GROUP_PUBLISH_RETRYABLE_ERROR_PLACEHOLDER)
-    );
+    return errorText.includes(GROUP_PUBLISH_RETRYABLE_ERROR);
   }
 
   private async publishHeartbeats(): Promise<void> {
@@ -703,7 +698,7 @@ export class GroupMessaging {
       `connectedPeers=${connectedPeers.map((p) => p.slice(-8)).join(',') || 'none'}`
     );
     if (remoteRecipients.length === 0) {
-      throw new Error('PublishError.NoPeersSubscribedToTopic');
+      throw new Error(GROUP_PUBLISH_RETRYABLE_ERROR);
     }
   }
 

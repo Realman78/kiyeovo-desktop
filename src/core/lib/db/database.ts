@@ -33,12 +33,17 @@ export interface User {
 
 export interface Notification {
     id: string
-    notification_type: 'group_invitation' // TODO: since we have only one type of notification, maybe a simplification is needed
+    notification_type: 'group_invitation'
     notification_data: string // JSON string
     bucket_key: string
     network_mode: NetworkMode
     status?: 'pending' | 'accepted' | 'rejected' | 'expired' // Only for group_invitation
     created_at: Date
+}
+
+export type PendingGroupInvitationNotification = Notification & {
+    notification_type: 'group_invitation'
+    status: 'pending'
 }
 
 export interface Chat {
@@ -106,7 +111,7 @@ export interface ContactAttempt {
     id: number
     network_mode: NetworkMode
     sender_peer_id: string
-    sender_username: string // TODO:do we really need to save both username and peer_id?
+    sender_username: string
     message: string
     message_body: string
     timestamp: number
@@ -116,7 +121,7 @@ export interface ContactAttempt {
 export interface BlockedPeer {
     network_mode: NetworkMode
     peer_id: string
-    username: string | null // do we really need to save both username and peer_id?
+    username: string | null
     blocked_at: Date
     reason: string | null
 }
@@ -125,7 +130,7 @@ export interface FailedKeyExchange {
     id: number
     network_mode: NetworkMode
     target_peer_id: string
-    target_username: string // do we really need to save both username and peer_id?
+    target_username: string
     timestamp: number
     content: string
     reason: string
@@ -182,6 +187,7 @@ export interface GroupPendingAck {
     network_mode: NetworkMode
     message_type: AckMessageType
     message_payload: string
+    status: 'active' | 'retired'
     created_at: string
     last_published_at: string
 }
@@ -558,6 +564,7 @@ export class ChatDatabase {
                 network_mode TEXT NOT NULL DEFAULT '${DEFAULT_NETWORK_MODE}' CHECK(network_mode IN ('${NETWORK_MODES.FAST}','${NETWORK_MODES.ANONYMOUS}')),
                 message_type TEXT NOT NULL CHECK(message_type IN ('GROUP_INVITE', 'GROUP_INVITE_RESPONSE', 'GROUP_WELCOME', 'GROUP_STATE_UPDATE', 'GROUP_KICK', 'GROUP_DISBAND')),
                 message_payload TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'retired')),
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 last_published_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (group_id, target_peer_id, message_type, network_mode)
@@ -661,6 +668,7 @@ export class ChatDatabase {
       -- Group indexes
       CREATE INDEX IF NOT EXISTS idx_group_key_history_group ON group_key_history(group_id);
       CREATE INDEX IF NOT EXISTS idx_group_pending_acks_group_mode ON group_pending_acks(group_id, network_mode);
+      CREATE INDEX IF NOT EXISTS idx_group_pending_acks_mode_status_created ON group_pending_acks(network_mode, status, created_at);
       CREATE INDEX IF NOT EXISTS idx_group_pending_info_mode_next_retry ON group_pending_info_publishes(network_mode, next_retry_at);
       CREATE INDEX IF NOT EXISTS idx_group_invite_delivery_acks_group_mode ON group_invite_delivery_acks(group_id, network_mode);
       CREATE INDEX IF NOT EXISTS idx_chats_group_id_mode ON chats(group_id, network_mode);
@@ -707,6 +715,7 @@ export class ChatDatabase {
         this.ensureColumnExists('notifications', 'network_mode', `TEXT NOT NULL DEFAULT '${DEFAULT_NETWORK_MODE}'`);
         this.ensureColumnExists('bootstrap_nodes', 'network_mode', `TEXT NOT NULL DEFAULT '${DEFAULT_NETWORK_MODE}'`);
         this.ensureColumnExists('group_pending_acks', 'network_mode', `TEXT NOT NULL DEFAULT '${DEFAULT_NETWORK_MODE}'`);
+        this.ensureColumnExists('group_pending_acks', 'status', `TEXT NOT NULL DEFAULT 'active'`);
         this.ensureColumnExists('group_pending_info_publishes', 'network_mode', `TEXT NOT NULL DEFAULT '${DEFAULT_NETWORK_MODE}'`);
         this.ensureColumnExists('group_invite_delivery_acks', 'network_mode', `TEXT NOT NULL DEFAULT '${DEFAULT_NETWORK_MODE}'`);
         this.ensureColumnExists('encrypted_user_identities', 'network_mode', `TEXT NOT NULL DEFAULT '${DEFAULT_NETWORK_MODE}'`);
@@ -2119,6 +2128,24 @@ export class ChatDatabase {
         }));
     }
 
+    getPendingGroupInvitationNotifications(): PendingGroupInvitationNotification[] {
+        const stmt = this.db.prepare(`
+            SELECT *
+            FROM notifications
+            WHERE network_mode = ?
+              AND notification_type = 'group_invitation'
+              AND status = 'pending'
+            ORDER BY created_at DESC
+        `);
+        const rows = stmt.all(this.getActiveNetworkMode()) as any[];
+        return rows.map(row => ({
+            ...row,
+            status: 'pending' as const,
+            notification_type: 'group_invitation' as const,
+            created_at: new Date(row.created_at)
+        }));
+    }
+
     // Bootstrap nodes operations
     getBootstrapNodes(): { address: string; connected: boolean }[] {
         const stmt = this.db.prepare('SELECT address, connected FROM bootstrap_nodes WHERE network_mode = ? ORDER BY sort_order ASC, id ASC');
@@ -2425,10 +2452,11 @@ export class ChatDatabase {
     insertPendingAck(groupId: string, targetPeerId: string, messageType: AckMessageType, payload: string, mode?: NetworkMode): void {
         const activeMode = this.getActiveNetworkMode(mode);
         const stmt = this.db.prepare(`
-            INSERT INTO group_pending_acks (group_id, target_peer_id, message_type, network_mode, message_payload)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO group_pending_acks (group_id, target_peer_id, message_type, network_mode, message_payload, status)
+            VALUES (?, ?, ?, ?, ?, 'active')
             ON CONFLICT(group_id, target_peer_id, message_type, network_mode) DO UPDATE SET
                 message_payload = excluded.message_payload,
+                status = 'active',
                 last_published_at = CURRENT_TIMESTAMP
         `);
         stmt.run(groupId, targetPeerId, messageType, activeMode, payload);
@@ -2450,18 +2478,72 @@ export class ChatDatabase {
     }
 
     getAllPendingAcks(mode?: NetworkMode): GroupPendingAck[] {
-        const stmt = this.db.prepare('SELECT * FROM group_pending_acks WHERE network_mode = ?');
+        const stmt = this.db.prepare(`SELECT * FROM group_pending_acks WHERE network_mode = ? AND status = 'active'`);
         return stmt.all(this.getActiveNetworkMode(mode)) as GroupPendingAck[];
     }
 
     getPendingAcksForGroup(groupId: string, mode?: NetworkMode): GroupPendingAck[] {
-        const stmt = this.db.prepare('SELECT * FROM group_pending_acks WHERE group_id = ? AND network_mode = ?');
+        const stmt = this.db.prepare(`SELECT * FROM group_pending_acks WHERE group_id = ? AND network_mode = ? AND status = 'active'`);
         return stmt.all(groupId, this.getActiveNetworkMode(mode)) as GroupPendingAck[];
+    }
+
+    getPendingAcksForTargets(targetPeerIds: string[], mode?: NetworkMode): GroupPendingAck[] {
+        if (targetPeerIds.length === 0) return [];
+        const placeholders = targetPeerIds.map(() => '?').join(',');
+        const stmt = this.db.prepare(`
+            SELECT *
+            FROM group_pending_acks
+            WHERE network_mode = ?
+              AND status = 'active'
+              AND target_peer_id IN (${placeholders})
+        `);
+        return stmt.all(this.getActiveNetworkMode(mode), ...targetPeerIds) as GroupPendingAck[];
     }
 
     updatePendingAckLastPublished(groupId: string, targetPeerId: string, messageType: AckMessageType, mode?: NetworkMode): void {
         const stmt = this.db.prepare('UPDATE group_pending_acks SET last_published_at = CURRENT_TIMESTAMP WHERE group_id = ? AND target_peer_id = ? AND message_type = ? AND network_mode = ?');
         stmt.run(groupId, targetPeerId, messageType, this.getActiveNetworkMode(mode));
+    }
+
+    retireStalePendingAcks(maxAgeMs: number, mode?: NetworkMode): number {
+        const cutoffSeconds = Math.floor((Date.now() - Math.max(0, maxAgeMs)) / 1000);
+        const stmt = this.db.prepare(`
+            UPDATE group_pending_acks
+            SET status = 'retired'
+            WHERE network_mode = ?
+              AND status = 'active'
+              AND CAST(strftime('%s', created_at) AS INTEGER) <= ?
+        `);
+        const result = stmt.run(this.getActiveNetworkMode(mode), cutoffSeconds);
+        return result.changes ?? 0;
+    }
+
+    reactivateRetiredPendingAcksForTarget(targetPeerId: string, mode?: NetworkMode, groupId?: string): number {
+        const activeMode = this.getActiveNetworkMode(mode);
+        if (groupId) {
+            const stmt = this.db.prepare(`
+                UPDATE group_pending_acks
+                SET status = 'active',
+                    created_at = CURRENT_TIMESTAMP
+                WHERE network_mode = ?
+                  AND group_id = ?
+                  AND target_peer_id = ?
+                  AND status = 'retired'
+            `);
+            const result = stmt.run(activeMode, groupId, targetPeerId);
+            return result.changes ?? 0;
+        }
+
+        const stmt = this.db.prepare(`
+            UPDATE group_pending_acks
+            SET status = 'active',
+                created_at = CURRENT_TIMESTAMP
+            WHERE network_mode = ?
+              AND target_peer_id = ?
+              AND status = 'retired'
+        `);
+        const result = stmt.run(activeMode, targetPeerId);
+        return result.changes ?? 0;
     }
 
     // --- Group info pending publishes ---

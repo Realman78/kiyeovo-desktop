@@ -1985,9 +1985,8 @@ function setupGroupHandlers(
         return { success: false, invites: [], error: 'P2P core not initialized' };
       }
 
-      const notifications = p2pCore.database.getAllNotifications();
+      const notifications = p2pCore.database.getPendingGroupInvitationNotifications();
       const invites = notifications
-        .filter(n => n.notification_type === 'group_invitation' && n.status === 'pending')
         .map(n => {
           try {
             const data = JSON.parse(n.notification_data) as {

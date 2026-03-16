@@ -8,7 +8,6 @@ import type { Component, Multiaddr } from '@multiformats/multiaddr';
 /**
  * Remove all addresses except for onion v3 addresses
  */
-// TODO test this new filtering because protoCodes() is deprecated
 export const filterOnionAddressesMapper = (peer: PeerInfo): PeerInfo => {
     peer.multiaddrs = peer.multiaddrs.filter((ma: Multiaddr) =>
         ma.getComponents().some((c: Component) => c.code === 445)); // 445 is /onion3

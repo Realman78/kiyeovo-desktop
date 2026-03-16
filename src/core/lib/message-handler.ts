@@ -80,6 +80,8 @@ export class MessageHandler {
   private peerActivityCheckCooldowns = new Map<string, number>();
   private groupAckRepublishTimer: ReturnType<typeof setTimeout> | null = null;
   private groupAckStartupTimer: ReturnType<typeof setTimeout> | null = null;
+  private groupAckImmediateRepublishTimer: ReturnType<typeof setTimeout> | null = null;
+  private groupAckImmediateTargets = new Set<string>();
   private groupInfoRepublishTimer: ReturnType<typeof setTimeout> | null = null;
   private groupInfoStartupTimer: ReturnType<typeof setTimeout> | null = null;
   private groupControlRetryState = new Map<string, { attempts: number; lastSeenAt: number; lastError: string }>();
@@ -356,6 +358,7 @@ export class MessageHandler {
         if (MessageEncryption.isKeyExchange(message)) {
           const hadUserAtStart = !!this.database.getUserByPeerId(remoteId);
           await this.keyExchange.handleKeyExchange(remoteId, message as AuthenticatedEncryptedMessage, stream);
+          this.reactivateRetiredPendingAcksForPeer(remoteId);
           // Fallback B only for initial handshake from an existing known contact.
           if (message.content === 'key_exchange_init' && hadUserAtStart) {
             this.schedulePeerActivityOfflineCheck(remoteId);
@@ -369,6 +372,7 @@ export class MessageHandler {
           return;
         }
         const decryptedContent = MessageEncryption.decryptMessage(message, session);
+        this.reactivateRetiredPendingAcksForPeer(remoteId);
 
         // Process ACK if included - clear acknowledged messages from our bucket
         if (message.offline_ack_timestamp) {
@@ -756,6 +760,36 @@ export class MessageHandler {
       void this.runGroupAckRepublishCycle();
       this.scheduleNextGroupAckRepublish();
     }, delay);
+  }
+
+  private scheduleImmediateGroupAckRepublish(): void {
+    if (this.groupAckImmediateRepublishTimer) return;
+    
+    this.groupAckImmediateRepublishTimer = setTimeout(() => {
+      this.groupAckImmediateRepublishTimer = null;
+      void this.flushImmediateGroupAckRepublishQueue();
+    }, 1000);
+  }
+
+  private enqueueImmediateGroupAckRepublish(peerId: string): void {
+    this.groupAckImmediateTargets.add(peerId);
+    this.scheduleImmediateGroupAckRepublish();
+  }
+
+  private async flushImmediateGroupAckRepublishQueue(): Promise<void> {
+    const targets = Array.from(this.groupAckImmediateTargets);
+    this.groupAckImmediateTargets.clear();
+    if (targets.length === 0) return;
+
+    const ran = await this.groupAckRepublisher.runCycleForTargets(targets);
+    if (!ran) {
+      for (const target of targets) {
+        this.groupAckImmediateTargets.add(target);
+      }
+    }
+    if (this.groupAckImmediateTargets.size > 0) {
+      this.scheduleImmediateGroupAckRepublish();
+    }
   }
 
   private async runGroupAckRepublishCycle(): Promise<void> {
@@ -1416,7 +1450,6 @@ export class MessageHandler {
       return {checkedChatIds: [], unreadFromChats: new Map()};
     }
 
-    // TODO what is the point of checkedChats?
     const readBuckets: Array<{ chatId?: number; key: string; peerPubKey: string; peerId: string; lastReadTimestamp: number }> = [];
     const checkedChats: number[] = [];
 
@@ -1504,14 +1537,6 @@ export class MessageHandler {
 
     for (const msg of store.messages) {
       if (!msg.bucket_key) continue;
-      // TODO this is probably redundant since we check this above
-      if (!msg.bucket_key.startsWith(this.expectedOfflineBucketPrefix)) {
-        console.warn(
-          `[MODE-GUARD][REJECT][offline_lookup] run=${runId} reason=message_bucket_prefix_mismatch ` +
-          `expectedPrefix=${this.expectedOfflineBucketPrefix} got=${msg.bucket_key.slice(0, 64)}... msgId=${msg.id}`
-        );
-        continue;
-      }
       try {
         const bucketInfo = readBuckets.find(b => b.key === msg.bucket_key);
         if (!bucketInfo) {
@@ -1567,10 +1592,16 @@ export class MessageHandler {
           console.log(`[OFFLINE][MSG][SKIP] run=${runId} msgId=${msg.id} reason=own_message`);
           continue;
         }
+        if (senderInfo.peer_id !== bucketInfo.peerId) {
+          console.log(
+            `[OFFLINE][MSG][SKIP] run=${runId} msgId=${msg.id} reason=sender_peer_mismatch sender=${senderInfo.peer_id.slice(-8)} bucketPeer=${bucketInfo.peerId.slice(-8)}`,
+          );
+          continue;
+        }
+        this.reactivateRetiredPendingAcksForPeer(senderInfo.peer_id);
 
-        // Process ACK if included - clear acknowledged messages from our bucket
+        // Process ACK if included - prune acknowledged messages from our local sent store.
         if (senderInfo.offline_ack_timestamp) {
-          // TODO this is already in "pripazi" file, but im gonna say it again - dht.put here is not necesserry
           // eslint-disable-next-line no-await-in-loop
           await this.processOfflineAck(senderInfo.peer_id, senderInfo.offline_ack_timestamp);
         }
@@ -1648,6 +1679,16 @@ export class MessageHandler {
     }
   }
 
+  private reactivateRetiredPendingAcksForPeer(peerId: string): void {
+    const reactivatedCount = this.database.reactivateRetiredPendingAcksForTarget(peerId);
+    if (reactivatedCount > 0) {
+      console.log(
+        `[GROUP-ACK][REACTIVATE] peer=${peerId.slice(-8)} count=${reactivatedCount}`,
+      );
+      this.enqueueImmediateGroupAckRepublish(peerId);
+    }
+  }
+
   // Process an ACK from a peer - clear acknowledged messages from our bucket.
   private async processOfflineAck(peerId: string, ackTimestamp: number): Promise<void> {
     try {
@@ -1678,12 +1719,11 @@ export class MessageHandler {
 
       const writeBucketKey = this.keyExchange.constructWriteBucketKey(bucketSecret);
 
-      // Clear acknowledged messages from our local store and update DHT
+      // Clear acknowledged messages from our local sent store.
+      // Pruned state is published on the next outbound write to this bucket.
       await OfflineMessageManager.clearAcknowledgedMessages(
-        this.node,
         writeBucketKey,
         ackTimestamp,
-        userIdentity.signingPrivateKey,
         this.database
       );
 

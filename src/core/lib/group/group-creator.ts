@@ -16,6 +16,7 @@ import {
   GROUP_MESSAGE_MAX_FUTURE_SKEW_MS,
   GROUP_STATE_RESYNC_REQUEST_COOLDOWN_MS,
   getNetworkModeRuntime,
+  GROUP_PENDING_ACK_RETIRE_AGE_MS,
 } from '../../constants.js';
 import {
   GroupMessageType,
@@ -320,7 +321,7 @@ export class GroupCreator {
 
       const roundResults = await Promise.all(batch.map(async (peerId): Promise<GroupInviteDelivery> => {
         const inviteId = randomUUID();
-        const expiresAt = now + GROUP_INVITE_LIFETIME; // TODO what if it expires?
+        const expiresAt = now + GROUP_INVITE_LIFETIME; // TODO test what if it expires?
         const invitee = database.getUserByPeerId(peerId);
         const username = invitee?.username || peerId;
 
@@ -448,9 +449,9 @@ export class GroupCreator {
       );
     }
 
-    if (Date.now() > storedInvite.expiresAt) {
+    if (Date.now() > storedInvite.expiresAt + GROUP_PENDING_ACK_RETIRE_AGE_MS) {
       console.log(
-        `[GROUP][TRACE][RESP][DROP] group=${response.groupId} from=${response.responderPeerId.slice(-8)} reason=invite_expired now=${Date.now()} expiresAt=${storedInvite.expiresAt}`,
+        `[GROUP][TRACE][RESP][DROP] group=${response.groupId} from=${response.responderPeerId.slice(-8)} reason=invite_expired expiresAt=${storedInvite.expiresAt + GROUP_PENDING_ACK_RETIRE_AGE_MS}`,
       );
       database.removePendingAck(response.groupId, response.responderPeerId, 'GROUP_INVITE');
       database.removeInviteDeliveryAcksForMember(response.groupId, response.responderPeerId);
@@ -1805,7 +1806,7 @@ export class GroupCreator {
     nudgeGroupRefetchIfKnownGroup(this.deps, peerId, message);
   }
 
-  // TODO remove here and on responder
+  // TODO remove here and on responder after testing
   private describeControlMessage(message: object): string {
     const m = message as Record<string, unknown>;
     const type = typeof m.type === 'string' ? m.type : 'unknown';

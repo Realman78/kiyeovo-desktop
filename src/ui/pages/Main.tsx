@@ -419,7 +419,6 @@ export const Main = () => {
           });
           try {
             const groupResult = await window.kiyeovoAPI.checkGroupOfflineMessages(topGroupChatIds);
-            // TODO why did I add setOfflineFetchStatus and markOfflineFetched? why not just markOfflineFetched?
             if (!groupResult.success) {
               topGroupChatIds.forEach((chatId) => {
                 dispatch(setOfflineFetchStatus({ chatId, isFetching: false }));
@@ -515,10 +514,8 @@ export const Main = () => {
           }
         };
 
-        // TODO why is this one by one, cant remember
         await directCheckTask();
         await groupCheckTask();
-
       } catch (error) {
         console.error('[UI] Error fetching chats:', error);
       }

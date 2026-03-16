@@ -1,5 +1,5 @@
 import type { ChatNode, GroupChatActivatedEvent, GroupMembersUpdatedEvent, NetworkMode } from '../../types.js';
-import { GROUP_INVITE_LIFETIME } from '../../constants.js';
+import { GROUP_PENDING_ACK_RETIRE_AGE_MS } from '../../constants.js';
 import { generalErrorHandler } from '../../utils/general-error.js';
 import type { ChatDatabase, GroupPendingAck } from '../db/database.js';
 import { UsernameRegistry } from '../username-registry.js';
@@ -17,6 +17,7 @@ interface GroupAckRepublisherDeps {
 }
 
 type PendingActionResult = { action: 'republish' | 'skip' | 'remove'; reason?: string };
+type PendingAckCycleTag = 'CYCLE' | 'TARGETED';
 
 export class GroupAckRepublisher {
   private readonly deps: GroupAckRepublisherDeps;
@@ -26,131 +27,162 @@ export class GroupAckRepublisher {
     this.deps = deps;
   }
 
-  async runCycle(): Promise<void> {
-    if (this.inFlight) return;
+  async runCycle(): Promise<boolean> {
+    if (this.inFlight) return false;
     this.inFlight = true;
     try {
+      const retiredByAge = this.deps.database.retireStalePendingAcks(
+        GROUP_PENDING_ACK_RETIRE_AGE_MS,
+        this.deps.networkMode,
+      );
       const pendingAcks = this.deps.database.getAllPendingAcks(this.deps.networkMode);
-      if (pendingAcks.length === 0) return;
+      if (pendingAcks.length === 0) return true;
       const connectedPeers = this.deps.node.getConnections().length;
       console.log(
-        `[GROUP-ACK][CYCLE][START] pendingCount=${pendingAcks.length} connectedPeers=${connectedPeers}`,
+        `[GROUP-ACK][CYCLE][START] pendingCount=${pendingAcks.length} retiredByAge=${retiredByAge} connectedPeers=${connectedPeers}`,
       );
+      await this.processPendingAcks(pendingAcks, connectedPeers, 'CYCLE');
+      return true;
+    } finally {
+      this.inFlight = false;
+    }
+  }
 
-      const userIdentity = this.deps.usernameRegistry.getUserIdentity();
-      if (!userIdentity) return;
+  async runCycleForTargets(targetPeerIds: string[]): Promise<boolean> {
+    const normalizedTargets = Array.from(new Set(targetPeerIds.filter(Boolean)));
+    if (normalizedTargets.length === 0) return true;
+    if (this.inFlight) return false;
+    this.inFlight = true;
+    try {
+      const pendingAcks = this.deps.database.getPendingAcksForTargets(
+        normalizedTargets,
+        this.deps.networkMode,
+      );
+      if (pendingAcks.length === 0) return true;
+      const connectedPeers = this.deps.node.getConnections().length;
+      console.log(
+        `[GROUP-ACK][TARGETED][START] targetCount=${normalizedTargets.length} pendingCount=${pendingAcks.length} connectedPeers=${connectedPeers}`,
+      );
+      await this.processPendingAcks(pendingAcks, connectedPeers, 'TARGETED');
+      return true;
+    } finally {
+      this.inFlight = false;
+    }
+  }
 
-      const myPeerId = this.deps.node.peerId.toString();
-      const myUser = this.deps.database.getUserByPeerId(myPeerId);
-      const myUsername = myUser?.username || `user_${myPeerId.slice(-8)}`;
+  private async processPendingAcks(
+    pendingAcks: GroupPendingAck[],
+    connectedPeers: number,
+    cycleTag: PendingAckCycleTag,
+  ): Promise<void> {
+    const userIdentity = this.deps.usernameRegistry.getUserIdentity();
+    if (!userIdentity) return;
 
-      const sendDeps = {
-        node: this.deps.node,
-        database: this.deps.database,
-        userIdentity,
-        myPeerId,
-        myUsername,
-        onGroupChatActivated: this.deps.onGroupChatActivated,
-        onGroupMembersUpdated: this.deps.onGroupMembersUpdated,
-        nudgeGroupRefetch: this.deps.nudgeGroupRefetch,
-      };
+    const myPeerId = this.deps.node.peerId.toString();
+    const myUser = this.deps.database.getUserByPeerId(myPeerId);
+    const myUsername = myUser?.username || `user_${myPeerId.slice(-8)}`;
 
-      const creator = new GroupCreator(sendDeps);
-      const responder = new GroupResponder(sendDeps);
-      let rePublished = 0;
-      let skippedNoConnection = 0;
-      let skippedDelivered = 0;
-      let removedInvalid = 0;
-      let removedExpired = 0;
-      let removedStaleTarget = 0;
-      let failed = 0;
+    const sendDeps = {
+      node: this.deps.node,
+      database: this.deps.database,
+      userIdentity,
+      myPeerId,
+      myUsername,
+      onGroupChatActivated: this.deps.onGroupChatActivated,
+      onGroupMembersUpdated: this.deps.onGroupMembersUpdated,
+      nudgeGroupRefetch: this.deps.nudgeGroupRefetch,
+    };
 
-      for (const pending of pendingAcks) {
-        try {
-          console.log(
-            `[GROUP-ACK][ITEM][START] type=${pending.message_type} group=${pending.group_id} target=${pending.target_peer_id.slice(-8)} ${this.describePendingPayload(pending.message_payload)}`,
-          );
-          const pendingAction = this.evaluatePendingAckAction(pending);
-          if (pendingAction.action === 'remove') {
-            this.deps.database.removePendingAck(
-              pending.group_id,
-              pending.target_peer_id,
-              pending.message_type,
-              this.deps.networkMode,
-            );
-            if (pending.message_type === 'GROUP_INVITE') {
-              this.deps.database.removeInviteDeliveryAcksForMember(
-                pending.group_id,
-                pending.target_peer_id,
-                this.deps.networkMode,
-              );
-            }
-            if (pendingAction.reason === 'invalid_payload' || pendingAction.reason === 'invalid_type') removedInvalid++;
-            if (pendingAction.reason === 'invite_expired' || pendingAction.reason === 'response_expired') removedExpired++;
-            if (
-              pendingAction.reason === 'group_missing'
-              || pendingAction.reason === 'target_not_participant'
-              || pendingAction.reason === 'target_already_member'
-              || pendingAction.reason === 'not_creator'
-            ) {
-              removedStaleTarget++;
-            }
-            console.log(
-              `[GROUP-ACK][ITEM][REMOVE] type=${pending.message_type} group=${pending.group_id} target=${pending.target_peer_id.slice(-8)} reason=${pendingAction.reason}`,
-            );
-            continue;
-          }
-          if (pendingAction.action === 'skip') {
-            if (pendingAction.reason === 'invite_delivered') skippedDelivered++;
-            console.log(
-              `[GROUP-ACK][ITEM][SKIP] type=${pending.message_type} group=${pending.group_id} target=${pending.target_peer_id.slice(-8)} reason=${pendingAction.reason}`,
-            );
-            continue;
-          }
-          if (connectedPeers === 0) {
-            skippedNoConnection++;
-            console.log(
-              `[GROUP-ACK][ITEM][SKIP] type=${pending.message_type} group=${pending.group_id} target=${pending.target_peer_id.slice(-8)} reason=no_connected_peers`,
-            );
-            continue;
-          }
-          // TODO(optional): add dead-peer retry ceiling/backoff policy if automatic
-          // prolonged-unreachable member handling is introduced in future phases.
+    const creator = new GroupCreator(sendDeps);
+    const responder = new GroupResponder(sendDeps);
+    let rePublished = 0;
+    let skippedNoConnection = 0;
+    let skippedDelivered = 0;
+    let removedInvalid = 0;
+    let removedExpired = 0;
+    let removedStaleTarget = 0;
+    let failed = 0;
 
-          if (pending.message_type === 'GROUP_INVITE_RESPONSE') {
-            // Responder -> creator flow
-            // eslint-disable-next-line no-await-in-loop
-            await responder.republishPendingControl(pending.target_peer_id, pending.message_payload);
-          } else {
-            // Creator -> members flow
-            // eslint-disable-next-line no-await-in-loop
-            await creator.republishPendingControl(pending.target_peer_id, pending.message_payload);
-          }
-
-          this.deps.database.updatePendingAckLastPublished(
+    for (const pending of pendingAcks) {
+      try {
+        console.log(
+          `[GROUP-ACK][ITEM][START] type=${pending.message_type} group=${pending.group_id} target=${pending.target_peer_id.slice(-8)} ${this.describePendingPayload(pending.message_payload)}`,
+        );
+        const pendingAction = this.evaluatePendingAckAction(pending);
+        if (pendingAction.action === 'remove') {
+          this.deps.database.removePendingAck(
             pending.group_id,
             pending.target_peer_id,
             pending.message_type,
             this.deps.networkMode,
           );
-          rePublished++;
+          if (pending.message_type === 'GROUP_INVITE') {
+            this.deps.database.removeInviteDeliveryAcksForMember(
+              pending.group_id,
+              pending.target_peer_id,
+              this.deps.networkMode,
+            );
+          }
+          if (pendingAction.reason === 'invalid_payload' || pendingAction.reason === 'invalid_type') removedInvalid++;
+          if (pendingAction.reason === 'invite_expired' || pendingAction.reason === 'response_expired') removedExpired++;
+          if (
+            pendingAction.reason === 'group_missing'
+            || pendingAction.reason === 'target_not_participant'
+            || pendingAction.reason === 'target_already_member'
+            || pendingAction.reason === 'not_creator'
+          ) {
+            removedStaleTarget++;
+          }
           console.log(
-            `[GROUP-ACK][ITEM][DONE] type=${pending.message_type} group=${pending.group_id} target=${pending.target_peer_id.slice(-8)}`,
+            `[GROUP-ACK][ITEM][REMOVE] type=${pending.message_type} group=${pending.group_id} target=${pending.target_peer_id.slice(-8)} reason=${pendingAction.reason}`,
           );
-        } catch (error: unknown) {
-          failed++;
-          generalErrorHandler(
-            error,
-            `[GROUP-ACK] Failed to re-publish ${pending.message_type} to ${pending.target_peer_id.slice(-8)}`,
-          );
+          continue;
         }
+        if (pendingAction.action === 'skip') {
+          if (pendingAction.reason === 'invite_delivered') skippedDelivered++;
+          console.log(
+            `[GROUP-ACK][ITEM][SKIP] type=${pending.message_type} group=${pending.group_id} target=${pending.target_peer_id.slice(-8)} reason=${pendingAction.reason}`,
+          );
+          continue;
+        }
+        if (connectedPeers === 0) {
+          skippedNoConnection++;
+          console.log(
+            `[GROUP-ACK][ITEM][SKIP] type=${pending.message_type} group=${pending.group_id} target=${pending.target_peer_id.slice(-8)} reason=no_connected_peers`,
+          );
+          continue;
+        }
+        if (pending.message_type === 'GROUP_INVITE_RESPONSE') {
+          // Responder -> creator flow
+          // eslint-disable-next-line no-await-in-loop
+          await responder.republishPendingControl(pending.target_peer_id, pending.message_payload);
+        } else {
+          // Creator -> members flow
+          // eslint-disable-next-line no-await-in-loop
+          await creator.republishPendingControl(pending.target_peer_id, pending.message_payload);
+        }
+
+        this.deps.database.updatePendingAckLastPublished(
+          pending.group_id,
+          pending.target_peer_id,
+          pending.message_type,
+          this.deps.networkMode,
+        );
+        rePublished++;
+        console.log(
+          `[GROUP-ACK][ITEM][DONE] type=${pending.message_type} group=${pending.group_id} target=${pending.target_peer_id.slice(-8)}`,
+        );
+      } catch (error: unknown) {
+        failed++;
+        generalErrorHandler(
+          error,
+          `[GROUP-ACK] Failed to re-publish ${pending.message_type} to ${pending.target_peer_id.slice(-8)}`,
+        );
       }
-      console.log(
-        `[GROUP-ACK][CYCLE][DONE] rePublished=${rePublished} skippedNoConnection=${skippedNoConnection} skippedDelivered=${skippedDelivered} removedInvalid=${removedInvalid} removedExpired=${removedExpired} removedStaleTarget=${removedStaleTarget} failed=${failed}`,
-      );
-    } finally {
-      this.inFlight = false;
     }
+    console.log(
+      `[GROUP-ACK][${cycleTag}][DONE] rePublished=${rePublished} skippedNoConnection=${skippedNoConnection} skippedDelivered=${skippedDelivered} removedInvalid=${removedInvalid} removedExpired=${removedExpired} removedStaleTarget=${removedStaleTarget} failed=${failed}`,
+    );
   }
 
   private evaluatePendingAckAction(pending: GroupPendingAck): PendingActionResult {
@@ -220,12 +252,10 @@ export class GroupAckRepublisher {
   }
 
   private evaluateInviteResponsePendingAck(pending: GroupPendingAck, payload: Record<string, unknown>): PendingActionResult {
+    const inviteId = typeof payload.inviteId === 'string' ? payload.inviteId : null;
     const timestamp = typeof payload.timestamp === 'number' ? payload.timestamp : null;
-    const now = Date.now();
-    // TODO(optional): if we later persist creator-signed invite expiry alongside pending
-    // responses, prefer invite.expiresAt over responder timestamp for stricter cleanup.
-    if (timestamp !== null && now > timestamp + GROUP_INVITE_LIFETIME) {
-      return { action: 'remove', reason: 'response_expired' };
+    if (!inviteId || timestamp === null || !Number.isFinite(timestamp) || timestamp <= 0) {
+      return { action: 'remove', reason: 'invalid_payload' };
     }
 
     const chat = this.deps.database.getChatByGroupId(pending.group_id, this.deps.networkMode);
@@ -238,6 +268,9 @@ export class GroupAckRepublisher {
     ) {
       return { action: 'remove', reason: 'group_missing' };
     }
+    // Intentionally do not wall-clock-expire pending invite responses here.
+    // If responder accepted before invite expiry, creator may still be offline.
+    // Cleanup is bounded by pending-ack retirement policy in the DB layer.
     if (chat.group_creator_peer_id !== pending.target_peer_id) {
       return { action: 'remove', reason: 'target_not_participant' };
     }

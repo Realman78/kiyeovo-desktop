@@ -906,7 +906,7 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
                 <AlertCircle className="w-5 h-5 text-warning mt-0.5 shrink-0" />
                 <div className="text-sm text-warning">
                   <p className="font-semibold mb-1">Warning: Offline messages will not work immediately</p>
-                  {/* TODO change the text below */}
+                  {/* TODO change the text below after testing*/}
                   <p className="text-xs">
                     If you make contact with <span className="font-semibold">{username}</span> again, offline delivery and group updates in groups that <span className="font-semibold">{username}</span>  is the creator of (or you are the creator of and the user is in those groups) WILL NOT WORK unless <span className="font-semibold">{username}</span> also deletes your account and then you establish a new contact.
                   </p>

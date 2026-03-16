@@ -185,10 +185,8 @@ export class GroupResponder {
     );
 
     // Find newest pending invite notification for this group
-    const notifications = database.getAllNotifications();
+    const notifications = database.getPendingGroupInvitationNotifications();
     const inviteNotification = notifications.find(n => {
-      if (n.notification_type !== 'group_invitation') return false;
-      if (n.status !== 'pending') return false;
       try {
         const data = JSON.parse(n.notification_data) as { groupId?: string };
         return data.groupId === groupId;
@@ -1355,9 +1353,8 @@ export class GroupResponder {
   }
 
   private expirePendingGroupInviteNotifications(groupId: string): void {
-    const notifications = this.deps.database.getAllNotifications();
+    const notifications = this.deps.database.getPendingGroupInvitationNotifications();
     for (const notification of notifications) {
-      if (notification.notification_type !== 'group_invitation' || notification.status !== 'pending') continue;
       try {
         const payload = JSON.parse(notification.notification_data) as { groupId?: string };
         if (payload.groupId === groupId) {

@@ -266,10 +266,8 @@ export class OfflineMessageManager {
 
     // Clear acknowledged messages from a bucket. 
     static async clearAcknowledgedMessages(
-        node: ChatNode,
         bucketKey: string,
         ackTimestamp: number,
-        signingPrivateKey: Uint8Array,
         database: ChatDatabase
     ): Promise<void> {
         await OfflineMessageManager.withBucketMutationLock(bucketKey, async () => {
@@ -288,18 +286,6 @@ export class OfflineMessageManager {
             }
 
             const version = local.version + 1;
-            console.log(
-                `[OFFLINE][ACK_CLEAR][START] bucket=*${bucketTag} ackTs=${ackTimestamp} prevVersion=${local.version} prevCount=${local.messages.length} newCount=${cleanMessages.length}`
-            );
-
-            // Sign the new store
-            const signedStore = OfflineMessageManager.signStore(
-                cleanMessages,
-                version,
-                bucketKey,
-                signingPrivateKey
-            );
-
             // Local save is sufficient, next outbound write will publish pruned state.
             database.saveOfflineSentMessages(bucketKey, cleanMessages, version);
 

@@ -33,3 +33,6 @@ we already went thourgh this and have not found the issue, I will have to invest
 - 3. DevTools in production? Line 139 opens DevTools in dev mode - that is fine. Just make sure isDev() correctly returns false in packaged builds.
 
 11. Animations!
+
+12. V2: // In-memory only for V1: if app restarts before retry, user must resend/ignore warning.
+  // TODO: persist failed offline backup retries in DB if we need restart-safe retries.

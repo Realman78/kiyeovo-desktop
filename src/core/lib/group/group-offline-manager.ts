@@ -45,19 +45,8 @@ interface GroupOfflineVersionMeta {
   senderSeqBoundaries: Record<string, number>;
 }
 
-interface CachedStoreEntry {
-  store: GroupOfflineStore;
-  cachedAt: number;
-}
-
 interface CachedVersionMetaEntry {
   value: GroupOfflineVersionMeta;
-  cachedAt: number;
-}
-
-interface CachedMissingStoreEntry {
-  until: number;
-  reason: 'no_record' | 'dht_error';
   cachedAt: number;
 }
 
@@ -95,16 +84,11 @@ export class GroupOfflineManager {
   private readonly groupOfflineBucketPrefix: string;
   private readonly groupInfoVersionPrefix: string;
   private readonly bucketMutationQueues = new Map<string, Promise<void>>();
-  private readonly localStoreCache = new Map<string, CachedStoreEntry>();
-  private readonly missingStoreCache = new Map<string, CachedMissingStoreEntry>();
   private readonly versionMetaCache = new Map<string, CachedVersionMetaEntry>();
   private readonly groupCheckInFlight = new Map<string, Promise<GroupChatCheckResult>>();
   private lastCleanupAt = 0;
   private offlineCheckRunCounter = 0;
   private cleanupInFlight: Promise<void> | null = null;
-  private static readonly MISSING_STORE_CACHE_TTL_MS = 60_000;
-  private static readonly MISSING_STORE_DHT_ERROR_TTL_MS = 15_000;
-  private static readonly MISSING_STORE_CACHE_MAX_ENTRIES = 1024;
 
   constructor(deps: GroupOfflineManagerDeps) {
     this.deps = deps;
@@ -160,7 +144,6 @@ export class GroupOfflineManager {
           const signedStore = this.signStore(normalizedExistingMessages, highestSeq, version, bucketKey);
           await this.putStore(bucketKey, signedStore);
           this.deps.database.saveGroupOfflineSentMessages(bucketKey, normalizedExistingMessages, version);
-          this.setCachedStore(bucketKey, signedStore);
         }
         return;
       }
@@ -183,7 +166,6 @@ export class GroupOfflineManager {
       try {
         await this.putStore(bucketKey, signedStore);
         this.deps.database.saveGroupOfflineSentMessages(bucketKey, nextMessages, version);
-        this.setCachedStore(bucketKey, signedStore);
         return;
       } catch (firstError: unknown) {
         // Oversized stores cannot be recovered via remote merge.
@@ -192,7 +174,6 @@ export class GroupOfflineManager {
         }
 
         // Recovery path: local version may be stale (restart/cleanup race). Fetch once, merge, retry once.
-        this.localStoreCache.delete(bucketKey);
         const remote = await this.getLatestStore(bucketKey);
         if (!remote) {
           // No remote state discovered -> likely connectivity issue; preserve original error.
@@ -227,7 +208,6 @@ export class GroupOfflineManager {
         const mergedStore = this.signStore(mergedMessages, mergedHighestSeq, mergedVersion, bucketKey);
         await this.putStore(bucketKey, mergedStore);
         this.deps.database.saveGroupOfflineSentMessages(bucketKey, mergedMessages, mergedVersion);
-        this.setCachedStore(bucketKey, mergedStore);
       }
     });
   }
@@ -419,10 +399,7 @@ export class GroupOfflineManager {
       const storesFetchStart = Date.now();
       const senderStores = await Promise.all(senderDescriptors.map(async (desc) => ({
         ...desc,
-        store: await this.getLatestStore(
-          desc.bucketKey,
-          mode === 'periodic' && epoch.key_version < (currentKeyVersion - 1),
-        ),
+        store: await this.getLatestStore(desc.bucketKey),
       })));
       const storesFetchMs = Date.now() - storesFetchStart;
 
@@ -755,26 +732,9 @@ export class GroupOfflineManager {
     };
   }
 
-  private async getLatestStore(bucketKey: string, allowMissingStoreCache = false): Promise<GroupOfflineStore | null> {
+  private async getLatestStore(bucketKey: string): Promise<GroupOfflineStore | null> {
     console.log("checking bucket", bucketKey);
     const startedAt = Date.now();
-    // TODO research if it should be enabled back
-    // const cached = this.getCachedStore(bucketKey);
-    // if (cached) {
-    //   console.log(
-    //     `[GROUP-OFFLINE][TIMING][STORE] bucket=*${bucketKey.slice(-10)} cacheHit=true took=${Date.now() - startedAt}ms`
-    //   );
-    //   return cached;
-    // }
-    // if (allowMissingStoreCache) {
-    //   const missing = this.getCachedMissingStore(bucketKey);
-    //   if (missing) {
-    //     console.log(
-    //       `[GROUP-OFFLINE][TIMING][STORE] bucket=*${bucketKey.slice(-10)} cacheHit=missing reason=${missing.reason} took=${Date.now() - startedAt}ms`
-    //     );
-    //     return null;
-    //   }
-    // }
 
     const key = new TextEncoder().encode(bucketKey);
     let best: GroupOfflineStore | null = null;
@@ -801,9 +761,6 @@ export class GroupOfflineManager {
         }
       }
     } catch {
-      if (allowMissingStoreCache) {
-        this.setCachedMissingStore(bucketKey, 'dht_error');
-      }
       console.log(
         `[GROUP-OFFLINE][TIMING][STORE] bucket=*${bucketKey.slice(-10)} cacheHit=false dhtError=true ` +
         `valueEvents=${valueEvents} took=${Date.now() - startedAt}ms`
@@ -811,12 +768,6 @@ export class GroupOfflineManager {
       return null;
     }
 
-    if (best) {
-      this.setCachedStore(bucketKey, best);
-      this.missingStoreCache.delete(bucketKey);
-    } else if (allowMissingStoreCache) {
-      this.setCachedMissingStore(bucketKey, 'no_record');
-    }
     console.log(
       `[GROUP-OFFLINE][TIMING][STORE] bucket=*${bucketKey.slice(-10)} cacheHit=false hasStore=${!!best} ` +
       `valueEvents=${valueEvents} took=${Date.now() - startedAt}ms`
@@ -847,7 +798,6 @@ export class GroupOfflineManager {
     if (successCount === 0) {
       throw new Error('Failed to store group offline message: no successful DHT peers');
     }
-    this.missingStoreCache.delete(bucketKey);
   }
 
   private isStoreTooLargeError(error: unknown): boolean {
@@ -1045,77 +995,19 @@ export class GroupOfflineManager {
     return messages.filter((msg) => msg.timestamp >= cutoff && msg.timestamp <= maxAllowedTimestamp);
   }
 
-  private getCachedStore(bucketKey: string): GroupOfflineStore | null {
-    const entry = this.localStoreCache.get(bucketKey);
-    if (!entry) return null;
-    if (Date.now() - entry.cachedAt > GROUP_OFFLINE_LOCAL_CACHE_TTL_MS) {
-      this.localStoreCache.delete(bucketKey);
-      return null;
-    }
-    return entry.store;
-  }
-
-  private setCachedStore(bucketKey: string, store: GroupOfflineStore): void {
-    this.localStoreCache.set(bucketKey, { store, cachedAt: Date.now() });
-    this.missingStoreCache.delete(bucketKey);
-    this.pruneLocalCaches();
-  }
-
-  private getCachedMissingStore(bucketKey: string): CachedMissingStoreEntry | null {
-    const entry = this.missingStoreCache.get(bucketKey);
-    if (!entry) return null;
-    if (Date.now() >= entry.until) {
-      this.missingStoreCache.delete(bucketKey);
-      return null;
-    }
-    return entry;
-  }
-
-  private setCachedMissingStore(bucketKey: string, reason: 'no_record' | 'dht_error'): void {
-    const ttl = reason === 'dht_error'
-      ? GroupOfflineManager.MISSING_STORE_DHT_ERROR_TTL_MS
-      : GroupOfflineManager.MISSING_STORE_CACHE_TTL_MS;
-    this.missingStoreCache.set(bucketKey, {
-      until: Date.now() + ttl,
-      reason,
-      cachedAt: Date.now(),
-    });
-    this.pruneLocalCaches();
-  }
-
-  // TODO shold we remove this cache for versoinMeta and localStore?
+  // Prune in-memory version metadata cache.
   private pruneLocalCaches(): void {
     const now = Date.now();
-    for (const [bucketKey, entry] of this.localStoreCache.entries()) {
-      if (now - entry.cachedAt > GROUP_OFFLINE_LOCAL_CACHE_TTL_MS) {
-        this.localStoreCache.delete(bucketKey);
-      }
-    }
     for (const [metaKey, entry] of this.versionMetaCache.entries()) {
       if (now - entry.cachedAt > GROUP_OFFLINE_LOCAL_CACHE_TTL_MS) {
         this.versionMetaCache.delete(metaKey);
       }
     }
-    for (const [bucketKey, entry] of this.missingStoreCache.entries()) {
-      if (now >= entry.until) {
-        this.missingStoreCache.delete(bucketKey);
-      }
-    }
 
-    while (this.localStoreCache.size > GROUP_OFFLINE_LOCAL_CACHE_MAX_ENTRIES) {
-      const oldest = this.localStoreCache.keys().next().value;
-      if (!oldest) break;
-      this.localStoreCache.delete(oldest);
-    }
     while (this.versionMetaCache.size > GROUP_OFFLINE_LOCAL_CACHE_MAX_ENTRIES) {
       const oldest = this.versionMetaCache.keys().next().value;
       if (!oldest) break;
       this.versionMetaCache.delete(oldest);
-    }
-    while (this.missingStoreCache.size > GroupOfflineManager.MISSING_STORE_CACHE_MAX_ENTRIES) {
-      const oldest = this.missingStoreCache.keys().next().value;
-      if (!oldest) break;
-      this.missingStoreCache.delete(oldest);
     }
   }
 
@@ -1138,7 +1030,6 @@ export class GroupOfflineManager {
       for (const epoch of history) {
         const bucketKey = `${this.groupOfflineBucketPrefix}/${chat.group_id}/${epoch.key_version}/${ownPubKeyBase64url}`;
         await this.withBucketMutationLock(bucketKey, async () => {
-          // const existing = this.getCachedStore(bucketKey) ?? await this.getLatestStore(bucketKey);
           const existing = await this.getLatestStore(bucketKey);
           if (!existing || existing.messages.length === 0) return;
 
@@ -1154,7 +1045,6 @@ export class GroupOfflineManager {
           const signedStore = this.signStore(liveMessages, highestSeq, version, bucketKey);
           await this.putStore(bucketKey, signedStore);
           this.deps.database.saveGroupOfflineSentMessages(bucketKey, liveMessages, version);
-          this.setCachedStore(bucketKey, signedStore);
         });
       }
 
@@ -1204,16 +1094,6 @@ export class GroupOfflineManager {
 
     const bucketPrefix = `${this.groupOfflineBucketPrefix}/${chat.group_id}/${epoch.key_version}/`;
     this.deps.database.deleteGroupOfflineSentMessagesByPrefix(bucketPrefix);
-    for (const bucketKey of this.localStoreCache.keys()) {
-      if (bucketKey.startsWith(bucketPrefix)) {
-        this.localStoreCache.delete(bucketKey);
-      }
-    }
-    for (const bucketKey of this.missingStoreCache.keys()) {
-      if (bucketKey.startsWith(bucketPrefix)) {
-        this.missingStoreCache.delete(bucketKey);
-      }
-    }
     console.log(
       `[GROUP-OFFLINE][TIMING][PRUNE][CHAT:${chat.id}] epoch=${epoch.key_version} action=pruned reason=${reason}`
     );
