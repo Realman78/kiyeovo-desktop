@@ -178,24 +178,6 @@ export interface GroupInfoVersioned {
 }
 
 // --- Group offline bucket ---
-
-export interface GroupOfflineMessage {
-  // Keep `id` for backward compatibility with older offline records.
-  // New records should include `messageId` as the canonical field.
-  id: string;
-  messageId?: string;
-  type?: typeof GroupMessageType.GROUP_MESSAGE;
-  groupId: string;
-  keyVersion: number;
-  senderPeerId: string;
-  messageType?: 'text' | 'system';
-  seq: number;
-  encryptedContent: string; // XChaCha20-Poly1305 encrypted with group key
-  nonce: string;
-  timestamp: number;
-  signature: string;
-}
-
 export interface GroupOfflineSignedPayload {
   messageIds: string[];
   highestSeq: number;
@@ -205,7 +187,7 @@ export interface GroupOfflineSignedPayload {
 }
 
 export interface GroupOfflineStore {
-  messages: GroupOfflineMessage[];
+  messages: GroupContentMessage[];
   highestSeq: number;
   lastUpdated: number;
   version: number;

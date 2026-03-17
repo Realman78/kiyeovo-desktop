@@ -237,27 +237,28 @@ export class GroupMessaging {
     content: string,
     options?: { rekeyRetryHint?: boolean }
   ): Promise<SendMessageResponse> {
-    const sendStartedAt = Date.now();
     const ctx = this.resolveActiveGroupContext(groupId);
-    console.log("sending group message to group", ctx);
+
     const participants = this.deps.database.getChatParticipants(ctx.chatId);
     const hasRecipient = participants.some((participant) => participant.peer_id !== this.deps.myPeerId);
     const participantPeers = participants.map((participant) => participant.peer_id);
     const connectedPeers = this.deps.node.getPeers().map((peerId) => peerId.toString());
+
+    if (!hasRecipient) {
+      throw new Error('Cannot send message: group has no other members');
+    }
+    this.ensureTopicSubscription(ctx);
+    
     console.log(
       `[GROUP-MSG][SEND][CTX] group=${groupId.slice(0, 8)} keyVersion=${ctx.keyVersion} ` +
       `topic=${ctx.topic.slice(0, 16)}... participants=${participantPeers.map((p) => p.slice(-8)).join(',') || 'none'} ` +
       `connectedPeers=${connectedPeers.map((p) => p.slice(-8)).join(',') || 'none'}`
     );
-    if (!hasRecipient) {
-      throw new Error('Cannot send message: group has no other members');
-    }
-    this.ensureTopicSubscription(ctx);
-    console.log("topic subscription ensured", ctx);
 
-    const seq = this.deps.database.getNextSeqAndIncrement(groupId, ctx.keyVersion);
     const nonce = randomBytes(24);
     const encryptedContent = this.encryptContent(content, ctx.groupKey, nonce);
+
+    const seq = this.deps.database.getNextSeqAndIncrement(groupId, ctx.keyVersion);
     const timestamp = Date.now();
 
     const unsignedMessage: Omit<GroupContentMessage, 'signature'> = {
@@ -277,42 +278,36 @@ export class GroupMessaging {
       ...unsignedMessage,
       signature: this.sign(unsignedMessage),
     };
-    const sendTag = `group=${groupId.slice(0, 8)} msg=${signedMessage.messageId.slice(0, 8)}`;
-    console.log(`[GROUP-MSG][TIMING][SEND] ${sendTag} start`);
 
     const payloadBytes = new TextEncoder().encode(JSON.stringify(signedMessage));
     const publishStartedAt = Date.now();
-    const publishedOnline = await this.publishWithRetry(ctx, payloadBytes, `msgId=${signedMessage.messageId}`);
+    const published = await this.publishWithRetry(ctx, payloadBytes);
     const publishMs = Date.now() - publishStartedAt;
 
-    let warning: string | null = publishedOnline
-      ? null
-      : 'No online group peers subscribed; queued for offline delivery.';
+    let warning = published ? null : 'No online group peers subscribed; queued for offline delivery.';
     let offlineBackupRetry: { chatId: number; messageId: string } | null = null;
-    const offlineStoreStartedAt = Date.now();
+
     try {
       await this.deps.groupOfflineManager.storeGroupMessage(signedMessage);
       this.pendingOfflineBackups.delete(signedMessage.messageId);
-      if (!publishedOnline && options?.rekeyRetryHint) {
-        for (const participant of participants) {
-          if (participant.peer_id === this.deps.myPeerId) continue;
-          this.deps.nudgeGroupRefetch?.(participant.peer_id, groupId);
-        }
+
+      if (!published && options?.rekeyRetryHint) {
+        participants
+          .filter(p => p.peer_id !== this.deps.myPeerId)
+          .forEach((p) => this.deps.nudgeGroupRefetch?.(p.peer_id, groupId))
       }
     } catch (error: unknown) {
       const errorText = error instanceof Error ? error.message : String(error);
-      if (!publishedOnline) {
+      if (!published) {
         throw new Error(`Failed to deliver group message: no online peers and offline backup failed: ${errorText}`);
       }
       warning = `Message delivered online, but offline group backup failed: ${errorText}`;
       offlineBackupRetry = { chatId: ctx.chatId, messageId: signedMessage.messageId };
+
       this.pendingOfflineBackups.set(signedMessage.messageId, signedMessage);
       console.warn(`[GROUP-OFFLINE] ${warning}`);
     }
-    const offlineStoreMs = Date.now() - offlineStoreStartedAt;
 
-    // emitSelf=true can deliver our own publish back before this point
-    const localPersistStartedAt = Date.now();
     if (!this.deps.database.messageExists(signedMessage.messageId)) {
       await this.deps.database.createMessage({
         id: signedMessage.messageId,
@@ -331,11 +326,10 @@ export class GroupMessaging {
         senderPeerId: this.deps.myPeerId,
         senderUsername: this.deps.myUsername,
         timestamp,
-        messageSentStatus: publishedOnline ? 'online' : 'offline',
+        messageSentStatus: published ? 'online' : 'offline',
         messageType: 'text',
       });
     }
-    const localPersistMs = Date.now() - localPersistStartedAt;
 
     const strippedMessage: StrippedMessage = {
       chatId: ctx.chatId,
@@ -348,17 +342,13 @@ export class GroupMessaging {
     const response: SendMessageResponse = {
       success: true,
       message: strippedMessage,
-      messageSentStatus: publishedOnline ? 'online' : 'offline',
+      messageSentStatus: published ? 'online' : 'offline',
       error: null,
       warning,
       offlineBackupRetry,
     };
 
-    console.log(
-      `[GROUP-MSG][TIMING][SEND] ${sendTag} done totalMs=${Date.now() - sendStartedAt} ` +
-      `publishMs=${publishMs} offlineStoreMs=${offlineStoreMs} localPersistMs=${localPersistMs} ` +
-      `sentStatus=${publishedOnline ? 'online' : 'offline'}`
-    );
+    console.log(`[GROUP-MSG][SEND] ${groupId} done publishMs=${publishMs} ${published ? 'online' : 'offline'}`);
 
     return response;
   }
@@ -585,29 +575,17 @@ export class GroupMessaging {
     return null;
   }
 
-  private async publishWithRetry(ctx: GroupContext, payload: Uint8Array, publishTag: string): Promise<boolean> {
-    const startedAt = Date.now();
+  private async publishWithRetry(ctx: GroupContext, payload: Uint8Array): Promise<boolean> {
     try {
-      const attemptStartedAt = Date.now();
-      await this.publish(ctx.topic, payload, `group=${ctx.groupId.slice(0, 8)} ${publishTag} attempt=1`);
-      console.log(
-        `[GROUP-MSG][TIMING][PUBLISH] group=${ctx.groupId.slice(0, 8)} attempt=1 ok took=${Date.now() - attemptStartedAt}ms`
-      );
+      await this.publish(ctx.topic, payload);
+      console.log(`[GROUP-MSG][PUBLISH] group=${ctx.groupId.slice(0, 8)} attempt=1 ok`);
       return true;
     } catch (firstError: unknown) {
-      const firstAttemptMs = Date.now() - startedAt;
       if (!this.isRetryablePublishError(firstError)) {
-        console.log(
-          `[GROUP-MSG][TIMING][PUBLISH] group=${ctx.groupId.slice(0, 8)} attempt=1 fail_non_retryable ` +
-          `took=${firstAttemptMs}ms`
-        );
+        console.log(`[GROUP-MSG][PUBLISH] group=${ctx.groupId.slice(0, 8)} attempt=1 fail_non_retryable`);
         throw firstError;
       }
-      console.warn(
-        `[GROUP-MSG] Retrying publish for group=${ctx.groupId} after retryable error: ${
-          firstError instanceof Error ? firstError.message : String(firstError)
-        } (attempt1Ms=${firstAttemptMs})`,
-      );
+      console.warn(`[GROUP-MSG] Retrying publish for group=${ctx.groupId} after error: `, firstError);
     }
 
     this.ensureTopicSubscription(ctx);
@@ -615,26 +593,15 @@ export class GroupMessaging {
       setTimeout(resolve, GROUP_PUBLISH_RETRY_DELAY_MS);
     });
     try {
-      const retryStartedAt = Date.now();
-      await this.publish(ctx.topic, payload, `group=${ctx.groupId.slice(0, 8)} ${publishTag} attempt=2`);
-      console.log(
-        `[GROUP-MSG][TIMING][PUBLISH] group=${ctx.groupId.slice(0, 8)} attempt=2 ok ` +
-        `attemptMs=${Date.now() - retryStartedAt} totalMs=${Date.now() - startedAt}`
-      );
+      await this.publish(ctx.topic, payload);
+      console.log(`[GROUP-MSG][PUBLISH] group=${ctx.groupId.slice(0, 8)} attempt=2 ok`);
       return true;
     } catch (secondError: unknown) {
       if (this.isRetryablePublishError(secondError)) {
-        console.warn(
-          `[GROUP-MSG] Falling back to offline delivery for group=${ctx.groupId}: ${
-            secondError instanceof Error ? secondError.message : String(secondError)
-          } (totalMs=${Date.now() - startedAt})`,
-        );
+        console.warn(`[GROUP-MSG] Falling back to offline delivery for group=${ctx.groupId}`);
         return false;
       }
-      console.log(
-        `[GROUP-MSG][TIMING][PUBLISH] group=${ctx.groupId.slice(0, 8)} attempt=2 fail_non_retryable ` +
-        `totalMs=${Date.now() - startedAt}`
-      );
+      console.log(`[GROUP-MSG][PUBLISH] group=${ctx.groupId.slice(0, 8)} attempt=2 fail_non_retryable`);
       throw secondError;
     }
   }
@@ -679,24 +646,17 @@ export class GroupMessaging {
 
     const payload = new TextEncoder().encode(JSON.stringify(signedHeartbeat));
     try {
-      await this.publish(ctx.topic, payload, `group=${ctx.groupId.slice(0, 8)} heartbeat attempt=1`);
+      await this.publish(ctx.topic, payload);
     } catch {
       // Keep-alive is best effort.
     }
   }
 
-  private async publish(topic: string, payload: Uint8Array, tag: string): Promise<void> {
+  private async publish(topic: string, payload: Uint8Array): Promise<void> {
     const result = await this.deps.node.services.pubsub.publish(topic, payload);
     const recipients = result.recipients ?? [];
-    const recipientIds = recipients.map((peerId) => peerId.toString());
     const remoteRecipients = recipients.filter((peerId) => peerId.toString() !== this.deps.myPeerId);
-    const connectedPeers = this.deps.node.getPeers().map((peerId) => peerId.toString());
-    console.log(
-      `[GROUP-MSG][PUBLISH][RESULT] ${tag} topic=${topic.slice(0, 16)}... ` +
-      `recipients=${recipientIds.map((p) => p.slice(-8)).join(',') || 'none'} ` +
-      `remoteRecipients=${remoteRecipients.map((p) => p.toString().slice(-8)).join(',') || 'none'} ` +
-      `connectedPeers=${connectedPeers.map((p) => p.slice(-8)).join(',') || 'none'}`
-    );
+
     if (remoteRecipients.length === 0) {
       throw new Error(GROUP_PUBLISH_RETRYABLE_ERROR);
     }

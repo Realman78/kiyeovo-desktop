@@ -17,11 +17,11 @@ import {
   GROUP_OFFLINE_STORE_MAX_COMPRESSED_BYTES,
   GROUP_ROTATION_GRACE_WINDOW_MS,
   getNetworkModeRuntime,
+  GROUP_MISSING_USED_UNTIL_SCAN_EPOCH_CAP,
 } from '../../constants.js';
 import {
   type GroupContentMessage,
   type GroupInfoVersioned,
-  type GroupOfflineMessage,
   type GroupOfflineSignedPayload,
   type GroupOfflineStore,
   GroupMessageType,
@@ -98,70 +98,47 @@ export class GroupOfflineManager {
   }
 
   async storeGroupMessage(message: GroupContentMessage): Promise<void> {
-    console.log("storing group message", message);
-    this.pruneLocalCaches();
     const ownPubKeyBase64url = toBase64Url(this.deps.userIdentity.signingPublicKey);
     const bucketKey = `${this.groupOfflineBucketPrefix}/${message.groupId}/${message.keyVersion}/${ownPubKeyBase64url}`;
-    console.log("to bucket", bucketKey);
-    const offlineMessage: GroupOfflineMessage = {
-      id: message.messageId,
-      messageId: message.messageId,
-      type: message.type,
-      groupId: message.groupId,
-      keyVersion: message.keyVersion,
-      senderPeerId: message.senderPeerId,
-      messageType: message.messageType,
-      seq: message.seq,
-      encryptedContent: message.encryptedContent,
-      nonce: message.nonce,
-      timestamp: message.timestamp,
-      signature: message.signature,
-    };
+    console.log("storing group message", message, "to bucket", bucketKey);
 
     await this.withBucketMutationLock(bucketKey, async () => {
       const local = this.deps.database.getGroupOfflineSentMessages(bucketKey);
-      const existingMessages = this.filterLiveMessages(local.messages, Date.now())
-        .sort((a, b) => (a.seq - b.seq) || (a.timestamp - b.timestamp));
-      const existingVersion = local.version;
-      const normalizedExistingMessages = [...existingMessages];
+      const {
+        messages: normalizedExistingMessages,
+        trimmedCount: localTrimmedCount,
+      } = this.normalizeStoreMessages(
+        this.filterLiveMessages(local.messages),
+        bucketKey,
+        'Local mirror overflow',
+      );
 
-      if (normalizedExistingMessages.length > GROUP_MAX_MESSAGES_PER_SENDER) {
-        const overflow = normalizedExistingMessages.length - GROUP_MAX_MESSAGES_PER_SENDER;
-        normalizedExistingMessages.splice(0, overflow);
-        console.warn(
-          `[GROUP-OFFLINE] Local mirror overflow trimmed ${overflow} oldest message(s) for ${bucketKey.slice(0, 48)}...`,
-        );
-      }
-
-      const offlineMessageId = this.getOfflineMessageId(offlineMessage);
-      if (normalizedExistingMessages.some(m => this.getOfflineMessageId(m) === offlineMessageId)) {
-        if (normalizedExistingMessages.length !== existingMessages.length) {
-          const highestSeq = Math.max(
-            offlineMessage.seq,
-            ...normalizedExistingMessages.map((m) => m.seq),
+      const offlineMessageId = message.messageId;
+      if (normalizedExistingMessages.some(m => m.messageId === offlineMessageId)) {
+        if (localTrimmedCount > 0) {
+          const { signedStore, version } = this.buildSignedStore(
+            normalizedExistingMessages,
+            bucketKey,
+            local.version,
+            message.seq,
           );
-          const version = existingVersion + 1;
-          const signedStore = this.signStore(normalizedExistingMessages, highestSeq, version, bucketKey);
           await this.putStore(bucketKey, signedStore);
           this.deps.database.saveGroupOfflineSentMessages(bucketKey, normalizedExistingMessages, version);
         }
         return;
       }
 
-      const nextMessages = [...normalizedExistingMessages, offlineMessage]
-        .sort((a, b) => (a.seq - b.seq) || (a.timestamp - b.timestamp));
-
-      if (nextMessages.length > GROUP_MAX_MESSAGES_PER_SENDER) {
-        const overflow = nextMessages.length - GROUP_MAX_MESSAGES_PER_SENDER;
-        nextMessages.splice(0, overflow);
-        console.warn(
-          `[GROUP-OFFLINE] Bucket overflow trimmed ${overflow} oldest message(s) for ${bucketKey.slice(0, 48)}...`,
-        );
-      }
-
-      const highestSeq = Math.max(offlineMessage.seq, ...nextMessages.map(m => m.seq));
-      const version = existingVersion + 1;
-      const signedStore = this.signStore(nextMessages, highestSeq, version, bucketKey);
+      const { messages: nextMessages } = this.normalizeStoreMessages(
+        [...normalizedExistingMessages, message],
+        bucketKey,
+        'Bucket overflow',
+      );
+      const { signedStore, version } = this.buildSignedStore(
+        nextMessages,
+        bucketKey,
+        local.version,
+        message.seq,
+      );
 
       try {
         await this.putStore(bucketKey, signedStore);
@@ -180,32 +157,30 @@ export class GroupOfflineManager {
           throw firstError;
         }
 
-        const remoteMessages = this.filterLiveMessages(remote.messages, Date.now());
-        const mergedById = new Map<string, GroupOfflineMessage>();
+        const remoteMessages = this.filterLiveMessages(remote.messages);
+        const mergedById = new Map<string, GroupContentMessage>();
 
         for (const msg of remoteMessages) {
-          mergedById.set(this.getOfflineMessageId(msg), msg);
+          mergedById.set(msg.messageId, msg);
         }
-        for (const msg of existingMessages) {
-          mergedById.set(this.getOfflineMessageId(msg), msg);
+        for (const msg of normalizedExistingMessages) {
+          mergedById.set(msg.messageId, msg);
         }
-        mergedById.set(offlineMessageId, offlineMessage);
+        mergedById.set(offlineMessageId, message);
 
-        const mergedMessages = Array.from(mergedById.values())
-          .sort((a, b) => (a.seq - b.seq) || (a.timestamp - b.timestamp));
-
-        if (mergedMessages.length > GROUP_MAX_MESSAGES_PER_SENDER) {
-          const overflow = mergedMessages.length - GROUP_MAX_MESSAGES_PER_SENDER;
-          mergedMessages.splice(0, overflow);
-        }
-
-        const mergedVersion = remote.version + 1;
-        const mergedHighestSeq = Math.max(
-          remote.highestSeq,
-          offlineMessage.seq,
-          ...mergedMessages.map((m) => m.seq),
+        const { messages: mergedMessages } = this.normalizeStoreMessages(
+          Array.from(mergedById.values()),
+          bucketKey,
+          'Bucket overflow',
+          false,
         );
-        const mergedStore = this.signStore(mergedMessages, mergedHighestSeq, mergedVersion, bucketKey);
+        const { signedStore: mergedStore, version: mergedVersion } = this.buildSignedStore(
+          mergedMessages,
+          bucketKey,
+          remote.version,
+          message.seq,
+          remote.highestSeq,
+        );
         await this.putStore(bucketKey, mergedStore);
         this.deps.database.saveGroupOfflineSentMessages(bucketKey, mergedMessages, mergedVersion);
       }
@@ -218,6 +193,7 @@ export class GroupOfflineManager {
     const runId = ++this.offlineCheckRunCounter;
     const runStart = Date.now();
     this.pruneLocalCaches();
+
     const unreadFromChats = new Map<number, number>();
     const gapWarnings: GroupOfflineGapWarning[] = [];
     const checkedChatIds: number[] = [];
@@ -229,12 +205,11 @@ export class GroupOfflineManager {
 
     if (Date.now() - this.lastCleanupAt >= GROUP_OFFLINE_CLEANUP_INTERVAL_MS) {
       this.lastCleanupAt = Date.now();
-      const cleanupStart = Date.now();
       if (!this.cleanupInFlight) {
         this.cleanupInFlight = this.cleanupExpiredBuckets(targetChats)
           .then(() => {
             console.log(
-              `[GROUP-OFFLINE][TIMING][RUN:${runId}] cleanupExpiredBuckets took ${Date.now() - cleanupStart}ms`
+              `[GROUP-OFFLINE][TIMING][RUN:${runId}] cleanupExpiredBuckets`
             );
           })
           .catch((error: unknown) => {
@@ -246,9 +221,8 @@ export class GroupOfflineManager {
       }
     }
 
-    for (const chat of targetChats) {
-      const chatStart = Date.now();
-      const result = await this.runGroupCheckWithSingleFlight(chat, mode);
+    const checks = await this.runTargetChatChecksWithConcurrency(targetChats, mode, 3);
+    for (const { chat, result, tookMs } of checks) {
       const processed = result.processed;
 
       if (result.unreadAdded > 0) {
@@ -261,7 +235,7 @@ export class GroupOfflineManager {
 
       console.log(
         `[GROUP-OFFLINE][TIMING][RUN:${runId}] chat=${chat.id} processed=${processed} ` +
-        `unreadAdded=${result.unreadAdded} took=${Date.now() - chatStart}ms`
+        `unreadAdded=${result.unreadAdded} took=${tookMs}ms`
       );
       if (processed) {
         checkedChatIds.push(chat.id);
@@ -282,6 +256,46 @@ export class GroupOfflineManager {
       unreadFromChats,
       gapWarnings,
     };
+  }
+
+  private async runTargetChatChecksWithConcurrency(
+    chats: Chat[],
+    mode: GroupOfflineCheckMode,
+    concurrency: number,
+  ): Promise<Array<{ chat: Chat; result: GroupChatCheckResult; tookMs: number }>> {
+    if (chats.length === 0) return [];
+
+    const workerCount = Math.min(Math.max(1, concurrency), chats.length);
+    const results = new Array<{ chat: Chat; result: GroupChatCheckResult; tookMs: number }>(chats.length);
+    let nextIndex = 0;
+
+    const worker = async (): Promise<void> => {
+      while (true) {
+        const current = nextIndex++;
+        if (current >= chats.length) return;
+
+        const chat = chats[current];
+        if (!chat) continue;
+        const startedAt = Date.now();
+        try {
+          const result = await this.runGroupCheckWithSingleFlight(chat, mode);
+          results[current] = { chat, result, tookMs: Date.now() - startedAt };
+        } catch (error: unknown) {
+          generalErrorHandler(
+            error,
+            `[GROUP-OFFLINE] Chat check failed chatId=${chat.id} group=${chat.group_id?.slice(0, 8) ?? 'n/a'} mode=${mode}`,
+          );
+          results[current] = {
+            chat,
+            result: { processed: false, completed: false, unreadAdded: 0, gapWarnings: [] },
+            tookMs: Date.now() - startedAt,
+          };
+        }
+      }
+    };
+
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+    return results;
   }
 
   private resolveTargetChats(chatIds?: number[]): Chat[] {
@@ -425,7 +439,7 @@ export class GroupOfflineManager {
         let repairedLate = 0;
 
         for (const msg of orderedMessages) {
-          const messageId = this.getOfflineMessageId(msg);
+          const messageId = msg.messageId;
           if (msg.groupId !== chat.group_id || msg.keyVersion !== epoch.key_version) continue;
           if (!Number.isFinite(msg.timestamp) || msg.timestamp <= 0) {
             console.warn(
@@ -629,6 +643,7 @@ export class GroupOfflineManager {
 
   private async getVersionMeta(chat: Chat, keyVersion: number): Promise<GroupOfflineVersionMeta | null> {
     if (!chat.group_id || !chat.group_creator_peer_id) return null;
+
     const cacheKey = `${chat.group_id}:${keyVersion}`;
     const cached = this.versionMetaCache.get(cacheKey);
     if (cached) {
@@ -649,13 +664,12 @@ export class GroupOfflineManager {
     const creatorPubKeyBase64url = toBase64Url(creatorPubBytes);
     const dhtKey = `${this.groupInfoVersionPrefix}/${chat.group_id}/${creatorPubKeyBase64url}/${keyVersion}`;
     const keyBytes = new TextEncoder().encode(dhtKey);
+
     let best: GroupInfoVersioned | null = null;
-    let valueEvents = 0;
 
     try {
       for await (const event of this.deps.node.services.dht.get(keyBytes) as AsyncIterable<QueryEvent>) {
         if (event.name !== 'VALUE' || event.value.length === 0) continue;
-        valueEvents++;
         try {
           const candidate = JSON.parse(new TextDecoder().decode(event.value)) as GroupInfoVersioned;
           if (candidate.groupId !== chat.group_id || candidate.version !== keyVersion) continue;
@@ -668,7 +682,7 @@ export class GroupOfflineManager {
     } catch {
       console.log(
         `[GROUP-OFFLINE][TIMING][META] group=${chat.group_id.slice(0, 8)} keyVersion=${keyVersion} ` +
-        `hasMeta=false valueEvents=${valueEvents} reason=dht_get_failed`
+        `hasMeta=false reason=dht_get_failed`
       );
       return null;
     }
@@ -676,7 +690,7 @@ export class GroupOfflineManager {
     if (!best) {
       console.log(
         `[GROUP-OFFLINE][TIMING][META] group=${chat.group_id.slice(0, 8)} keyVersion=${keyVersion} ` +
-        `hasMeta=false valueEvents=${valueEvents} reason=no_valid_record`
+        `hasMeta=false reason=no_valid_record`
       );
       return null;
     }
@@ -687,7 +701,7 @@ export class GroupOfflineManager {
     this.versionMetaCache.set(cacheKey, { value, cachedAt: Date.now() });
     console.log(
       `[GROUP-OFFLINE][TIMING][META] group=${chat.group_id.slice(0, 8)} keyVersion=${keyVersion} ` +
-      `hasMeta=true members=${value.members.length} boundaries=${Object.keys(value.senderSeqBoundaries).length} valueEvents=${valueEvents}`
+      `hasMeta=true members=${value.members.length} boundaries=${Object.keys(value.senderSeqBoundaries).length}`
     );
     this.pruneLocalCaches();
     return value;
@@ -704,15 +718,55 @@ export class GroupOfflineManager {
     }
   }
 
+  private normalizeStoreMessages(
+    messages: GroupContentMessage[],
+    bucketKey: string,
+    overflowLabel: string,
+    logOverflow = true,
+  ): { messages: GroupContentMessage[]; trimmedCount: number } {
+    const sortedMessages = [...messages]
+      .sort((a, b) => (a.seq - b.seq) || (a.timestamp - b.timestamp));
+
+    if (sortedMessages.length <= GROUP_MAX_MESSAGES_PER_SENDER) {
+      return { messages: sortedMessages, trimmedCount: 0 };
+    }
+
+    const overflow = sortedMessages.length - GROUP_MAX_MESSAGES_PER_SENDER;
+    const trimmedMessages = sortedMessages.slice(overflow);
+    if (logOverflow) {
+      console.warn(
+        `[GROUP-OFFLINE] ${overflowLabel} trimmed ${overflow} oldest message(s) for ${bucketKey.slice(0, 48)}...`,
+      );
+    }
+    return { messages: trimmedMessages, trimmedCount: overflow };
+  }
+
+  private buildSignedStore(
+    messages: GroupContentMessage[],
+    bucketKey: string,
+    baseVersion: number,
+    fallbackSeq: number,
+    minimumHighestSeq = 0,
+  ): { signedStore: GroupOfflineStore; version: number } {
+    const version = baseVersion + 1;
+    const highestSeq = Math.max(
+      minimumHighestSeq,
+      fallbackSeq,
+      ...messages.map((m) => m.seq),
+    );
+    const signedStore = this.signStore(messages, highestSeq, version, bucketKey);
+    return { signedStore, version };
+  }
+
   private signStore(
-    messages: GroupOfflineMessage[],
+    messages: GroupContentMessage[],
     highestSeq: number,
     version: number,
     bucketKey: string,
   ): GroupOfflineStore {
     const timestamp = Date.now();
     const storeSignedPayload: GroupOfflineSignedPayload = {
-      messageIds: messages.map(m => this.getOfflineMessageId(m)),
+      messageIds: messages.map(m => m.messageId),
       highestSeq,
       version,
       timestamp,
@@ -839,8 +893,15 @@ export class GroupOfflineManager {
     versionMeta: GroupOfflineVersionMeta | null,
   ): EpochSkipDecision {
     if (!chat.group_id) return { skip: false, reason: 'no_group' };
-    if (epoch.key_version >= (chat.key_version ?? 0)) {
+    const currentKeyVersion = chat.key_version ?? 0;
+    if (epoch.key_version >= currentKeyVersion) {
       return { skip: false, reason: 'active_or_future_epoch' };
+    }
+    if (
+      epoch.used_until === null
+      && epoch.key_version <= (currentKeyVersion - GROUP_MISSING_USED_UNTIL_SCAN_EPOCH_CAP)
+    ) {
+      return { skip: true, reason: 'missing_used_until_depth_cap' };
     }
     if (epoch.used_until === null) {
       return { skip: false, reason: 'missing_used_until' };
@@ -947,14 +1008,14 @@ export class GroupOfflineManager {
       .filter((peerId) => peerId !== this.deps.myPeerId);
   }
 
-  private verifyOfflineMessageSignature(msg: GroupOfflineMessage, signingPubKeyBase64: string): boolean {
+  private verifyOfflineMessageSignature(msg: GroupContentMessage, signingPubKeyBase64: string): boolean {
     try {
       const unsignedMessage: Omit<GroupContentMessage, 'signature'> = {
         type: msg.type ?? GroupMessageType.GROUP_MESSAGE,
         groupId: msg.groupId,
         keyVersion: msg.keyVersion,
         senderPeerId: msg.senderPeerId,
-        messageId: this.getOfflineMessageId(msg),
+        messageId: msg.messageId,
         seq: msg.seq,
         encryptedContent: msg.encryptedContent,
         nonce: msg.nonce,
@@ -973,9 +1034,9 @@ export class GroupOfflineManager {
   private advanceCursor(
     lastReadTs: number,
     lastReadMessageId: string,
-    msg: GroupOfflineMessage,
+    msg: GroupContentMessage,
   ): { lastReadTs: number; lastReadMessageId: string } {
-    const msgId = this.getOfflineMessageId(msg);
+    const msgId = msg.messageId;
     if (
       msg.timestamp > lastReadTs
       || (msg.timestamp === lastReadTs && msgId !== lastReadMessageId)
@@ -985,11 +1046,8 @@ export class GroupOfflineManager {
     return { lastReadTs, lastReadMessageId };
   }
 
-  private getOfflineMessageId(msg: GroupOfflineMessage): string {
-    return msg.messageId ?? msg.id;
-  }
-
-  private filterLiveMessages(messages: GroupOfflineMessage[], now: number): GroupOfflineMessage[] {
+  private filterLiveMessages(messages: GroupContentMessage[]): GroupContentMessage[] {
+    const now = Date.now()
     const cutoff = now - GROUP_OFFLINE_MESSAGE_TTL_MS;
     const maxAllowedTimestamp = now + GROUP_MESSAGE_MAX_FUTURE_SKEW_MS;
     return messages.filter((msg) => msg.timestamp >= cutoff && msg.timestamp <= maxAllowedTimestamp);
@@ -1012,41 +1070,34 @@ export class GroupOfflineManager {
   }
 
   private async cleanupExpiredBuckets(chats: Chat[]): Promise<void> {
-    const now = Date.now();
-    const ownPubKeyBase64url = toBase64Url(this.deps.userIdentity.signingPublicKey);
-
     for (const chat of chats) {
       if (!chat.group_id) continue;
       const history = this.deps.database.getGroupKeyHistory(chat.group_id)
         .filter((h) => h.key_version <= (chat.key_version ?? 0))
         .sort((a, b) => a.key_version - b.key_version);
 
-      // TODO why are we doing this one by one? They dont overlap
-      // also, Im thinking a lot about pruning the old key versions more aggresively, but if someone
-      // who has not been online for a long time logs on and tries to send a message before his offline
-      // group key_version got updated, it could end up in the old buckets. What if we block sending until 
-      // everything is fetched? or what if we fetch the latest state and then write to that bucket and let
-      // the catching up process in the background
-      for (const epoch of history) {
-        const bucketKey = `${this.groupOfflineBucketPrefix}/${chat.group_id}/${epoch.key_version}/${ownPubKeyBase64url}`;
-        await this.withBucketMutationLock(bucketKey, async () => {
-          const existing = await this.getLatestStore(bucketKey);
-          if (!existing || existing.messages.length === 0) return;
+      // If app dies between DHT PUT and DB write, below is the solution
+      // The chance of that happening is extremely small, so it's not worth it currently
+      // for (const epoch of history) {
+      //   const bucketKey = `${this.groupOfflineBucketPrefix}/${chat.group_id}/${epoch.key_version}/${ownPubKeyBase64url}`;
+      //   await this.withBucketMutationLock(bucketKey, async () => {
+      //     const existing = await this.getLatestStore(bucketKey);
+      //     if (!existing || existing.messages.length === 0) return;
 
-          const liveMessages = this.filterLiveMessages(existing.messages, now);
-          if (liveMessages.length === existing.messages.length) return;
+      //     const liveMessages = this.filterLiveMessages(existing.messages);
+      //     if (liveMessages.length === existing.messages.length) return;
 
-          const version = existing.version + 1;
-          const highestSeq = Math.max(
-            existing.highestSeq,
-            ...liveMessages.map((m) => m.seq),
-            0,
-          );
-          const signedStore = this.signStore(liveMessages, highestSeq, version, bucketKey);
-          await this.putStore(bucketKey, signedStore);
-          this.deps.database.saveGroupOfflineSentMessages(bucketKey, liveMessages, version);
-        });
-      }
+      //     const version = existing.version + 1;
+      //     const highestSeq = Math.max(
+      //       existing.highestSeq,
+      //       ...liveMessages.map((m) => m.seq),
+      //       0,
+      //     );
+      //     const signedStore = this.signStore(liveMessages, highestSeq, version, bucketKey);
+      //     await this.putStore(bucketKey, signedStore);
+      //     this.deps.database.saveGroupOfflineSentMessages(bucketKey, liveMessages, version);
+      //   });
+      // }
 
       await this.cleanupConsumedEpochState(chat, history);
     }
@@ -1062,8 +1113,8 @@ export class GroupOfflineManager {
       if (!this.canEpochBePrunedWithoutMeta(chat, epoch)) {
         continue;
       }
-      const metaKeyVersion = this.resolveEpochBoundaryMetaVersion(chat, epoch.key_version);
-      const versionMeta = await this.getEpochBoundaryMeta(chat, epoch.key_version, metaKeyVersion);
+      const successorVersionForBoundaries = this.resolveEpochBoundaryMetaVersion(chat, epoch.key_version);
+      const versionMeta = await this.getEpochBoundaryMeta(chat, epoch.key_version, successorVersionForBoundaries);
       const pruneDecision = this.evaluateEpochPruneDecision(chat, epoch, versionMeta);
       if (!pruneDecision.prune) {
         console.log(
@@ -1103,8 +1154,14 @@ export class GroupOfflineManager {
     chat: Chat,
     epoch: { key_version: number; used_until: number | null },
   ): boolean {
-    if (epoch.key_version >= (chat.key_version ?? 0)) return false;
-    if (epoch.used_until === null) return false;
+    const currentKeyVersion = chat.key_version ?? 0;
+    if (epoch.key_version >= currentKeyVersion) return false;
+    if (epoch.used_until === null) {
+      return (
+        currentKeyVersion > 0
+        && epoch.key_version <= (currentKeyVersion - GROUP_MISSING_USED_UNTIL_SCAN_EPOCH_CAP)
+      );
+    }
 
     const threshold = epoch.used_until + GROUP_ROTATION_GRACE_WINDOW_MS;
     return Date.now() >= threshold;
@@ -1116,8 +1173,17 @@ export class GroupOfflineManager {
     versionMeta: GroupOfflineVersionMeta | null,
   ): EpochPruneDecision {
     if (!chat.group_id) return { prune: false, reason: 'no_group' };
-    if (epoch.key_version >= (chat.key_version ?? 0)) return { prune: false, reason: 'active_or_future_epoch' };
-    if (epoch.used_until === null) return { prune: false, reason: 'missing_used_until' };
+    const currentKeyVersion = chat.key_version ?? 0;
+    if (epoch.key_version >= currentKeyVersion) return { prune: false, reason: 'active_or_future_epoch' };
+    if (epoch.used_until === null) {
+      if (
+        currentKeyVersion > 0
+        && epoch.key_version <= (currentKeyVersion - GROUP_MISSING_USED_UNTIL_SCAN_EPOCH_CAP)
+      ) {
+        return { prune: true, reason: 'missing_used_until_depth_cap' };
+      }
+      return { prune: false, reason: 'missing_used_until' };
+    }
 
     const threshold = epoch.used_until + GROUP_ROTATION_GRACE_WINDOW_MS;
     if (Date.now() < threshold) return { prune: false, reason: 'within_grace_window' };

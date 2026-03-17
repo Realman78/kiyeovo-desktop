@@ -8,10 +8,9 @@ import {
   NETWORK_MODE_CONFIG,
 } from '../../constants.js';
 import type {
-  GroupContentMessage,
   GroupInfoLatest,
   GroupInfoVersioned,
-  GroupOfflineMessage,
+  GroupContentMessage,
   GroupOfflineStore,
 } from './types.js';
 
@@ -31,17 +30,13 @@ function hasMatchingPrefix(keyStr: string, prefixes: string[]): boolean {
   return prefixes.some((prefix) => keyStr.startsWith(`${prefix}/`));
 }
 
-function getOfflineMessageId(message: GroupOfflineMessage): string {
-  return message.messageId ?? message.id;
-}
-
-function toCanonicalUnsignedMessage(message: GroupOfflineMessage): Omit<GroupContentMessage, 'signature'> {
+function toCanonicalUnsignedMessage(message: GroupContentMessage): Omit<GroupContentMessage, 'signature'> {
   return {
     type: message.type ?? 'GROUP_MESSAGE',
     groupId: message.groupId,
     keyVersion: message.keyVersion,
     senderPeerId: message.senderPeerId,
-    messageId: getOfflineMessageId(message),
+    messageId: message.messageId,
     seq: message.seq,
     encryptedContent: message.encryptedContent,
     nonce: message.nonce,
@@ -104,7 +99,7 @@ export async function groupOfflineMessageValidator(
     throw new Error('Store bucketKey mismatch');
   }
 
-  const actualIds = store.messages.map((m) => getOfflineMessageId(m));
+  const actualIds = store.messages.map((m) => m.messageId);
   const signedIds = store.storeSignedPayload.messageIds;
   if (actualIds.length !== signedIds.length || actualIds.some((id, i) => id !== signedIds[i])) {
     throw new Error('Store messageIds mismatch');
@@ -151,7 +146,7 @@ export async function groupOfflineMessageValidator(
   }
 
   for (const msg of store.messages) {
-    const messageId = getOfflineMessageId(msg);
+    const messageId = msg.messageId;
 
     if (!msg.signature) {
       throw new Error(`Message ${messageId} missing signature`);

@@ -321,8 +321,6 @@ function setupMessagingHandlers(
       }
 
       console.log("sending group message", chatId, message);
-
-      console.log(`[IPC][TIMING][GROUP-SEND] start chatId=${chatId} contentLen=${message.length}`);
       const response = await p2pCore.messageHandler.sendGroupMessage(chatId, message, options);
       console.log(
         `[IPC][TIMING][GROUP-SEND] done chatId=${chatId} success=${response.success} ` +

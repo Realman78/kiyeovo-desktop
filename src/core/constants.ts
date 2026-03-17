@@ -359,7 +359,9 @@ export const GROUP_INFO_REPUBLISH_RETRY_STEADY_DELAY = 10 * 60 * 1000; // 10 min
 export const GROUP_INFO_REPUBLISH_MAX_ATTEMPTS = 20;
 // Defensive cap to keep group offline DHT values bounded even when message limit is increased.
 export const GROUP_OFFLINE_STORE_MAX_COMPRESSED_BYTES = 64 * 1024; // 64KB
-export const GROUP_OFFLINE_LOCAL_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+export const GROUP_OFFLINE_LOCAL_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
 export const GROUP_OFFLINE_LOCAL_CACHE_MAX_ENTRIES = 256;
 export const GROUP_OFFLINE_CLEANUP_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 export const GROUP_OFFLINE_MESSAGE_TTL_MS = MESSAGE_TTL;
+
+export const GROUP_MISSING_USED_UNTIL_SCAN_EPOCH_CAP = 10;

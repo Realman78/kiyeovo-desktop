@@ -5,7 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { generalErrorHandler } from '../../utils/general-error.js';
 import type { ContactMode, NetworkMode, OfflineMessage } from '../../types.js';
-import type { AckMessageType, GroupOfflineMessage, GroupStatus } from '../group/types.js';
+import type { AckMessageType, GroupContentMessage, GroupStatus } from '../group/types.js';
 import { assertGroupTransition, isGroupStatus } from '../group/group-state-machine.js';
 import { DEFAULT_BOOTSTRAP_NODES } from '../../default-bootstrap-nodes.js';
 import { DEFAULT_FAST_RELAY_MULTIADDRS } from '../../default-relay-nodes.js';
@@ -1775,19 +1775,19 @@ export class ChatDatabase {
     }
 
     // Group offline sent messages operations (local cache to avoid DHT reads before writes)
-    getGroupOfflineSentMessages(bucketKey: string): { messages: GroupOfflineMessage[]; version: number } {
+    getGroupOfflineSentMessages(bucketKey: string): { messages: GroupContentMessage[]; version: number } {
         const stmt = this.db.prepare('SELECT messages, version FROM group_offline_sent_messages WHERE bucket_key = ?');
         const row = stmt.get(bucketKey) as { messages: string; version: number } | undefined;
         if (!row) {
             return { messages: [], version: 0 };
         }
         return {
-            messages: JSON.parse(row.messages) as GroupOfflineMessage[],
+            messages: JSON.parse(row.messages) as GroupContentMessage[],
             version: row.version
         };
     }
 
-    saveGroupOfflineSentMessages(bucketKey: string, messages: GroupOfflineMessage[], version: number): void {
+    saveGroupOfflineSentMessages(bucketKey: string, messages: GroupContentMessage[], version: number): void {
         const stmt = this.db.prepare(`
             INSERT INTO group_offline_sent_messages (bucket_key, messages, version, updated_at)
             VALUES (?, ?, ?, CURRENT_TIMESTAMP)
