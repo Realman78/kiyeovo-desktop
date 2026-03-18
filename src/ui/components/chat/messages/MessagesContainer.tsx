@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { finalizeSendingMessage, prependMessages, setMessages, updateChat, updateLocalMessageSendState, type ChatMessage } from "../../../state/slices/chatSlice";
+import { finalizeSendingMessage, markOfflineFetched, markOfflineFetchFailed, prependMessages, setMessages, setOfflineFetchStatus, updateChat, updateLocalMessageSendState, type ChatMessage } from "../../../state/slices/chatSlice";
 import type { RootState } from "../../../state/store";
 import { useDispatch, useSelector } from "react-redux";
 import { formatTimestampToHourMinute } from "../../../utils/dateUtils";
@@ -360,6 +360,60 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
     }
   }, [activeChat, dispatch, toast]);
 
+  const handleRetryOfflineFetch = useCallback(async () => {
+    if (!activeChat?.id) return;
+    const chatId = activeChat.id;
+    dispatch(setOfflineFetchStatus({ chatId, isFetching: true }));
+
+    try {
+      if (activeChat.type === 'group') {
+        const result = await window.kiyeovoAPI.checkGroupOfflineMessagesForChat(chatId);
+        if (!result.success || (result.failedChatIds ?? []).includes(chatId)) {
+          dispatch(markOfflineFetchFailed(chatId));
+          toast.error(result.error || 'Failed to fetch offline messages');
+          return;
+        }
+
+        dispatch(markOfflineFetched(chatId));
+        const unreadMap = result.unreadFromChats instanceof Map
+          ? result.unreadFromChats
+          : new Map<number, number>();
+        const unread = unreadMap.get(chatId) ?? 0;
+        if (unread > 0) {
+          toast.success(`Fetched ${unread} missed group message${unread === 1 ? '' : 's'}`);
+        } else {
+          toast.success('Offline messages synced');
+        }
+        const chatWarnings = result.gapWarnings.filter(w => w.chatId === chatId);
+        if (chatWarnings.length > 0) {
+          toast.warning(`Detected ${chatWarnings.length} sequence gap(s); some old messages may be missing`);
+        }
+        return;
+      }
+
+      const result = await window.kiyeovoAPI.checkOfflineMessagesForChat(chatId);
+      if (!result.success) {
+        dispatch(markOfflineFetchFailed(chatId));
+        toast.error(result.error || 'Failed to fetch offline messages');
+        return;
+      }
+
+      dispatch(markOfflineFetched(chatId));
+      const unreadMap = result.unreadFromChats instanceof Map
+        ? result.unreadFromChats
+        : new Map<number, number>();
+      const unread = unreadMap.get(chatId) ?? 0;
+      if (unread > 0) {
+        toast.success(`Fetched ${unread} missed message${unread === 1 ? '' : 's'}`);
+      } else {
+        toast.success('Offline messages synced');
+      }
+    } catch (error) {
+      dispatch(markOfflineFetchFailed(chatId));
+      toast.error(error instanceof Error ? error.message : 'Failed to fetch offline messages');
+    }
+  }, [activeChat, dispatch, toast]);
+
   return <div
     ref={scrollContainerRef}
     onScroll={handleScroll}
@@ -368,6 +422,21 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
     onPointerDown={markUserInteraction}
     className={`flex-1 overflow-y-auto p-6 space-y-2`}
   >
+    {activeChat?.offlineFetchNeedsSync && !activeChat.blocked && (
+      <div className="sticky top-2 z-20 mb-2 flex items-center justify-between gap-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+        <span>Failed to fetch offline messages.</span>
+        <button
+          type="button"
+          className="rounded border border-destructive/50 px-2 py-1 text-[11px] font-medium hover:bg-destructive/15 disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={activeChat.isFetchingOffline === true}
+          onClick={() => {
+            void handleRetryOfflineFetch();
+          }}
+        >
+          {activeChat.isFetchingOffline ? 'Retrying...' : 'Retry'}
+        </button>
+      </div>
+    )}
     {/* Sentinel for loading older messages */}
     {hasMore && !showEmptyState && (isLoadingMore || !isScrollable) && (
       <div className="flex justify-center py-2">

@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import Sidebar from '../components/sidebar/Sidebar';
 import ChatWrapper from '../components/chat/ChatWrapper';
-import { setChats, addChat, removePendingKeyExchange, setActiveChat, markOfflineFetched, updateFileTransferProgress, updateFileTransferStatus, updateFileTransferError, setPendingFileStatus, updateChat, setActivePendingKeyExchange, setOfflineFetchStatus } from '../state/slices/chatSlice';
+import { setChats, addChat, removePendingKeyExchange, setActiveChat, markOfflineFetched, markOfflineFetchFailed, updateFileTransferProgress, updateFileTransferStatus, updateFileTransferError, setPendingFileStatus, updateChat, setActivePendingKeyExchange, setOfflineFetchStatus } from '../state/slices/chatSlice';
 import { removeContactAttempt, setActiveContactAttempt, addMessage, type Chat } from '../state/slices/chatSlice';
 import { useToast } from '../components/ui/use-toast';
 import type { RootState } from '../state/store';
@@ -100,6 +100,7 @@ export const Main = () => {
                 status: 'active',
                 fetchedOffline: false,
                 isFetchingOffline: false,
+                offlineFetchNeedsSync: false,
                 groupStatus: 'active',
                 needsRemovedCatchup: Boolean(dbChat.needs_removed_catchup),
               };
@@ -131,6 +132,7 @@ export const Main = () => {
                 groupStatus: 'active',
                 fetchedOffline: false,
                 isFetchingOffline: false,
+                offlineFetchNeedsSync: false,
                 needsRemovedCatchup: Boolean(dbChat.needs_removed_catchup),
               },
             }));
@@ -141,7 +143,7 @@ export const Main = () => {
         }
         dispatch(updateChat({
           id: data.chatId,
-          updates: { status: 'active', groupStatus: 'active', fetchedOffline: false, isFetchingOffline: false },
+          updates: { status: 'active', groupStatus: 'active', fetchedOffline: false, isFetchingOffline: false, offlineFetchNeedsSync: false },
         }));
       })();
     });
@@ -180,6 +182,7 @@ export const Main = () => {
                 // OR ? dbChat.group_status !== 'active'
                 : false,
               isFetchingOffline: false,
+              offlineFetchNeedsSync: false,
               groupStatus: dbChat.group_status,
               needsRemovedCatchup: Boolean(dbChat.needs_removed_catchup),
             };
@@ -232,6 +235,7 @@ export const Main = () => {
         justCreated: true,
         fetchedOffline: true,
         isFetchingOffline: false,
+        offlineFetchNeedsSync: false,
       };
 
       const wasViewingContact = currentState.chat.activeContactAttempt?.peerId === data.peerId;
@@ -387,6 +391,7 @@ export const Main = () => {
             ? dbChat.group_status !== 'active'
             : false,
           isFetchingOffline: false,
+          offlineFetchNeedsSync: false,
           blocked: dbChat.blocked,
           muted: dbChat.muted,
           groupStatus: dbChat.group_status,
@@ -420,13 +425,20 @@ export const Main = () => {
           try {
             const groupResult = await window.kiyeovoAPI.checkGroupOfflineMessages(topGroupChatIds);
             if (!groupResult.success) {
-              topGroupChatIds.forEach((chatId) => {
-                dispatch(setOfflineFetchStatus({ chatId, isFetching: false }));
-              });
+              dispatch(markOfflineFetchFailed(topGroupChatIds));
               return;
             }
             console.log(`[UI] Group offline message check complete - checked chats: ${groupResult.checkedChatIds.join(', ')}`);
-            dispatch(markOfflineFetched(topGroupChatIds));
+            const failedChatIds = groupResult.failedChatIds ?? [];
+            const failedSet = new Set(failedChatIds);
+            const doneChatIds = topGroupChatIds.filter((chatId) => !failedSet.has(chatId));
+            if (doneChatIds.length > 0) {
+              dispatch(markOfflineFetched(doneChatIds));
+            }
+            if (failedChatIds.length > 0) {
+              dispatch(markOfflineFetchFailed(failedChatIds));
+              toast.warning(`Offline sync needs retry for ${failedChatIds.length} group chat${failedChatIds.length === 1 ? '' : 's'}`);
+            }
 
             const unreadMap = groupResult.unreadFromChats instanceof Map
               ? groupResult.unreadFromChats
@@ -440,9 +452,7 @@ export const Main = () => {
               toast.warning(`Detected ${groupResult.gapWarnings.length} group sequence gap(s); some old messages may be missing`);
             }
           } catch (error) {
-            topGroupChatIds.forEach((chatId) => {
-              dispatch(setOfflineFetchStatus({ chatId, isFetching: false }));
-            });
+            dispatch(markOfflineFetchFailed(topGroupChatIds));
             console.error('[UI] Failed to check group offline messages:', error);
           }
         };
@@ -492,6 +502,7 @@ export const Main = () => {
                       ? dbChat.group_status !== 'active'
                       : fetchedChatIds.includes(dbChat.id)),
                   isFetchingOffline: currentChats.find(c => c.id === dbChat.id)?.isFetchingOffline ?? false,
+                  offlineFetchNeedsSync: currentChats.find(c => c.id === dbChat.id)?.offlineFetchNeedsSync ?? false,
                   blocked: dbChat.blocked,
                   muted: dbChat.muted,
                   groupStatus: dbChat.group_status,
@@ -502,15 +513,11 @@ export const Main = () => {
               }
             } else {
               console.error('[UI] Failed to check offline messages:', result.error);
-              topDirectChatIds.forEach((chatId) => {
-                dispatch(setOfflineFetchStatus({ chatId, isFetching: false }));
-              });
+              dispatch(markOfflineFetchFailed(topDirectChatIds));
             }
           } catch (error) {
             console.error('[UI] Failed to check offline messages:', error);
-            topDirectChatIds.forEach((chatId) => {
-              dispatch(setOfflineFetchStatus({ chatId, isFetching: false }));
-            });
+            dispatch(markOfflineFetchFailed(topDirectChatIds));
           }
         };
 

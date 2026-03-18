@@ -1323,6 +1323,7 @@ export class MessageHandler {
 
   async checkGroupOfflineMessages(chatIds?: number[], options?: GroupOfflineCheckOptions): Promise<{
     checkedChatIds: number[];
+    failedChatIds: number[];
     unreadFromChats: Map<number, number>;
     gapWarnings: GroupOfflineGapWarning[];
   }> {
@@ -1330,7 +1331,7 @@ export class MessageHandler {
       return await this.groupOfflineManager.checkGroupOfflineMessages(chatIds, options);
     } catch (error: unknown) {
       generalErrorHandler(error, '[GROUP-OFFLINE] Failed to check group offline messages');
-      return { checkedChatIds: [], unreadFromChats: new Map(), gapWarnings: [] };
+      return { checkedChatIds: [], failedChatIds: [], unreadFromChats: new Map(), gapWarnings: [] };
     }
   }
 

@@ -10,7 +10,6 @@ import {
   CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES,
   GROUP_MESSAGE_MAX_FUTURE_SKEW_MS,
   GROUP_MAX_MESSAGES_PER_SENDER,
-  GROUP_OFFLINE_CLEANUP_INTERVAL_MS,
   GROUP_OFFLINE_LOCAL_CACHE_MAX_ENTRIES,
   GROUP_OFFLINE_LOCAL_CACHE_TTL_MS,
   GROUP_OFFLINE_MESSAGE_TTL_MS,
@@ -75,6 +74,7 @@ export interface GroupOfflineCheckOptions {
 
 export interface GroupOfflineCheckResult {
   checkedChatIds: number[];
+  failedChatIds: number[];
   unreadFromChats: Map<number, number>;
   gapWarnings: GroupOfflineGapWarning[];
 }
@@ -86,9 +86,7 @@ export class GroupOfflineManager {
   private readonly bucketMutationQueues = new Map<string, Promise<void>>();
   private readonly versionMetaCache = new Map<string, CachedVersionMetaEntry>();
   private readonly groupCheckInFlight = new Map<string, Promise<GroupChatCheckResult>>();
-  private lastCleanupAt = 0;
   private offlineCheckRunCounter = 0;
-  private cleanupInFlight: Promise<void> | null = null;
 
   constructor(deps: GroupOfflineManagerDeps) {
     this.deps = deps;
@@ -197,29 +195,12 @@ export class GroupOfflineManager {
     const unreadFromChats = new Map<number, number>();
     const gapWarnings: GroupOfflineGapWarning[] = [];
     const checkedChatIds: number[] = [];
+    const failedChatIds: number[] = [];
     const targetChats = this.resolveTargetChats(chatIds);
     console.log(
       `[GROUP-OFFLINE][TIMING][RUN:${runId}] start targetChats=${targetChats.length} ` +
       `chatIds=${targetChats.map((c) => c.id).join(',') || 'none'} mode=${mode}`
     );
-
-    if (Date.now() - this.lastCleanupAt >= GROUP_OFFLINE_CLEANUP_INTERVAL_MS) {
-      this.lastCleanupAt = Date.now();
-      if (!this.cleanupInFlight) {
-        this.cleanupInFlight = this.cleanupExpiredBuckets(targetChats)
-          .then(() => {
-            console.log(
-              `[GROUP-OFFLINE][TIMING][RUN:${runId}] cleanupExpiredBuckets`
-            );
-          })
-          .catch((error: unknown) => {
-            generalErrorHandler(error, '[GROUP-OFFLINE] cleanupExpiredBuckets failed');
-          })
-          .finally(() => {
-            this.cleanupInFlight = null;
-          });
-      }
-    }
 
     const checks = await this.runTargetChatChecksWithConcurrency(targetChats, mode, 3);
     for (const { chat, result, tookMs } of checks) {
@@ -240,6 +221,9 @@ export class GroupOfflineManager {
       if (processed) {
         checkedChatIds.push(chat.id);
       }
+      if (!result.completed) {
+        failedChatIds.push(chat.id);
+      }
       if (chat.group_status === 'removed' && result.completed) {
         this.deps.database.markRemovedCatchupCompleted(chat.id);
       }
@@ -253,6 +237,7 @@ export class GroupOfflineManager {
 
     return {
       checkedChatIds,
+      failedChatIds,
       unreadFromChats,
       gapWarnings,
     };
@@ -366,31 +351,22 @@ export class GroupOfflineManager {
 
     for (const epoch of scopedHistory) {
       epochsProcessed++;
-      const epochStart = Date.now();
-      const metaStart = Date.now();
-      const currentKeyVersion = chat.key_version ?? 0;
-      if (epoch.key_version < currentKeyVersion && epoch.used_until === null) {
-        console.warn(
-          `[GROUP-OFFLINE][ANOMALY][CHAT:${chat.id}] epoch=${epoch.key_version} current=${currentKeyVersion} ` +
-          `reason=old_epoch_missing_used_until`
-        );
-      }
       const metaKeyVersion = this.resolveEpochBoundaryMetaVersion(chat, epoch.key_version);
       const versionMeta = await this.getEpochBoundaryMeta(chat, epoch.key_version, metaKeyVersion);
-      const metaMs = Date.now() - metaStart;
       const skipDecision = this.evaluateEpochSkipDecision(chat, epoch, versionMeta);
+      // this is duplicated below, but I'll keep it since I want more aggresive pruning
+      if (this.canEpochBePrunedWithoutMeta(chat, epoch)) {
+        const pruneDecision = this.evaluateEpochPruneDecision(chat, epoch, versionMeta);
+        if (pruneDecision.prune) {
+          this.pruneEpochState(chat, epoch, pruneDecision.reason);
+          continue;
+        }
+      }
       if (skipDecision.skip) {
-        console.log(
-          `[GROUP-OFFLINE][TIMING][CHAT:${chat.id}] epoch=${epoch.key_version} skipped ` +
-          `reason=${skipDecision.reason} metaKeyVersion=${metaKeyVersion ?? 'none'} ` +
-          `metaMs=${metaMs} totalMs=${Date.now() - epochStart}`
-        );
+        console.log(`[GROUP-OFFLINE][SKIP_EPOCH][CHAT:${chat.id}] epoch=${epoch.key_version} reason=${skipDecision.reason}`);
         continue;
       }
-      console.log(
-        `[GROUP-OFFLINE][TIMING][CHAT:${chat.id}] epoch=${epoch.key_version} scanning ` +
-        `reason=${skipDecision.reason} metaKeyVersion=${metaKeyVersion ?? 'none'} metaMs=${metaMs}`
-      );
+      console.log(`[GROUP-OFFLINE][CHAT:${chat.id}] epoch=${epoch.key_version} scanning`);
 
       const keyBase64 = this.deps.database.getGroupKeyForEpoch(chat.group_id, epoch.key_version);
       if (!keyBase64) continue;
@@ -408,19 +384,16 @@ export class GroupOfflineManager {
           const bucketKey = `${this.groupOfflineBucketPrefix}/${chat.group_id}/${epoch.key_version}/${senderPubKeyBase64url}`;
           return { senderPeerId, sender, bucketKey };
         })
-        .filter((item): item is { senderPeerId: string; sender: NonNullable<ReturnType<ChatDatabase['getUserByPeerId']>>; bucketKey: string } => item !== null);
+        .filter(item => item !== null)
 
-      const storesFetchStart = Date.now();
       const senderStores = await Promise.all(senderDescriptors.map(async (desc) => ({
         ...desc,
         store: await this.getLatestStore(desc.bucketKey),
       })));
-      const storesFetchMs = Date.now() - storesFetchStart;
 
       let epochMessagesDelivered = 0;
 
       for (const { senderPeerId, sender, store } of senderStores) {
-        const senderStart = Date.now();
         if (!store || store.messages.length === 0) continue;
 
         sawAnyStore = true;
@@ -481,8 +454,8 @@ export class GroupOfflineManager {
               continue;
             }
 
-            // Late-gap repair: message seq is older/equal than watermark, but payload was never persisted locally.
-            // Persist it without touching member watermark to avoid replay-window widening.
+            // Late-gap repair: this seq is <= highestSeenSeq, but the message payload is missing locally.
+            // Persist the missing message, but do NOT change highestSeenSeq.
             try {
               const content = this.decryptContent(msg.encryptedContent, keyBytes, msg.nonce);
               await this.deps.database.createMessage({
@@ -580,15 +553,13 @@ export class GroupOfflineManager {
         console.log(
           `[GROUP-OFFLINE][TIMING][CHAT:${chat.id}] epoch=${epoch.key_version} sender=${sender.username} ` +
           `bucketMessages=${orderedMessages.length} delivered=${deliveredForSender} skippedSeen=${skippedSeen} ` +
-          `repairedLate=${repairedLate} skippedBoundary=${skippedByBoundary} skippedSig=${skippedInvalidSignature} ` +
-          `took=${Date.now() - senderStart}ms`
+          `repairedLate=${repairedLate} skippedBoundary=${skippedByBoundary} skippedSig=${skippedInvalidSignature} `
         );
       }
 
       console.log(
         `[GROUP-OFFLINE][TIMING][CHAT:${chat.id}] epoch=${epoch.key_version} ` +
-        `metaMs=${metaMs} storeFetchMs=${storesFetchMs} senderBuckets=${senderStores.length} ` +
-        `delivered=${epochMessagesDelivered} totalMs=${Date.now() - epochStart}`
+        `senderBuckets=${senderStores.length} `
       );
 
       if (this.canEpochBePrunedWithoutMeta(chat, epoch)) {
@@ -898,10 +869,10 @@ export class GroupOfflineManager {
       return { skip: false, reason: 'active_or_future_epoch' };
     }
     if (
-      epoch.used_until === null
+      currentKeyVersion > 0
       && epoch.key_version <= (currentKeyVersion - GROUP_MISSING_USED_UNTIL_SCAN_EPOCH_CAP)
     ) {
-      return { skip: true, reason: 'missing_used_until_depth_cap' };
+      return { skip: true, reason: 'epoch_depth_cap' };
     }
     if (epoch.used_until === null) {
       return { skip: false, reason: 'missing_used_until' };
@@ -1069,63 +1040,6 @@ export class GroupOfflineManager {
     }
   }
 
-  private async cleanupExpiredBuckets(chats: Chat[]): Promise<void> {
-    for (const chat of chats) {
-      if (!chat.group_id) continue;
-      const history = this.deps.database.getGroupKeyHistory(chat.group_id)
-        .filter((h) => h.key_version <= (chat.key_version ?? 0))
-        .sort((a, b) => a.key_version - b.key_version);
-
-      // If app dies between DHT PUT and DB write, below is the solution
-      // The chance of that happening is extremely small, so it's not worth it currently
-      // for (const epoch of history) {
-      //   const bucketKey = `${this.groupOfflineBucketPrefix}/${chat.group_id}/${epoch.key_version}/${ownPubKeyBase64url}`;
-      //   await this.withBucketMutationLock(bucketKey, async () => {
-      //     const existing = await this.getLatestStore(bucketKey);
-      //     if (!existing || existing.messages.length === 0) return;
-
-      //     const liveMessages = this.filterLiveMessages(existing.messages);
-      //     if (liveMessages.length === existing.messages.length) return;
-
-      //     const version = existing.version + 1;
-      //     const highestSeq = Math.max(
-      //       existing.highestSeq,
-      //       ...liveMessages.map((m) => m.seq),
-      //       0,
-      //     );
-      //     const signedStore = this.signStore(liveMessages, highestSeq, version, bucketKey);
-      //     await this.putStore(bucketKey, signedStore);
-      //     this.deps.database.saveGroupOfflineSentMessages(bucketKey, liveMessages, version);
-      //   });
-      // }
-
-      await this.cleanupConsumedEpochState(chat, history);
-    }
-  }
-
-  private async cleanupConsumedEpochState(
-    chat: Chat,
-    history: Array<{ key_version: number; used_until: number | null }>,
-  ): Promise<void> {
-    if (!chat.group_id) return;
-
-    for (const epoch of history) {
-      if (!this.canEpochBePrunedWithoutMeta(chat, epoch)) {
-        continue;
-      }
-      const successorVersionForBoundaries = this.resolveEpochBoundaryMetaVersion(chat, epoch.key_version);
-      const versionMeta = await this.getEpochBoundaryMeta(chat, epoch.key_version, successorVersionForBoundaries);
-      const pruneDecision = this.evaluateEpochPruneDecision(chat, epoch, versionMeta);
-      if (!pruneDecision.prune) {
-        console.log(
-          `[GROUP-OFFLINE][TIMING][PRUNE][CHAT:${chat.id}] epoch=${epoch.key_version} skip reason=${pruneDecision.reason}`
-        );
-        continue;
-      }
-      this.pruneEpochState(chat, epoch, pruneDecision.reason);
-    }
-  }
-
   private pruneEpochState(
     chat: Chat,
     epoch: { key_version: number; used_until: number | null },
@@ -1156,12 +1070,13 @@ export class GroupOfflineManager {
   ): boolean {
     const currentKeyVersion = chat.key_version ?? 0;
     if (epoch.key_version >= currentKeyVersion) return false;
-    if (epoch.used_until === null) {
-      return (
-        currentKeyVersion > 0
-        && epoch.key_version <= (currentKeyVersion - GROUP_MISSING_USED_UNTIL_SCAN_EPOCH_CAP)
-      );
+    if (
+      currentKeyVersion > 0
+      && epoch.key_version <= (currentKeyVersion - GROUP_MISSING_USED_UNTIL_SCAN_EPOCH_CAP)
+    ) {
+      return true;
     }
+    if (epoch.used_until === null) return false;
 
     const threshold = epoch.used_until + GROUP_ROTATION_GRACE_WINDOW_MS;
     return Date.now() >= threshold;
@@ -1175,15 +1090,13 @@ export class GroupOfflineManager {
     if (!chat.group_id) return { prune: false, reason: 'no_group' };
     const currentKeyVersion = chat.key_version ?? 0;
     if (epoch.key_version >= currentKeyVersion) return { prune: false, reason: 'active_or_future_epoch' };
-    if (epoch.used_until === null) {
-      if (
-        currentKeyVersion > 0
-        && epoch.key_version <= (currentKeyVersion - GROUP_MISSING_USED_UNTIL_SCAN_EPOCH_CAP)
-      ) {
-        return { prune: true, reason: 'missing_used_until_depth_cap' };
-      }
-      return { prune: false, reason: 'missing_used_until' };
+    if (
+      currentKeyVersion > 0
+      && epoch.key_version <= (currentKeyVersion - GROUP_MISSING_USED_UNTIL_SCAN_EPOCH_CAP)
+    ) {
+      return { prune: true, reason: 'epoch_depth_cap' };
     }
+    if (epoch.used_until === null) return { prune: false, reason: 'missing_used_until' };
 
     const threshold = epoch.used_until + GROUP_ROTATION_GRACE_WINDOW_MS;
     if (Date.now() < threshold) return { prune: false, reason: 'within_grace_window' };

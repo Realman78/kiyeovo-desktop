@@ -1750,7 +1750,7 @@ function setupGroupHandlers(
     try {
       const p2pCore = getP2PCore();
       if (!p2pCore) {
-        return { success: false, checkedChatIds: [], unreadFromChats: new Map(), gapWarnings: [], error: 'P2P core not initialized' };
+        return { success: false, checkedChatIds: [], failedChatIds: [], unreadFromChats: new Map(), gapWarnings: [], error: 'P2P core not initialized' };
       }
 
       const result = await p2pCore.messageHandler.checkGroupOfflineMessages(chatIds);
@@ -1760,6 +1760,7 @@ function setupGroupHandlers(
       return {
         success: false,
         checkedChatIds: [],
+        failedChatIds: [],
         unreadFromChats: new Map(),
         gapWarnings: [],
         error: error instanceof Error ? error.message : 'Failed to check group offline messages',
@@ -1771,7 +1772,7 @@ function setupGroupHandlers(
     try {
       const p2pCore = getP2PCore();
       if (!p2pCore) {
-        return { success: false, checkedChatIds: [], unreadFromChats: new Map(), gapWarnings: [], error: 'P2P core not initialized' };
+        return { success: false, checkedChatIds: [], failedChatIds: [], unreadFromChats: new Map(), gapWarnings: [], error: 'P2P core not initialized' };
       }
 
       const result = await p2pCore.messageHandler.checkGroupOfflineMessages([chatId]);
@@ -1781,6 +1782,7 @@ function setupGroupHandlers(
       return {
         success: false,
         checkedChatIds: [],
+        failedChatIds: [],
         unreadFromChats: new Map(),
         gapWarnings: [],
         error: error instanceof Error ? error.message : 'Failed to check group offline messages',

@@ -50,6 +50,7 @@ export interface Chat {
   justCreated?: boolean; // Flag for newly created chats waiting for first message
   fetchedOffline?: boolean; // Whether offline messages have been checked for this chat
   isFetchingOffline?: boolean; // Whether offline messages are currently being fetched
+  offlineFetchNeedsSync?: boolean; // Whether latest offline fetch failed and needs manual retry
   username?: string; // optional because of potential group chats
   trusted_out_of_band?: boolean; // Whether chat was established via out-of-band profile import
   muted?: boolean; // Whether notifications and sounds are muted for this chat
@@ -348,8 +349,14 @@ const chatSlice = createSlice({
       const chat = state.chats.find((c) => c.id === action.payload.chatId);
       if (chat) {
         chat.isFetchingOffline = action.payload.isFetching;
+        if (action.payload.isFetching) {
+          chat.offlineFetchNeedsSync = false;
+        }
         if (state.activeChat?.id === action.payload.chatId) {
           state.activeChat.isFetchingOffline = action.payload.isFetching;
+          if (action.payload.isFetching) {
+            state.activeChat.offlineFetchNeedsSync = false;
+          }
         }
       }
     },
@@ -360,9 +367,27 @@ const chatSlice = createSlice({
         if (chat) {
           chat.fetchedOffline = true;
           chat.isFetchingOffline = false;
+          chat.offlineFetchNeedsSync = false;
           if (state.activeChat?.id === chatId) {
             state.activeChat.fetchedOffline = true;
             state.activeChat.isFetchingOffline = false;
+            state.activeChat.offlineFetchNeedsSync = false;
+          }
+        }
+      });
+    },
+    markOfflineFetchFailed: (state, action: PayloadAction<number | number[]>) => {
+      const chatIds = Array.isArray(action.payload) ? action.payload : [action.payload];
+      chatIds.forEach(chatId => {
+        const chat = state.chats.find((c) => c.id === chatId);
+        if (chat) {
+          chat.fetchedOffline = false;
+          chat.isFetchingOffline = false;
+          chat.offlineFetchNeedsSync = true;
+          if (state.activeChat?.id === chatId) {
+            state.activeChat.fetchedOffline = false;
+            state.activeChat.isFetchingOffline = false;
+            state.activeChat.offlineFetchNeedsSync = true;
           }
         }
       });
@@ -464,6 +489,7 @@ export const {
   removePendingKeyExchange,
   setOfflineFetchStatus,
   markOfflineFetched,
+  markOfflineFetchFailed,
   updateFileTransferProgress,
   updateFileTransferStatus,
   updateFileTransferError,

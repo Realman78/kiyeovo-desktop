@@ -349,10 +349,10 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     checkOfflineMessagesForChat: async (chatId: number): Promise<{ success: boolean; checkedChatIds: number[]; unreadFromChats: Map<number, number>; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.CHECK_OFFLINE_MESSAGES_FOR_CHAT, chatId);
     },
-    checkGroupOfflineMessages: async (chatIds?: number[]): Promise<{ success: boolean; checkedChatIds: number[]; unreadFromChats: Map<number, number>; gapWarnings: GroupOfflineGapWarning[]; error: string | null }> => {
+    checkGroupOfflineMessages: async (chatIds?: number[]): Promise<{ success: boolean; checkedChatIds: number[]; failedChatIds: number[]; unreadFromChats: Map<number, number>; gapWarnings: GroupOfflineGapWarning[]; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.CHECK_GROUP_OFFLINE_MESSAGES, chatIds);
     },
-    checkGroupOfflineMessagesForChat: async (chatId: number): Promise<{ success: boolean; checkedChatIds: number[]; unreadFromChats: Map<number, number>; gapWarnings: GroupOfflineGapWarning[]; error: string | null }> => {
+    checkGroupOfflineMessagesForChat: async (chatId: number): Promise<{ success: boolean; checkedChatIds: number[]; failedChatIds: number[]; unreadFromChats: Map<number, number>; gapWarnings: GroupOfflineGapWarning[]; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.CHECK_GROUP_OFFLINE_MESSAGES_FOR_CHAT, chatId);
     },
     onOfflineMessagesFetchStart: (callback: (data: { chatIds: number[] }) => void) => {

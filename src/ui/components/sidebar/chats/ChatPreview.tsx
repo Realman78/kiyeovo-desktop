@@ -1,7 +1,7 @@
 import type { FC } from "react";
 import type { Chat } from "../../../state/slices/chatSlice";
 import { formatTimestampToHourMinute } from "../../../utils/dateUtils";
-import { Ban, BellOff, Paperclip, Users } from "lucide-react";
+import { AlertCircle, Ban, BellOff, Paperclip, Users } from "lucide-react";
 import { useSelector } from "react-redux";
 import type { RootState } from "../../../state/store";
 import { getGroupCreatorLinkState } from "../../../utils/groupCreatorLinkHealth";
@@ -76,7 +76,12 @@ export const ChatPreview: FC<ChatPreviewProps> = ({ chat, onSelectChat, selected
                         {chat.isFetchingOffline && !chat.blocked && (
                             <div className="w-4 h-4 border-2 border-muted-foreground border-t-transparent rounded-full animate-spin" title="Checking for offline messages..." />
                         )}
-                        {!chat.fetchedOffline && !chat.isFetchingOffline && !chat.blocked && (
+                        {chat.offlineFetchNeedsSync && !chat.isFetchingOffline && !chat.blocked && (
+                            <span title="Offline sync needs retry">
+                                <AlertCircle className="w-4 h-4 text-destructive" />
+                            </span>
+                        )}
+                        {!chat.fetchedOffline && !chat.offlineFetchNeedsSync && !chat.isFetchingOffline && !chat.blocked && (
                             <div className="w-2 h-2 rounded-full bg-yellow-500" title="Offline messages not checked" />
                         )}
                         {chat.unreadCount > 0 && (
