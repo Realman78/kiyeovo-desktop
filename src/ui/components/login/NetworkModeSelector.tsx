@@ -27,7 +27,6 @@ export function NetworkModeSelector({ loading, saving, error, onChange }: Networ
     <div className="w-114 rounded-lg border border-primary/30 bg-card/40 p-4">
       <div className="mb-3 text-center">
         <p className="text-sm font-semibold text-foreground">Network Mode</p>
-        <p className="text-xs text-muted-foreground">Choose transport profile before login</p>
       </div>
 
       <div className="grid grid-cols-2 gap-2">
