@@ -540,6 +540,21 @@ export class GroupResponder {
 
     const currentKeyVersion = chat.key_version ?? 0;
     if (currentKeyVersion >= update.keyVersion) {
+      let recoveredTimeline = false;
+      if (currentKeyVersion === update.keyVersion && !update.isResync) {
+        await this.appendMembershipSystemMessage(
+          chat.id,
+          update.groupId,
+          update.keyVersion,
+          update.event,
+          update.targetPeerId,
+          update.roster.find((entry) => entry.peerId === update.targetPeerId)?.username,
+          creatorPeerId,
+          creator.username,
+          normalizedEventTimestamp,
+        );
+        recoveredTimeline = true;
+      }
       await this.sendControlAck(
         creatorPeerId,
         update.groupId,
@@ -547,7 +562,8 @@ export class GroupResponder {
         update.messageId,
       );
       console.log(
-        `[GROUP][STATE_UPDATE][DUPLICATE] group=${update.groupId} msgId=${update.messageId} currentKeyVersion=${currentKeyVersion} incomingKeyVersion=${update.keyVersion}`,
+        `[GROUP][STATE_UPDATE][DUPLICATE] group=${update.groupId} msgId=${update.messageId} currentKeyVersion=${currentKeyVersion} ` +
+        `incomingKeyVersion=${update.keyVersion} recoveredTimeline=${recoveredTimeline}`,
       );
       return;
     }

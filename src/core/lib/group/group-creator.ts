@@ -1335,7 +1335,14 @@ export class GroupCreator {
     const signature = this.sign(update);
     const signedUpdate: GroupStateUpdate = { ...update, signature };
 
-    database.insertPendingAck(groupId, targetPeerId, 'GROUP_STATE_UPDATE', JSON.stringify(signedUpdate));
+    const existingStateUpdatePending = database
+      .getPendingAcksForGroup(groupId)
+      .find(
+        pending => pending.target_peer_id === targetPeerId && pending.message_type === 'GROUP_STATE_UPDATE',
+      );
+    if (!existingStateUpdatePending) {
+      database.insertPendingAck(groupId, targetPeerId, 'GROUP_STATE_UPDATE', JSON.stringify(signedUpdate));
+    }
     try {
       await this.sendControlMessageToPeer(targetPeerId, signedUpdate);
       console.log(
