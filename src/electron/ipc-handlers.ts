@@ -1,6 +1,6 @@
 import type { IpcMain, BrowserWindow } from 'electron';
 import { app, dialog, Notification, shell } from 'electron';
-import { IPC_CHANNELS, OFFLINE_CHECK_CACHE_TTL, PENDING_KEY_EXCHANGE_EXPIRATION, type P2PCore, type AppConfig, type NetworkMode } from '../core/index.js';
+import { IPC_CHANNELS, PENDING_KEY_EXCHANGE_EXPIRATION, type P2PCore, type AppConfig, type NetworkMode } from '../core/index.js';
 import { CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES, DEFAULT_NETWORK_MODE, DOWNLOADS_DIR, FAST_RELAY_MULTIADDRS_SETTING_KEY, FILE_OFFER_RATE_LIMIT, KEY_EXCHANGE_RATE_LIMIT_DEFAULT, MAX_FILE_SIZE, MAX_PENDING_FILES_PER_PEER, MAX_PENDING_FILES_TOTAL, NETWORK_MODE_ONBOARDED_SETTING_KEY, OFFLINE_MESSAGE_LIMIT, SILENT_REJECTION_THRESHOLD_GLOBAL, SILENT_REJECTION_THRESHOLD_PER_PEER, NETWORK_MODES, getTorConfig, isNetworkMode } from '../core/constants.js';
 import { validateMessageLength, validateUsername } from '../core/utils/validators.js';
 import { peerIdFromString } from '@libp2p/peer-id';
@@ -1072,18 +1072,6 @@ function getOfflineCheckCacheKey(chatIds?: number[]): string {
 }
 
 /**
- * Clear expired entries from cache
- */
-function cleanupOfflineCheckCache(): void {
-  const now = Date.now();
-  for (const [key, entry] of OfflineMessageManager.offlineCheckCache.entries()) {
-    if (now - entry.timestamp > OFFLINE_CHECK_CACHE_TTL) {
-      OfflineMessageManager.offlineCheckCache.delete(key);
-    }
-  }
-}
-
-/**
  * Offline message handlers
  */
 function setupOfflineMessageHandlers(
@@ -1107,15 +1095,6 @@ function setupOfflineMessageHandlers(
         return await inFlightPromise;
       }
 
-      // Check cache
-      const cached = OfflineMessageManager.offlineCheckCache.get(cacheKey);
-      const now = Date.now();
-
-      if (cached && (now - cached.timestamp < OFFLINE_CHECK_CACHE_TTL)) {
-        console.log(`[IPC] Returning cached offline check result (${Math.round((now - cached.timestamp) / 1000)}s old)`);
-        return cached.result;
-      }
-
       event.sender.send(IPC_CHANNELS.OFFLINE_MESSAGES_FETCH_START, { chatIds: chatIds ?? [] });
 
       // Create and store the promise for this check
@@ -1133,15 +1112,6 @@ function setupOfflineMessageHandlers(
           event.sender.send(IPC_CHANNELS.OFFLINE_MESSAGES_FETCH_COMPLETE, { chatIds: checkedChatIds });
 
           const result = { success: true, checkedChatIds, unreadFromChats, error: null };
-
-          // Cache the result
-          OfflineMessageManager.offlineCheckCache.set(cacheKey, {
-            timestamp: Date.now(),
-            result
-          });
-
-          // Cleanup expired cache entries
-          cleanupOfflineCheckCache();
 
           return result;
         } finally {
@@ -1177,15 +1147,6 @@ function setupOfflineMessageHandlers(
         return await inFlightPromise;
       }
 
-      // Check cache
-      const cached = OfflineMessageManager.offlineCheckCache.get(cacheKey);
-      const now = Date.now();
-
-      if (cached && (now - cached.timestamp < OFFLINE_CHECK_CACHE_TTL)) {
-        console.log(`[IPC] Returning cached offline check result for chat ${chatId} (${Math.round((now - cached.timestamp) / 1000)}s old)`);
-        return cached.result;
-      }
-
       event.sender.send(IPC_CHANNELS.OFFLINE_MESSAGES_FETCH_START, { chatIds: [chatId] });
 
       // Create and store the promise for this check
@@ -1198,15 +1159,6 @@ function setupOfflineMessageHandlers(
           event.sender.send(IPC_CHANNELS.OFFLINE_MESSAGES_FETCH_COMPLETE, { chatIds: checkedChatIds });
 
           const result = { success: true, checkedChatIds, unreadFromChats, error: null };
-
-          // Cache the result
-          OfflineMessageManager.offlineCheckCache.set(cacheKey, {
-            timestamp: Date.now(),
-            result
-          });
-
-          // Cleanup expired cache entries
-          cleanupOfflineCheckCache();
 
           return result;
         } finally {

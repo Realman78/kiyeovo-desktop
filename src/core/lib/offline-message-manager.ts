@@ -1,7 +1,7 @@
 import { randomUUID, publicEncrypt, randomBytes, createCipheriv } from 'crypto';
 import { gzip, gunzip } from 'zlib';
 import { promisify } from 'util';
-import type { ChatNode, OfflineCheckCacheEntry, OfflineMessage, OfflineMessageStore, OfflineSenderInfo, OfflineSignedPayload, StoreSignedPayload } from '../types.js';
+import type { ChatNode, OfflineMessage, OfflineMessageStore, OfflineSenderInfo, OfflineSignedPayload, StoreSignedPayload } from '../types.js';
 import { ed25519 } from '@noble/curves/ed25519';
 import { sha256 } from '@noble/hashes/sha2';
 import { generalErrorHandler } from '../utils/general-error.js';
@@ -22,7 +22,6 @@ const gunzipAsync = promisify(gunzip);
  */
 // eslint-disable-next-line @typescript-eslint/no-extraneous-class
 export class OfflineMessageManager {
-    static offlineCheckCache: Map<string, OfflineCheckCacheEntry> = new Map<string, OfflineCheckCacheEntry>();
     static inFlightOfflineChecks: Map<string, Promise<any>> = new Map<string, Promise<any>>();
     private static bucketMutationQueues: Map<string, Promise<void>> = new Map<string, Promise<void>>();
 

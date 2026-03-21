@@ -381,9 +381,6 @@ export class GroupCreator {
     // Verify this is for a group we created
     const chat = database.getChatByGroupId(response.groupId);
     if (!chat || chat.created_by !== myPeerId) {
-      console.log(
-        `[GROUP][TRACE][RESP][DROP] group=${response.groupId} reason=not_creator chatExists=${!!chat} createdBy=${chat?.created_by?.slice(-8) ?? 'n/a'} me=${myPeerId.slice(-8)}`,
-      );
       throw new Error(`Not creator of group ${response.groupId}`);
     }
 
@@ -391,38 +388,16 @@ export class GroupCreator {
     if (chat.group_status === 'disbanded') {
       const responder = database.getUserByPeerId(response.responderPeerId);
       if (!responder) {
-        console.log(
-          `[GROUP][TRACE][RESP][DROP] group=${response.groupId} from=${response.responderPeerId.slice(-8)} reason=unknown_sender_after_disband`,
-        );
         return;
       }
       this.verifySignature(response, responder.signing_public_key);
       await this.sendInviteResponseAck(response);
-      console.log(
-        `[GROUP][TRACE][RESP][DISBANDED_ACK_ONLY] group=${response.groupId} from=${response.responderPeerId.slice(-8)} msgId=${response.messageId}`,
-      );
       return;
     }
 
     // Reconstruct invite state from pending_acks (survives restart)
-    const pendingAcks = database.getPendingAcksForGroup(response.groupId);
-    const inviteCandidates = pendingAcks.filter(
-      a => a.target_peer_id === response.responderPeerId && a.message_type === 'GROUP_INVITE'
-    );
-    const inviteCandidateIds = inviteCandidates.map(candidate => {
-      try {
-        const parsed = JSON.parse(candidate.message_payload) as { inviteId?: string };
-        return parsed.inviteId ?? 'missing_invite_id';
-      } catch {
-        return 'invalid_json';
-      }
-    });
-    console.log(
-      `[GROUP][TRACE][RESP][LOOKUP] group=${response.groupId} from=${response.responderPeerId.slice(-8)} pendingInviteCount=${inviteCandidates.length} pendingInviteIds=${inviteCandidateIds.join(',') || 'none'}`,
-    );
-    const inviteAck = inviteCandidates[0];
-
-    if (!inviteAck) {
+    const storedInvite = this.getStoredPendingInvite(response.groupId, response.responderPeerId);
+    if (!storedInvite) {
       // No pending invite = already processed (dedup) or never sent
       console.log(
         `[GROUP][TRACE][RESP][DROP] group=${response.groupId} from=${response.responderPeerId.slice(-8)} reason=no_pending_invite`,
@@ -430,19 +405,6 @@ export class GroupCreator {
       return;
     }
 
-    // Parse stored invite to verify inviteId match and check expiry
-    let storedInvite: GroupInvite;
-    try {
-      storedInvite = JSON.parse(inviteAck.message_payload) as GroupInvite;
-    } catch {
-      console.log(
-        `[GROUP][TRACE][RESP][DROP] group=${response.groupId} from=${response.responderPeerId.slice(-8)} reason=invalid_pending_invite_payload`,
-      );
-      throw new Error('Invalid pending invite payload');
-    }
-    console.log(
-      `[GROUP][TRACE][RESP][MATCH] group=${response.groupId} from=${response.responderPeerId.slice(-8)} incomingInviteId=${response.inviteId} pendingInviteId=${storedInvite.inviteId}`,
-    );
     if (response.inviteId !== storedInvite.inviteId) {
       throw new Error(
         `Invite ID mismatch: incoming=${response.inviteId} pending=${storedInvite.inviteId}`,
@@ -453,8 +415,7 @@ export class GroupCreator {
       console.log(
         `[GROUP][TRACE][RESP][DROP] group=${response.groupId} from=${response.responderPeerId.slice(-8)} reason=invite_expired expiresAt=${storedInvite.expiresAt + GROUP_PENDING_ACK_RETIRE_AGE_MS}`,
       );
-      database.removePendingAck(response.groupId, response.responderPeerId, 'GROUP_INVITE');
-      database.removeInviteDeliveryAcksForMember(response.groupId, response.responderPeerId);
+      this.cleanupInvitePendingState(response.groupId, response.responderPeerId);
       return;
     }
 
@@ -464,20 +425,13 @@ export class GroupCreator {
       throw new Error(`Responder ${response.responderPeerId} not found`);
     }
     this.verifySignature(response, responder.signing_public_key);
-    console.log(
-      `[GROUP][TRACE][RESP][SIG_OK] group=${response.groupId} from=${response.responderPeerId.slice(-8)} msgId=${response.messageId}`,
-    );
 
     // Send ACK back
-    console.log(
-      `[GROUP][TRACE][RESP][ACK_SEND] group=${response.groupId} inviteId=${response.inviteId} to=${response.responderPeerId.slice(-8)} ackedMsgId=${response.messageId}`,
-    );
     await this.sendInviteResponseAck(response);
 
     if (response.response === 'reject') {
       // Reject is terminal for this invite.
-      database.removePendingAck(response.groupId, response.responderPeerId, 'GROUP_INVITE');
-      database.removeInviteDeliveryAcksForMember(response.groupId, response.responderPeerId);
+      this.cleanupInvitePendingState(response.groupId, response.responderPeerId);
       console.log(
         `[GROUP][TRACE][RESP][DONE] group=${response.groupId} from=${response.responderPeerId.slice(-8)} result=rejected`,
       );
@@ -485,28 +439,44 @@ export class GroupCreator {
     }
 
     // If already a participant, treat this as idempotent duplicate acceptance.
-    const alreadyParticipant = database.getChatParticipants(chat.id)
-      .some(p => p.peer_id === response.responderPeerId);
+    const alreadyParticipant = this.isParticipant(chat.id, response.responderPeerId);
     if (alreadyParticipant) {
-      database.removePendingAck(response.groupId, response.responderPeerId, 'GROUP_INVITE');
-      database.removeInviteDeliveryAcksForMember(response.groupId, response.responderPeerId);
+      this.cleanupInvitePendingState(response.groupId, response.responderPeerId);
       console.log(
         `[GROUP][TRACE][RESP][DONE] group=${response.groupId} from=${response.responderPeerId.slice(-8)} result=already_participant`,
       );
       return;
     }
 
-    console.log(
-      `[GROUP][TRACE][RESP][WELCOME] group=${response.groupId} to=${response.responderPeerId.slice(-8)} action=send_group_welcome`,
-    );
     await this.sendGroupWelcome(response.groupId, response.responderPeerId, Date.now());
 
     // Remove invite only after welcome path succeeds.
-    database.removePendingAck(response.groupId, response.responderPeerId, 'GROUP_INVITE');
-    database.removeInviteDeliveryAcksForMember(response.groupId, response.responderPeerId);
+    this.cleanupInvitePendingState(response.groupId, response.responderPeerId);
     console.log(
       `[GROUP][TRACE][RESP][DONE] group=${response.groupId} from=${response.responderPeerId.slice(-8)} result=accepted_pending_removed`,
     );
+  }
+
+  private getStoredPendingInvite(groupId: string, responderPeerId: string): GroupInvite | null {
+    const pendingInvite = this.deps.database.getPendingAcksForGroup(groupId).find(
+      (ack) => ack.target_peer_id === responderPeerId && ack.message_type === 'GROUP_INVITE',
+    );
+    if (!pendingInvite) return null;
+
+    try {
+      return JSON.parse(pendingInvite.message_payload) as GroupInvite;
+    } catch {
+      throw new Error('Invalid pending invite payload');
+    }
+  }
+
+  private cleanupInvitePendingState(groupId: string, responderPeerId: string): void {
+    this.deps.database.removePendingAck(groupId, responderPeerId, 'GROUP_INVITE');
+    this.deps.database.removeInviteDeliveryAcksForMember(groupId, responderPeerId);
+  }
+
+  private isParticipant(chatId: number, peerId: string): boolean {
+    return this.deps.database.getChatParticipants(chatId).some((participant) => participant.peer_id === peerId);
   }
 
   async processLeaveRequest(request: GroupLeaveRequest, senderPeerId: string): Promise<void> {
@@ -771,7 +741,7 @@ export class GroupCreator {
         ? await this.snapshotPrevEpochBoundaries(groupId, prevVersion, preRotationParticipants)
         : {};
 
-      const { groupKey, keyVersion } = await this.rotateGroupKey(groupId, targetPeerId, 'kick');
+      const { groupKey, keyVersion } = this.rotateGroupKey(groupId, targetPeerId, 'kick');
       rotationCommitted = true;
       if (prevVersion >= 1) {
         this.deps.onRegisterPrevEpochGrace?.(groupId, prevVersion);
@@ -1065,13 +1035,7 @@ export class GroupCreator {
 
     const chat = database.getChatByGroupId(groupId);
     if (!chat) throw new Error(`Group ${groupId} not found`);
-    if (chat.group_status === 'rekeying') {
-      console.log(
-        `[GROUP][TRACE][WELCOME][DEFER] group=${groupId} to=${acceptedPeerId.slice(-8)} reason=group_rekeying`,
-      );
-      // Let outer handler retry this response later instead of running concurrent rotations.
-      throw new Error(`Group ${groupId} is already rekeying`);
-    }
+    if (chat.group_status === 'rekeying') throw new Error(`Group ${groupId} is already rekeying`);
 
     // Get accepted user's info for RSA encryption
     const acceptedUser = database.getUserByPeerId(acceptedPeerId);
@@ -1088,8 +1052,10 @@ export class GroupCreator {
         ? await this.snapshotPrevEpochBoundaries(groupId, prevVersion, preRotationParticipants)
         : {};
 
+      console.log("MARINPARIN prevEpochBoundaries", prevEpochBoundaries);
+
       // Rotate key (join always triggers rotation)
-      const { groupKey, keyVersion } = await this.rotateGroupKey(groupId, acceptedPeerId, 'join');
+      const { groupKey, keyVersion } = this.rotateGroupKey(groupId, acceptedPeerId, 'join');
       rotationCommitted = true;
       if (prevVersion >= 1) {
         this.deps.onRegisterPrevEpochGrace?.(groupId, prevVersion);
@@ -1143,6 +1109,7 @@ export class GroupCreator {
         );
       }
 
+      console.log("MARINPARIN sending groupstateupdate");
       // Send GroupStateUpdate to all existing members (excluding new joiner — they get welcome).
       await this.sendGroupStateUpdate(
         groupId,
@@ -1198,11 +1165,11 @@ export class GroupCreator {
     }
   }
 
-  async rotateGroupKey(
+  rotateGroupKey(
     groupId: string,
     targetPeerId: string,
     event: 'join' | 'leave' | 'kick',
-  ): Promise<{ groupKey: string; keyVersion: number }> {
+  ): { groupKey: string; keyVersion: number } {
     const { database, myPeerId } = this.deps;
 
     const chat = database.getChatByGroupId(groupId);
@@ -1383,6 +1350,7 @@ export class GroupCreator {
         // Store in pending ACKs first, then send (best effort).
         database.insertPendingAck(groupId, participant.peer_id, 'GROUP_STATE_UPDATE', JSON.stringify(signedUpdate));
         try {
+          console.log("MARINPARIN sending groupstateupdate", participant.peer_id, update.type, update.keyVersion)
           await this.sendControlMessageToPeer(participant.peer_id, signedUpdate);
           sent++;
         } catch (error: unknown) {
@@ -1467,7 +1435,7 @@ export class GroupCreator {
     groupId: string,
     keyVersion: number,
     roster: GroupRosterEntry[],
-    prevEpochBoundaries?: Record<string, number>,
+    prevEpochBoundaries: Record<string, number>,
   ): Promise<void> {
     const { database, userIdentity } = this.deps;
     const creatorPubKeyBase64url = toBase64Url(userIdentity.signingPublicKey);
@@ -1517,6 +1485,7 @@ export class GroupCreator {
 
     // Persist finalized boundaries for previous epoch locally.
     // Creator DB is authoritative for its own rotations; DHT is for distribution.
+    console.log("MARINPARIN tu bi tribalo bit zadnje ciscenje", senderSeqBoundaries, prevEpochBoundaries, database.getAllMemberSeqs(groupId, prevVersion), database.getCurrentSeq(groupId, prevVersion));
     if (prevVersion >= 1 && Object.keys(senderSeqBoundaries).length > 0) {
       database.upsertGroupEpochBoundaries(groupId, prevVersion, senderSeqBoundaries, 'creator_rotation');
     }
@@ -1802,6 +1771,7 @@ export class GroupCreator {
       database.updateOfflineLastAckSentByPeerId(peerId, lastReadTimestamp);
     }
 
+    console.log("MARINPARIN sent nudge to at ", peerId, Date.now())
     // DHT write succeeded — best-effort nudge so an online recipient checks their bucket immediately
     nudgeGroupRefetchIfKnownGroup(this.deps, peerId, message);
   }

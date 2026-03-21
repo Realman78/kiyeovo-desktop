@@ -134,7 +134,7 @@ export class GroupMessaging {
     this.groupGraceContexts.clear();
   }
 
-  async subscribeToGroupTopic(groupId: string): Promise<void> {
+  subscribeToGroupTopic(groupId: string): void {
     const ctx = this.resolveActiveGroupContext(groupId);
     this.ensureTopicSubscription(ctx);
   }

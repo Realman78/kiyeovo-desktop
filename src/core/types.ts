@@ -770,13 +770,3 @@ export interface PendingFileReceivedEvent {
   senderUsername: string;
   expiresAt: number;
 }
-
-export interface OfflineCheckCacheEntry {
-  timestamp: number;
-  result: {
-    success: boolean;
-    checkedChatIds: number[];
-    unreadFromChats: Map<number, number>;
-    error: string | null;
-  };
-}

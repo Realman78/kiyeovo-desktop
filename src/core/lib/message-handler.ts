@@ -227,6 +227,9 @@ export class MessageHandler {
     const now = Date.now();
     const last = this.nudgeCooldowns.get(cooldownKey) ?? 0;
     const elapsed = now - last;
+
+    console.log("MARINPARIN aCTUALLY sent to at", peerId, now)
+
     if (elapsed < BUCKET_NUDGE_COOLDOWN_MS) {
       const remaining = BUCKET_NUDGE_COOLDOWN_MS - elapsed;
       if (!this.nudgeTrailingTimers.has(cooldownKey)) {
@@ -268,72 +271,25 @@ export class MessageHandler {
   private setupProtocolHandler(): void {
     void this.node.handle(this.bucketNudgeProtocol, async (context: StreamHandlerContext) => {
       const { remoteId, stream } = StreamHandler.getRemotePeerInfo(context);
-      // Ignore nudges from blocked peers
-      if (this.database.isBlocked(remoteId)) return;
-
-      const hasDirectChat = this.database.getChatByPeerId(remoteId) !== null;
-      const knownUser = this.database.getUserByPeerId(remoteId) !== null;
-      if (!hasDirectChat && !knownUser) {
-        console.log(`[NUDGE] Ignoring nudge from unknown peer ${remoteId.slice(-8)}`);
-        return;
-      }
-
-      const nudgePayload = await this.readBucketNudgePayload(stream);
-      await stream.close();
-
-
-      if (nudgePayload?.kind === 'DIRECT_SESSION_RESET') {
-        const directChat = this.database.getChatByPeerId(remoteId);
-        if (!directChat) {
-          console.log(`[NUDGE] Received direct-session-reset from ${remoteId.slice(-8)} but no direct chat exists, ignoring`);
+      try {
+        if (this.database.isBlocked(remoteId)) return;
+        if (!this.isKnownNudgeSender(remoteId)) {
+          console.log(`[NUDGE] Ignoring nudge from unknown peer ${remoteId.slice(-8)}`);
           return;
         }
-        this.keyExchange.deletePendingAcceptanceByPeerId(remoteId);
-        this.sessionManager.removePendingKeyExchange(remoteId);
-        this.sessionManager.clearSession(remoteId);
-        console.log(`[NUDGE] Applied direct-session-reset from ${remoteId.slice(-8)} (chatId=${directChat.id})`);
-        return;
-      }
 
-      if (nudgePayload?.kind === 'GROUP_REKEY_REFETCH') {
-        const groupChat = this.database.getChatByGroupId(nudgePayload.groupId);
-        const directChat = this.database.getChatByPeerId(remoteId);
-        if (!groupChat) {
-          if (directChat) {
-            console.log(
-              `[NUDGE] Received group-refetch nudge from ${remoteId.slice(-8)} for unknown group=${nudgePayload.groupId.slice(0, 8)}, triggering direct offline check for chat ${directChat.id}`,
-            );
-            this.scheduleNudgeOfflineCheck(remoteId, directChat.id);
-            return;
-          }
-          console.log(
-            `[NUDGE] Received group-refetch nudge from ${remoteId.slice(-8)} for unknown group=${nudgePayload.groupId.slice(0, 8)}, ignoring`,
-          );
-          return;
+        const nudgePayload = await this.readBucketNudgePayload(stream);
+        console.log("MARINPARIN nudgepayloag", nudgePayload)
+        await this.routeBucketNudge(remoteId, nudgePayload);
+      } catch (error: unknown) {
+        generalErrorHandler(error, `[NUDGE] Failed to process nudge from ${remoteId.slice(-8)}`);
+      } finally {
+        try {
+          await stream.close();
+        } catch {
+          // Best-effort close.
         }
-        const isParticipant = this.database.getChatParticipants(groupChat.id).some((p) => p.peer_id === remoteId);
-        const hasPendingInvite = this.database.getPendingAcksForGroup(nudgePayload.groupId).some(
-          (ack) => ack.message_type === 'GROUP_INVITE' && ack.target_peer_id === remoteId,
-        );
-        if (!isParticipant && !hasPendingInvite) {
-          console.log(
-            `[NUDGE] Received group-refetch nudge from ${remoteId.slice(-8)} for group=${nudgePayload.groupId.slice(0, 8)} but sender is neither participant nor pending_invitee, ignoring`,
-          );
-          return;
-        }
-        if (directChat) {
-          console.log(
-            `[NUDGE] Received group-refetch nudge from ${remoteId.slice(-8)} for group=${nudgePayload.groupId.slice(0, 8)}, scheduling direct offline check for chat ${directChat.id}`,
-          );
-          this.scheduleNudgeOfflineCheck(remoteId, directChat.id);
-        }
-        console.log(
-          `[NUDGE] Received group-refetch nudge from ${remoteId.slice(-8)}, scheduling group check for chat ${groupChat.id}`,
-        );
-        this.scheduleGroupNudgeOfflineCheck(remoteId, groupChat.id, nudgePayload.groupId);
-        return;
       }
-      console.log(`[NUDGE] Ignoring non-group nudge from ${remoteId.slice(-8)}`);
     }, {
       runOnLimitedConnection: true,
     });
@@ -424,6 +380,89 @@ export class MessageHandler {
     });
   }
 
+  private isKnownNudgeSender(remoteId: string): boolean {
+    const hasDirectChat = this.database.getChatByPeerId(remoteId) !== null;
+    const knownUser = this.database.getUserByPeerId(remoteId) !== null;
+    return hasDirectChat || knownUser;
+  }
+
+  private async routeBucketNudge(remoteId: string, nudgePayload: BucketNudgePayload | null): Promise<void> {
+    if (!nudgePayload) {
+      console.log(`[NUDGE] Ignoring non-group nudge from ${remoteId.slice(-8)}`);
+      return;
+    }
+
+    if (nudgePayload.kind === 'DIRECT_SESSION_RESET') {
+      this.handleDirectSessionResetNudge(remoteId);
+      return;
+    }
+
+    if (nudgePayload.kind === 'GROUP_REKEY_REFETCH') {
+      this.handleGroupRefetchNudge(remoteId, nudgePayload.groupId);
+      return;
+    }
+  }
+
+  private handleDirectSessionResetNudge(remoteId: string): void {
+    const directChat = this.database.getChatByPeerId(remoteId);
+    if (!directChat) {
+      console.log(`[NUDGE] Received direct-session-reset from ${remoteId.slice(-8)} but no direct chat exists, ignoring`);
+      return;
+    }
+
+    this.keyExchange.deletePendingAcceptanceByPeerId(remoteId);
+    this.sessionManager.removePendingKeyExchange(remoteId);
+    this.sessionManager.clearSession(remoteId);
+    console.log(`[NUDGE] Applied direct-session-reset from ${remoteId.slice(-8)} (chatId=${directChat.id})`);
+  }
+
+  private handleGroupRefetchNudge(remoteId: string, groupId: string): void {
+    const groupChat = this.database.getChatByGroupId(groupId);
+    const directChat = this.database.getChatByPeerId(remoteId);
+
+    if (!groupChat) {
+      if (directChat) {
+        console.log(
+          `[NUDGE] Received group-refetch nudge from ${remoteId.slice(-8)} for unknown group=${groupId.slice(0, 8)}, triggering direct offline check for chat ${directChat.id}`,
+        );
+        this.scheduleNudgeOfflineCheck(remoteId, directChat.id);
+        return;
+      }
+
+      console.log(
+        `[NUDGE] Received group-refetch nudge from ${remoteId.slice(-8)} for unknown group=${groupId.slice(0, 8)}, ignoring`,
+      );
+      return;
+    }
+
+    if (!this.isGroupRefetchNudgeSenderEligible(remoteId, groupChat.id, groupId)) {
+      console.log(
+        `[NUDGE] Received group-refetch nudge from ${remoteId.slice(-8)} for group=${groupId.slice(0, 8)} but sender is neither participant nor pending_invitee, ignoring`,
+      );
+      return;
+    }
+
+    if (directChat) {
+      console.log(
+        `[NUDGE] Received group-refetch nudge from ${remoteId.slice(-8)} for group=${groupId.slice(0, 8)}, scheduling direct offline check for chat ${directChat.id}`,
+      );
+      this.scheduleNudgeOfflineCheck(remoteId, directChat.id);
+    }
+
+    console.log(
+      `[NUDGE] Received group-refetch nudge from ${remoteId.slice(-8)}, scheduling group check for chat ${groupChat.id}`,
+    );
+    this.scheduleGroupNudgeOfflineCheck(remoteId, groupChat.id, groupId);
+  }
+
+  private isGroupRefetchNudgeSenderEligible(remoteId: string, groupChatId: number, groupId: string): boolean {
+    const isParticipant = this.database.getChatParticipants(groupChatId).some((p) => p.peer_id === remoteId);
+    const hasPendingInvite = this.database.getPendingAcksForGroup(groupId).some(
+      (ack) => ack.message_type === 'GROUP_INVITE' && ack.target_peer_id === remoteId,
+    );
+    return isParticipant || hasPendingInvite;
+  }
+
   private scheduleNudgeOfflineCheck(remoteId: string, chatId: number): void {
     const existingTimer = this.nudgeFetchTimers.get(remoteId);
     if (existingTimer) {
@@ -457,13 +496,13 @@ export class MessageHandler {
     try {
       const beforeTimestamp = this.database.getOfflineLastReadTimestampByPeerId(remoteId);
       console.log(
-        `[NUDGE][CHECK][START] peer=${remoteId.slice(-8)} chatId=${chatId} isRetry=${isRetry} allowRetry=${allowRetry} beforeTs=${beforeTimestamp}`,
+        `MARINPARIN [NUDGE][CHECK][START] peer=${remoteId.slice(-8)} chatId=${chatId} isRetry=${isRetry} allowRetry=${allowRetry} beforeTs=${beforeTimestamp}`,
       );
       const { checkedChatIds } = await this.checkOfflineMessages([chatId]);
       const afterTimestamp = this.database.getOfflineLastReadTimestampByPeerId(remoteId);
       const hasNewData = afterTimestamp > beforeTimestamp;
       console.log(
-        `[NUDGE][CHECK][DONE] peer=${remoteId.slice(-8)} chatId=${chatId} isRetry=${isRetry} checkedChats=${checkedChatIds.length} beforeTs=${beforeTimestamp} afterTs=${afterTimestamp} hasNewData=${hasNewData}`,
+        `MARINPARIN [NUDGE][CHECK][DONE] peer=${remoteId.slice(-8)} chatId=${chatId} isRetry=${isRetry} checkedChats=${checkedChatIds.length} beforeTs=${beforeTimestamp} afterTs=${afterTimestamp} hasNewData=${hasNewData}`,
       );
 
       if (checkedChatIds.length > 0 && hasNewData) {
@@ -492,14 +531,14 @@ export class MessageHandler {
   ): Promise<void> {
     try {
       console.log(
-        `[NUDGE][GROUP-CHECK][START] peer=${remoteId.slice(-8)} chatId=${chatId} group=${groupId.slice(0, 8)} ` +
+        `MARINPARIN [NUDGE][GROUP-CHECK][START] peer=${remoteId.slice(-8)} chatId=${chatId} group=${groupId.slice(0, 8)} ` +
         `isRetry=${isRetry} allowRetry=${allowRetry}`,
       );
       const { checkedChatIds, unreadFromChats } = await this.checkGroupOfflineMessages([chatId], { mode: 'nudge' });
       const unread = unreadFromChats.get(chatId) ?? 0;
       const hasNewData = unread > 0;
       console.log(
-        `[NUDGE][GROUP-CHECK][DONE] peer=${remoteId.slice(-8)} chatId=${chatId} group=${groupId.slice(0, 8)} ` +
+        `MARINPARIN [NUDGE][GROUP-CHECK][DONE] peer=${remoteId.slice(-8)} chatId=${chatId} group=${groupId.slice(0, 8)} ` +
         `isRetry=${isRetry} checkedChats=${checkedChatIds.length} unread=${unread} hasNewData=${hasNewData}`,
       );
 
@@ -764,7 +803,7 @@ export class MessageHandler {
 
   private scheduleImmediateGroupAckRepublish(): void {
     if (this.groupAckImmediateRepublishTimer) return;
-    
+
     this.groupAckImmediateRepublishTimer = setTimeout(() => {
       this.groupAckImmediateRepublishTimer = null;
       void this.flushImmediateGroupAckRepublishQueue();
@@ -901,7 +940,7 @@ export class MessageHandler {
       keyExchangeOccurred = true;
     } else {
       targetPeerId = peerIdFromString(user.peer_id);
-      
+
       // Check if we need to upgrade from out-of-band trust to full key exchange
       const chat = this.database.getChatByPeerId(targetPeerId.toString());
       if (chat?.trusted_out_of_band) {
@@ -1086,7 +1125,7 @@ export class MessageHandler {
 
           const bucketSecret = this.database.getOfflineBucketSecretByPeerId(user.peer_id);
           if (!bucketSecret) {
-            const error = !!this.database.getChatByPeerId(user.peer_id) 
+            const error = !!this.database.getChatByPeerId(user.peer_id)
               ? 'Offline fallback unavailable right now' : 'Direct channel not established yet'
             throw new Error(error);
           }
@@ -1096,15 +1135,17 @@ export class MessageHandler {
           console.log(`Peer likely offline; stored message for ${targetUsernameOrPeerId} as offline.`);
           return { success: true, messageSentStatus: 'offline', message: strippedMessage, error: null };
         } else if (errorText.includes("username not found")) {
-          return { success: false, messageSentStatus: null, error: `User ${targetUsernameOrPeerId} not found`};
+          return { success: false, messageSentStatus: null, error: `User ${targetUsernameOrPeerId} not found` };
         }
 
         console.log(`Offline message fallback failed`);
         throw err;
       } catch (offlineErr: unknown) {
         generalErrorHandler(offlineErr, `Failed to send message`);
-        return { success: false, messageSentStatus: null, error: 'Failed to send message: ' + (
-          offlineErr instanceof Error ? offlineErr.message : String(offlineErr)) };
+        return {
+          success: false, messageSentStatus: null, error: 'Failed to send message: ' + (
+            offlineErr instanceof Error ? offlineErr.message : String(offlineErr))
+        };
       }
     }
   }
@@ -1205,13 +1246,7 @@ export class MessageHandler {
 
     const refreshed = this.database.getChatByGroupId(chat.group_id);
     if (refreshed?.group_status === 'active' && (refreshed.key_version ?? 0) > 0) {
-      await this.groupMessaging.subscribeToGroupTopic(chat.group_id).catch((error: unknown) => {
-        console.warn(
-          `[GROUP-MSG] Failed to subscribe after kick processing for ${chat.group_id}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      });
+      this.groupMessaging.subscribeToGroupTopic(chat.group_id)
     }
   }
 
@@ -1422,11 +1457,11 @@ export class MessageHandler {
       messageSentStatus
     });
 
-    return {chatId: chat.id, messageId, content: message, timestamp: timestamp.getTime(), messageType: 'text'};
+    return { chatId: chat.id, messageId, content: message, timestamp: timestamp.getTime(), messageType: 'text' };
   }
 
   // Check offline messages (direct)
-  private async performOfflineMessageCheck(chatIds?: number[]): Promise<{checkedChatIds: number[], unreadFromChats: Map<number, number>}> {
+  private async performOfflineMessageCheck(chatIds?: number[]): Promise<{ checkedChatIds: number[], unreadFromChats: Map<number, number> }> {
     const runId = ++this.offlineCheckRunSeq;
     console.log(chatIds
       ? `Checking for offline messages in ${chatIds.length} chat${chatIds.length > 1 ? 's' : ''}...`
@@ -1442,7 +1477,7 @@ export class MessageHandler {
     if (bucketInfoList.length === 0) {
       console.log('No chats found for offline message check');
       console.log(`[OFFLINE][CHECK][DONE] run=${runId} checkedChats=0 fetchedMessages=0 processedMessages=0`);
-      return {checkedChatIds: [], unreadFromChats: new Map()};
+      return { checkedChatIds: [], unreadFromChats: new Map() };
     }
 
     const readBuckets: Array<{ chatId?: number; key: string; peerPubKey: string; peerId: string; lastReadTimestamp: number }> = [];
@@ -1472,9 +1507,9 @@ export class MessageHandler {
         lastReadTimestamp: info.offline_last_read_timestamp,
         ...(chatId !== undefined && { chatId })
       };
-      
+
       readBuckets.push(bucket);
-      
+
       if (chatId !== undefined) {
         checkedChats.push(chatId);
       }
@@ -1491,10 +1526,11 @@ export class MessageHandler {
       console.log(
         `[OFFLINE][CHECK][DONE] run=${runId} checkedChats=${checkedChats.length} fetchedMessages=0 processedMessages=0`,
       );
-      return {checkedChatIds: checkedChats, unreadFromChats: new Map()};
+      return { checkedChatIds: checkedChats, unreadFromChats: new Map() };
     }
 
     console.log(`Found ${store.messages.length} offline direct message(s)`);
+    console.log("found", store.messages.forEach(m => m.content))
 
     // extract unique messages per bucket
     const byBucket = new Map<string, number>();
@@ -1507,17 +1543,6 @@ export class MessageHandler {
         uniquePerBucket.set(bucket, new Set());
       }
       uniquePerBucket.get(bucket)!.add(msg.id);
-    }
-
-    // TODO remove duplicates logging after testing
-    for (const [bucket, count] of byBucket.entries()) {
-      const uniqueCount = uniquePerBucket.get(bucket)?.size ?? 0;
-      const duplicates = count - uniqueCount;
-      const bucketInfo = readBuckets.find(b => b.key === bucket);
-      console.log(
-        `[OFFLINE][PROCESS] run=${runId} bucket=${bucket.slice(0, 48)}... fetched=${count} uniqueIds=${uniqueCount} duplicates=${Math.max(0, duplicates)} ` +
-        `lastReadTs=${bucketInfo?.lastReadTimestamp ?? 'n/a'} peer=${bucketInfo?.peerId ?? 'n/a'}`
-      );
     }
 
     // Track max timestamp per peer to update after processing
@@ -1627,7 +1652,7 @@ export class MessageHandler {
           );
           continue;
         }
-        
+
         // 'not_group': fall through to regular message handling
         // eslint-disable-next-line no-await-in-loop
         const msgChatId = await this.saveOfflineMessageToDatabase(msg, senderInfo, decryptedContent);
@@ -1662,15 +1687,15 @@ export class MessageHandler {
       `[OFFLINE][CHECK][DONE] run=${runId} checkedChats=${checkedChats.length} fetchedMessages=${store.messages.length} processedMessages=${processedCount} updatedPeers=${maxTimestampPerPeer.size}`,
     );
 
-    return {checkedChatIds: checkedChats, unreadFromChats: unreadFromChats};
+    return { checkedChatIds: checkedChats, unreadFromChats: unreadFromChats };
   }
 
-  async checkOfflineMessages(chatIds?: number[]): Promise<{checkedChatIds: number[], unreadFromChats: Map<number, number>}> {
+  async checkOfflineMessages(chatIds?: number[]): Promise<{ checkedChatIds: number[], unreadFromChats: Map<number, number> }> {
     try {
       return await this.performOfflineMessageCheck(chatIds);
     } catch (error: unknown) {
       generalErrorHandler(error);
-      return {checkedChatIds: [], unreadFromChats: new Map()};
+      return { checkedChatIds: [], unreadFromChats: new Map() };
     }
   }
 
@@ -1898,7 +1923,7 @@ export class MessageHandler {
     // TODO also remove after testing
     const groupMeta = this.describeParsedGroupMessage(parsed as Record<string, unknown>);
     console.log(
-      `[GROUP][TRACE][ROUTE][IN] from=${senderInfo.username} ${groupMeta}`,
+      `MARINPARIN [GROUP][TRACE][ROUTE][IN] from=${senderInfo.username} ${groupMeta}`,
     );
 
     const userIdentity = this.usernameRegistry.getUserIdentity();
@@ -1937,21 +1962,16 @@ export class MessageHandler {
         }
         case GroupMessageType.GROUP_INVITE_RESPONSE_ACK: {
           const responder = new GroupResponder(deps);
-          await responder.handleInviteResponseAck(parsed as any);
+          responder.handleInviteResponseAck(parsed as any);
           console.log(`[GROUP] Processed GROUP_INVITE_RESPONSE_ACK from ${senderInfo.username}`);
           break;
         }
         case GroupMessageType.GROUP_WELCOME: {
           const responder = new GroupResponder(deps);
           await responder.handleGroupWelcome(parsed as any);
+
           const groupId = (parsed as { groupId: string }).groupId;
-          await this.groupMessaging.subscribeToGroupTopic(groupId).catch((error: unknown) => {
-            console.warn(
-              `[GROUP-MSG] Failed to subscribe after welcome for ${groupId}: ${
-                error instanceof Error ? error.message : String(error)
-              }`,
-            );
-          });
+          this.groupMessaging.subscribeToGroupTopic(groupId)
           console.log(`[GROUP] Processed GROUP_WELCOME from ${senderInfo.username}`);
           break;
         }
@@ -1980,13 +2000,7 @@ export class MessageHandler {
           ) {
             this.groupMessaging.deactivateGroup(groupId);
           } else {
-            await this.groupMessaging.subscribeToGroupTopic(groupId).catch((error: unknown) => {
-              console.warn(
-                `[GROUP-MSG] Failed to subscribe after state update for ${groupId}: ${
-                  error instanceof Error ? error.message : String(error)
-                }`,
-              );
-            });
+            this.groupMessaging.subscribeToGroupTopic(groupId)
           }
           console.log(`[GROUP] Processed GROUP_STATE_UPDATE from ${senderInfo.username}`);
           break;
@@ -2019,13 +2033,7 @@ export class MessageHandler {
           const groupId = (parsed as { groupId: string }).groupId;
           const chat = this.database.getChatByGroupId(groupId);
           if (chat?.group_status === 'active' && (chat.key_version ?? 0) > 0) {
-            await this.groupMessaging.subscribeToGroupTopic(groupId).catch((error: unknown) => {
-              console.warn(
-                `[GROUP-MSG] Failed to subscribe after activation for ${groupId}: ${
-                  error instanceof Error ? error.message : String(error)
-                }`,
-              );
-            });
+            this.groupMessaging.subscribeToGroupTopic(groupId)
           }
           console.log(`[GROUP] Processed GROUP_INVITE_RESPONSE from ${senderInfo.username}`);
           break;
@@ -2036,13 +2044,7 @@ export class MessageHandler {
           const groupId = (parsed as { groupId: string }).groupId;
           const chat = this.database.getChatByGroupId(groupId);
           if (chat?.group_status === 'active' && (chat.key_version ?? 0) > 0) {
-            await this.groupMessaging.subscribeToGroupTopic(groupId).catch((error: unknown) => {
-              console.warn(
-                `[GROUP-MSG] Failed to subscribe after leave processing for ${groupId}: ${
-                  error instanceof Error ? error.message : String(error)
-                }`,
-              );
-            });
+            this.groupMessaging.subscribeToGroupTopic(groupId)
           }
           console.log(`[GROUP] Processed GROUP_LEAVE_REQUEST from ${senderInfo.username}`);
           break;

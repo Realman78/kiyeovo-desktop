@@ -414,6 +414,38 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
     }
   };
 
+  const handleCheckMissedDirectMessages = async () => {
+    if (!chatId) return;
+    setDropdownOpen(false);
+    dispatch(setOfflineFetchStatus({ chatId, isFetching: true }));
+
+    try {
+      const result = await window.kiyeovoAPI.checkOfflineMessagesForChat(chatId);
+      if (!result.success) {
+        toast.error(result.error || 'Failed to check missed messages');
+        dispatch(markOfflineFetchFailed(chatId));
+        return;
+      }
+
+      dispatch(markOfflineFetched(chatId));
+
+      const unreadMap = result.unreadFromChats instanceof Map
+        ? result.unreadFromChats
+        : new Map<number, number>();
+      const unread = unreadMap.get(chatId) ?? 0;
+
+      if (unread > 0) {
+        toast.success(`Fetched ${unread} missed message${unread === 1 ? '' : 's'}`);
+      } else {
+        toast.info('No missed messages found');
+      }
+    } catch (error) {
+      console.error('Failed to check missed messages:', error);
+      toast.error('Failed to check missed messages');
+      dispatch(markOfflineFetchFailed(chatId));
+    }
+  };
+
   const handleRequestGroupUpdate = async () => {
     if (!chatId || isRequestingGroupUpdate) return;
     setDropdownOpen(false);
@@ -828,6 +860,14 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
             >
               {activeChat?.muted ? 'Enable notifications' : 'Disable notifications'}
             </DropdownMenuItem>
+            {activeChat?.status === 'active' && (
+              <DropdownMenuItem
+                icon={<RefreshCw className="w-4 h-4" />}
+                onClick={handleCheckMissedDirectMessages}
+              >
+                Check missed messages
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem
               icon={isBlocked ? <UserCheck className="w-4 h-4" /> : <Ban className="w-4 h-4" />}
               onClick={handleToggleBlock}

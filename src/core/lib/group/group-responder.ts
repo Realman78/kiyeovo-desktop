@@ -97,28 +97,12 @@ export class GroupResponder {
         console.log(
           `[GROUP][TRACE][INVITE][ARCHIVED_REINVITE] group=${invite.groupId} inviteId=${invite.inviteId} chatId=${existing.id} currentStatus=${existing.group_status}`,
         );
-        try {
-          await this.sendInviteDeliveredAck(invite);
-        } catch (error: unknown) {
-          console.warn(
-            `[GROUP] Failed to send reactivated invite delivery ACK for ${invite.groupId}: ${
-              error instanceof Error ? error.message : String(error)
-            }`
-          );
-        }
+        await this.trySendInviteDeliveredAck(invite, 'reactivated');
         return;
       }
 
       console.log(`[GROUP][TRACE][INVITE][DUPLICATE] group=${invite.groupId} inviteId=${invite.inviteId} chatId=${existing.id}`);
-      try {
-        await this.sendInviteDeliveredAck(invite);
-      } catch (error: unknown) {
-        console.warn(
-          `[GROUP] Failed to send duplicate invite delivery ACK for ${invite.groupId}: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
-      }
+      await this.trySendInviteDeliveredAck(invite, 'duplicate');
       return;
     }
 
@@ -150,14 +134,17 @@ export class GroupResponder {
     // Create notification for UI
     this.createInviteNotificationIfMissing(invite);
 
+    await this.trySendInviteDeliveredAck(invite, 'new');
+  }
+
+  private async trySendInviteDeliveredAck(
+    invite: GroupInvite,
+    context: 'new' | 'reactivated' | 'duplicate',
+  ): Promise<void> {
     try {
       await this.sendInviteDeliveredAck(invite);
     } catch (error: unknown) {
-      console.warn(
-        `[GROUP] Failed to send invite delivery ACK for ${invite.groupId}: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
+      console.warn(`[GROUP] Failed to send invite delivery ACK (${context}) for ${invite.groupId}`, error);
     }
   }
 
@@ -351,7 +338,7 @@ export class GroupResponder {
     );
   }
 
-  async handleInviteResponseAck(ack: GroupInviteResponseAck): Promise<void> {
+  handleInviteResponseAck(ack: GroupInviteResponseAck): void {
     const { database } = this.deps;
     console.log(
       `[GROUP][TRACE][RESP_ACK][IN] group=${ack.groupId} inviteId=${ack.inviteId} ackedMsgId=${ack.ackedMessageId} ackId=${ack.ackId}`,
