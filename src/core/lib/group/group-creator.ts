@@ -406,9 +406,26 @@ export class GroupCreator {
       return;
     }
 
-    if (response.inviteId !== storedInvite.inviteId) {
+    const timestampCheck = this.validateControlTimestamp(response.timestamp);
+    if (!timestampCheck.ok) {
       throw new Error(
-        `Invite ID mismatch: incoming=${response.inviteId} pending=${storedInvite.inviteId}`,
+        `Invalid invite response timestamp (${timestampCheck.reason}) for group=${response.groupId} responder=${response.responderPeerId}`,
+      );
+    }
+
+    if (response.inviteId !== storedInvite.inviteId) {
+      const deliveredInviteExists = database.isInviteDeliveryAckReceived(
+        response.groupId,
+        response.responderPeerId,
+        response.inviteId,
+      );
+      if (!deliveredInviteExists) {
+        throw new Error(
+          `Invite ID mismatch without delivery ACK: incoming=${response.inviteId} pending=${storedInvite.inviteId}`,
+        );
+      }
+      console.log(
+        `[GROUP][TRACE][RESP][INVITE_ID_FALLBACK] group=${response.groupId} from=${response.responderPeerId.slice(-8)} incomingInviteId=${response.inviteId} pendingInviteId=${storedInvite.inviteId} reason=delivered_ack_match`,
       );
     }
 
