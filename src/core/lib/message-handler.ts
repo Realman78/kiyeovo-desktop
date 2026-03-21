@@ -1384,6 +1384,39 @@ export class MessageHandler {
       throw new Error(`Cannot request group update while group status is ${status}`);
     }
 
+    const previousKeyVersion = chat.key_version ?? 0;
+    const creatorPeerId = chat.group_creator_peer_id;
+    if (!creatorPeerId) {
+      throw new Error('Group creator is unknown');
+    }
+
+    // Prefetch creator direct bucket first so any already-pending control updates are applied.
+    const creatorDirectChat = this.database.getChatByPeerId(creatorPeerId);
+    if (creatorDirectChat) {
+      console.log(
+        `[GROUP][RESYNC_REQ][PREFETCH][START] group=${chat.group_id} creator=${creatorPeerId.slice(-8)} ` +
+        `directChatId=${creatorDirectChat.id} prevKeyVersion=${previousKeyVersion}`,
+      );
+      await this.checkOfflineMessages([creatorDirectChat.id]);
+      const refreshed = this.database.getChatByGroupId(chat.group_id);
+      const refreshedKeyVersion = refreshed?.key_version ?? previousKeyVersion;
+      if (refreshedKeyVersion > previousKeyVersion) {
+        console.log(
+          `[GROUP][RESYNC_REQ][PREFETCH][SKIP_SEND] group=${chat.group_id} creator=${creatorPeerId.slice(-8)} ` +
+          `prevKeyVersion=${previousKeyVersion} refreshedKeyVersion=${refreshedKeyVersion}`,
+        );
+        return;
+      }
+      console.log(
+        `[GROUP][RESYNC_REQ][PREFETCH][DONE] group=${chat.group_id} creator=${creatorPeerId.slice(-8)} ` +
+        `prevKeyVersion=${previousKeyVersion} refreshedKeyVersion=${refreshedKeyVersion}`,
+      );
+    } else {
+      console.log(
+        `[GROUP][RESYNC_REQ][PREFETCH][SKIP] group=${chat.group_id} creator=${creatorPeerId.slice(-8)} reason=no_direct_chat`,
+      );
+    }
+
     const now = Date.now();
     this.pruneGroupStateResyncRequestCooldowns(now);
     const lastRequestAt = this.groupStateResyncRequestCooldowns.get(chat.group_id) ?? 0;
