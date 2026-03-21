@@ -286,9 +286,28 @@ export class GroupMessaging {
 
     let warning = published ? null : 'No online group peers subscribed; queued for offline delivery.';
     let offlineBackupRetry: { chatId: number; messageId: string } | null = null;
+    let offlineStoreMs = 0;
+    let offlineStoreStartedAt = 0;
 
     try {
+      offlineStoreStartedAt = Date.now();
+      console.log(
+        `[GROUP-MSG][SEND][OFFLINE_BACKUP][START] group=${groupId.slice(0, 8)} ` +
+        `msgId=${signedMessage.messageId} keyVersion=${ctx.keyVersion}`,
+      );
       await this.deps.groupOfflineManager.storeGroupMessage(signedMessage);
+      offlineStoreMs = Date.now() - offlineStoreStartedAt;
+      if (offlineStoreMs > 5000) {
+        console.warn(
+          `[GROUP-MSG][SEND][OFFLINE_BACKUP][SLOW] group=${groupId.slice(0, 8)} ` +
+          `msgId=${signedMessage.messageId} offlineStoreMs=${offlineStoreMs}`,
+        );
+      } else {
+        console.log(
+          `[GROUP-MSG][SEND][OFFLINE_BACKUP][DONE] group=${groupId.slice(0, 8)} ` +
+          `msgId=${signedMessage.messageId} offlineStoreMs=${offlineStoreMs}`,
+        );
+      }
       this.pendingOfflineBackups.delete(signedMessage.messageId);
 
       if (!published && options?.rekeyRetryHint) {
@@ -298,6 +317,10 @@ export class GroupMessaging {
       }
     } catch (error: unknown) {
       const errorText = error instanceof Error ? error.message : String(error);
+      if (offlineStoreMs === 0 && offlineStoreStartedAt > 0) {
+        // Track elapsed time to failure even if store threw before successful completion.
+        offlineStoreMs = Date.now() - offlineStoreStartedAt;
+      }
       if (!published) {
         throw new Error(`Failed to deliver group message: no online peers and offline backup failed: ${errorText}`);
       }
@@ -348,7 +371,10 @@ export class GroupMessaging {
       offlineBackupRetry,
     };
 
-    console.log(`[GROUP-MSG][SEND] ${groupId} done publishMs=${publishMs} ${published ? 'online' : 'offline'}`);
+    console.log(
+      `[GROUP-MSG][SEND] ${groupId} done publishMs=${publishMs} offlineStoreMs=${offlineStoreMs} ` +
+      `${published ? 'online' : 'offline'}`,
+    );
 
     return response;
   }

@@ -98,89 +98,123 @@ export class GroupOfflineManager {
   async storeGroupMessage(message: GroupContentMessage): Promise<void> {
     const ownPubKeyBase64url = toBase64Url(this.deps.userIdentity.signingPublicKey);
     const bucketKey = `${this.groupOfflineBucketPrefix}/${message.groupId}/${message.keyVersion}/${ownPubKeyBase64url}`;
-    console.log("storing group message", message, "to bucket", bucketKey);
+    const queuedAt = Date.now();
+    const bucketTag = bucketKey.slice(-12);
+    console.log(
+      `[GROUP-OFFLINE][STORE][ENQUEUE] group=${message.groupId.slice(0, 8)} keyVersion=${message.keyVersion} ` +
+      `msgId=${message.messageId} seq=${message.seq} bucket=*${bucketTag}`,
+    );
 
     await this.withBucketMutationLock(bucketKey, async () => {
-      const local = this.deps.database.getGroupOfflineSentMessages(bucketKey);
-      const {
-        messages: normalizedExistingMessages,
-        trimmedCount: localTrimmedCount,
-      } = this.normalizeStoreMessages(
-        this.filterLiveMessages(local.messages),
-        bucketKey,
-        'Local mirror overflow',
-      );
-
-      const offlineMessageId = message.messageId;
-      if (normalizedExistingMessages.some(m => m.messageId === offlineMessageId)) {
-        if (localTrimmedCount > 0) {
-          const { signedStore, version } = this.buildSignedStore(
-            normalizedExistingMessages,
-            bucketKey,
-            local.version,
-            message.seq,
-          );
-          await this.putStore(bucketKey, signedStore);
-          this.deps.database.saveGroupOfflineSentMessages(bucketKey, normalizedExistingMessages, version);
-        }
-        return;
+      const lockAcquiredAt = Date.now();
+      const lockWaitMs = lockAcquiredAt - queuedAt;
+      if (lockWaitMs > 2000) {
+        console.warn(
+          `[GROUP-OFFLINE][STORE][LOCK_WAIT_SLOW] group=${message.groupId.slice(0, 8)} ` +
+          `msgId=${message.messageId} bucket=*${bucketTag} lockWaitMs=${lockWaitMs}`,
+        );
+      } else {
+        console.log(
+          `[GROUP-OFFLINE][STORE][LOCK_ACQUIRED] group=${message.groupId.slice(0, 8)} ` +
+          `msgId=${message.messageId} bucket=*${bucketTag} lockWaitMs=${lockWaitMs}`,
+        );
       }
 
-      const { messages: nextMessages } = this.normalizeStoreMessages(
-        [...normalizedExistingMessages, message],
-        bucketKey,
-        'Bucket overflow',
-      );
-      const { signedStore, version } = this.buildSignedStore(
-        nextMessages,
-        bucketKey,
-        local.version,
-        message.seq,
-      );
-
       try {
-        await this.putStore(bucketKey, signedStore);
-        this.deps.database.saveGroupOfflineSentMessages(bucketKey, nextMessages, version);
-        return;
-      } catch (firstError: unknown) {
-        // Oversized stores cannot be recovered via remote merge.
-        if (this.isStoreTooLargeError(firstError)) {
-          throw firstError;
+        const local = this.deps.database.getGroupOfflineSentMessages(bucketKey);
+        const {
+          messages: normalizedExistingMessages,
+          trimmedCount: localTrimmedCount,
+        } = this.normalizeStoreMessages(
+          this.filterLiveMessages(local.messages),
+          bucketKey,
+          'Local mirror overflow',
+        );
+
+        const offlineMessageId = message.messageId;
+        if (normalizedExistingMessages.some(m => m.messageId === offlineMessageId)) {
+          if (localTrimmedCount > 0) {
+            const { signedStore, version } = this.buildSignedStore(
+              normalizedExistingMessages,
+              bucketKey,
+              local.version,
+              message.seq,
+            );
+            await this.putStore(bucketKey, signedStore);
+            this.deps.database.saveGroupOfflineSentMessages(bucketKey, normalizedExistingMessages, version);
+          }
+          return;
         }
 
-        // Recovery path: local version may be stale (restart/cleanup race). Fetch once, merge, retry once.
-        const remote = await this.getLatestStore(bucketKey);
-        if (!remote) {
-          // No remote state discovered -> likely connectivity issue; preserve original error.
-          throw firstError;
-        }
-
-        const remoteMessages = this.filterLiveMessages(remote.messages);
-        const mergedById = new Map<string, GroupContentMessage>();
-
-        for (const msg of remoteMessages) {
-          mergedById.set(msg.messageId, msg);
-        }
-        for (const msg of normalizedExistingMessages) {
-          mergedById.set(msg.messageId, msg);
-        }
-        mergedById.set(offlineMessageId, message);
-
-        const { messages: mergedMessages } = this.normalizeStoreMessages(
-          Array.from(mergedById.values()),
+        const { messages: nextMessages } = this.normalizeStoreMessages(
+          [...normalizedExistingMessages, message],
           bucketKey,
           'Bucket overflow',
-          false,
         );
-        const { signedStore: mergedStore, version: mergedVersion } = this.buildSignedStore(
-          mergedMessages,
+        const { signedStore, version } = this.buildSignedStore(
+          nextMessages,
           bucketKey,
-          remote.version,
+          local.version,
           message.seq,
-          remote.highestSeq,
         );
-        await this.putStore(bucketKey, mergedStore);
-        this.deps.database.saveGroupOfflineSentMessages(bucketKey, mergedMessages, mergedVersion);
+
+        try {
+          await this.putStore(bucketKey, signedStore);
+          this.deps.database.saveGroupOfflineSentMessages(bucketKey, nextMessages, version);
+          return;
+        } catch (firstError: unknown) {
+          // Oversized stores cannot be recovered via remote merge.
+          if (this.isStoreTooLargeError(firstError)) {
+            throw firstError;
+          }
+
+          // Recovery path: local version may be stale (restart/cleanup race). Fetch once, merge, retry once.
+          const remote = await this.getLatestStore(bucketKey);
+          if (!remote) {
+            // No remote state discovered -> likely connectivity issue; preserve original error.
+            throw firstError;
+          }
+
+          const remoteMessages = this.filterLiveMessages(remote.messages);
+          const mergedById = new Map<string, GroupContentMessage>();
+
+          for (const msg of remoteMessages) {
+            mergedById.set(msg.messageId, msg);
+          }
+          for (const msg of normalizedExistingMessages) {
+            mergedById.set(msg.messageId, msg);
+          }
+          mergedById.set(offlineMessageId, message);
+
+          const { messages: mergedMessages } = this.normalizeStoreMessages(
+            Array.from(mergedById.values()),
+            bucketKey,
+            'Bucket overflow',
+            false,
+          );
+          const { signedStore: mergedStore, version: mergedVersion } = this.buildSignedStore(
+            mergedMessages,
+            bucketKey,
+            remote.version,
+            message.seq,
+            remote.highestSeq,
+          );
+          await this.putStore(bucketKey, mergedStore);
+          this.deps.database.saveGroupOfflineSentMessages(bucketKey, mergedMessages, mergedVersion);
+        }
+      } finally {
+        const lockHeldMs = Date.now() - lockAcquiredAt;
+        if (lockHeldMs > 5000) {
+          console.warn(
+            `[GROUP-OFFLINE][STORE][LOCK_HELD_SLOW] group=${message.groupId.slice(0, 8)} ` +
+            `msgId=${message.messageId} bucket=*${bucketTag} lockHeldMs=${lockHeldMs}`,
+          );
+        } else {
+          console.log(
+            `[GROUP-OFFLINE][STORE][DONE] group=${message.groupId.slice(0, 8)} ` +
+            `msgId=${message.messageId} bucket=*${bucketTag} lockHeldMs=${lockHeldMs}`,
+          );
+        }
       }
     });
   }
@@ -801,6 +835,8 @@ export class GroupOfflineManager {
   }
 
   private async putStore(bucketKey: string, store: GroupOfflineStore): Promise<void> {
+    const startedAt = Date.now();
+    const bucketTag = bucketKey.slice(-12);
     const key = new TextEncoder().encode(bucketKey);
     const payload = Buffer.from(JSON.stringify(store), 'utf8');
     const compressed = await gzipAsync(payload);
@@ -813,12 +849,33 @@ export class GroupOfflineManager {
 
     let successCount = 0;
     let eventCount = 0;
+    let queryErrorCount = 0;
+    let firstPeerResponseAt: number | null = null;
 
     for await (const event of this.deps.node.services.dht.put(key, compressed) as AsyncIterable<QueryEvent>) {
       eventCount++;
-      if (event.name === 'PEER_RESPONSE') successCount++;
+      if (event.name === 'PEER_RESPONSE') {
+        successCount++;
+        if (firstPeerResponseAt === null) {
+          firstPeerResponseAt = Date.now();
+        }
+      } else if (event.name === 'QUERY_ERROR') {
+        queryErrorCount++;
+      }
     }
-    console.log(`[GROUP-OFFLINE][TIMING][PUT] bucket=${bucketKey}`);
+    const totalPutMs = Date.now() - startedAt;
+    const firstPeerMs = firstPeerResponseAt === null ? -1 : firstPeerResponseAt - startedAt;
+    const tailAfterFirstSuccessMs = firstPeerResponseAt === null ? -1 : totalPutMs - firstPeerMs;
+    const timingMsg =
+      `[GROUP-OFFLINE][TIMING][PUT] bucket=*${bucketTag} storeVersion=${store.version} ` +
+      `events=${eventCount} peerResponses=${successCount} queryErrors=${queryErrorCount} ` +
+      `firstPeerMs=${firstPeerMs} tailAfterFirstSuccessMs=${tailAfterFirstSuccessMs} totalPutMs=${totalPutMs}`;
+
+    if (totalPutMs > 5000 || (firstPeerResponseAt !== null && tailAfterFirstSuccessMs > 2000)) {
+      console.warn(timingMsg);
+    } else {
+      console.log(timingMsg);
+    }
 
     if (successCount === 0) {
       throw new Error('Failed to store group offline message: no successful DHT peers');
