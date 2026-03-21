@@ -283,29 +283,79 @@ export class MessageHandler {
     void (async () => {
       const dialStartedAt = Date.now();
       try {
-        const targetPeerId = peerIdFromString(peerId);
-        console.log(
-          `[NUDGE][DIAL][START] attempt=${attemptId} peer=${peerId.slice(-8)} protocol=${this.bucketNudgeProtocol} ` +
-          `timeoutMs=${BUCKET_NUDGE_DIAL_TIMEOUT_MS}`,
-        );
-        const stream = await this.node.dialProtocol(targetPeerId, this.bucketNudgeProtocol, {
-          signal: AbortSignal.timeout(BUCKET_NUDGE_DIAL_TIMEOUT_MS),
-          runOnLimitedConnection: true,
-        });
-        const dialMs = Date.now() - dialStartedAt;
-        const postDialSnapshot = this.getNudgeConnectionSnapshot(peerId);
-        console.log(
-          `[NUDGE][DIAL][OK] attempt=${attemptId} peer=${peerId.slice(-8)} dialMs=${dialMs} ` +
-          `totalConnections=${postDialSnapshot.totalConnections} ` +
-          `peerConnections=${postDialSnapshot.peerConnectionCount} peerConnAddrs=${postDialSnapshot.peerConnectionAddrs}`,
-        );
+        let stream: Awaited<ReturnType<ChatNode['dialProtocol']>> | null = null;
+        let streamSource: 'reuse' | 'dial' = 'dial';
+        const peerConnections = this.node
+          .getConnections()
+          .filter((conn) => conn.remotePeer.toString() === peerId);
+
+        for (const conn of peerConnections) {
+          if (conn.status !== 'open') {
+            console.log(
+              `[NUDGE][STREAM][REUSE_SKIP] attempt=${attemptId} peer=${peerId.slice(-8)} ` +
+              `connId=${conn.id} status=${conn.status}`,
+            );
+            continue;
+          }
+
+          const openStartedAt = Date.now();
+          try {
+            console.log(
+              `[NUDGE][STREAM][REUSE_TRY] attempt=${attemptId} peer=${peerId.slice(-8)} ` +
+              `connId=${conn.id} remoteAddr=${conn.remoteAddr.toString()} protocol=${this.bucketNudgeProtocol}`,
+            );
+            stream = await conn.newStream(this.bucketNudgeProtocol, {
+              signal: AbortSignal.timeout(BUCKET_NUDGE_DIAL_TIMEOUT_MS),
+              runOnLimitedConnection: true,
+            });
+            streamSource = 'reuse';
+            console.log(
+              `[NUDGE][STREAM][REUSE_OK] attempt=${attemptId} peer=${peerId.slice(-8)} ` +
+              `connId=${conn.id} openMs=${Date.now() - openStartedAt}`,
+            );
+            break;
+          } catch (error: unknown) {
+            const reason = error instanceof Error ? error.message : String(error);
+            const errorName = error instanceof Error ? error.name : 'UnknownError';
+            console.log(
+              `[NUDGE][STREAM][REUSE_FAIL] attempt=${attemptId} peer=${peerId.slice(-8)} ` +
+              `connId=${conn.id} openMs=${Date.now() - openStartedAt} reason=${reason} errorName=${errorName}`,
+            );
+          }
+        }
+
+        if (stream === null) {
+          const targetPeerId = peerIdFromString(peerId);
+          console.log(
+            `[NUDGE][DIAL][START] attempt=${attemptId} peer=${peerId.slice(-8)} protocol=${this.bucketNudgeProtocol} ` +
+            `timeoutMs=${BUCKET_NUDGE_DIAL_TIMEOUT_MS}`,
+          );
+          stream = await this.node.dialProtocol(targetPeerId, this.bucketNudgeProtocol, {
+            signal: AbortSignal.timeout(BUCKET_NUDGE_DIAL_TIMEOUT_MS),
+            runOnLimitedConnection: true,
+          });
+          const dialMs = Date.now() - dialStartedAt;
+          const postDialSnapshot = this.getNudgeConnectionSnapshot(peerId);
+          console.log(
+            `[NUDGE][DIAL][OK] attempt=${attemptId} peer=${peerId.slice(-8)} dialMs=${dialMs} ` +
+            `totalConnections=${postDialSnapshot.totalConnections} ` +
+            `peerConnections=${postDialSnapshot.peerConnectionCount} peerConnAddrs=${postDialSnapshot.peerConnectionAddrs}`,
+          );
+        } else {
+          const postReuseSnapshot = this.getNudgeConnectionSnapshot(peerId);
+          console.log(
+            `[NUDGE][DIAL][SKIP_REUSE] attempt=${attemptId} peer=${peerId.slice(-8)} ` +
+            `totalConnections=${postReuseSnapshot.totalConnections} ` +
+            `peerConnections=${postReuseSnapshot.peerConnectionCount} peerConnAddrs=${postReuseSnapshot.peerConnectionAddrs}`,
+          );
+        }
 
         const payloadBytes = new TextEncoder().encode(JSON.stringify(payload));
         const sinkStartedAt = Date.now();
         await stream.sink([payloadBytes]);
         const sinkMs = Date.now() - sinkStartedAt;
         console.log(
-          `[NUDGE][WRITE][OK] attempt=${attemptId} peer=${peerId.slice(-8)} bytes=${payloadBytes.length} sinkMs=${sinkMs}`,
+          `[NUDGE][WRITE][OK] attempt=${attemptId} peer=${peerId.slice(-8)} source=${streamSource} bytes=${payloadBytes.length} sinkMs=${sinkMs}`,
         );
 
         const closeStartedAt = Date.now();
@@ -313,7 +363,7 @@ export class MessageHandler {
         const closeMs = Date.now() - closeStartedAt;
         const totalMs = Date.now() - dialStartedAt;
         console.log(
-          `[NUDGE][SEND][OK] attempt=${attemptId} peer=${peerId.slice(-8)} ${this.formatNudgeTarget(payload)} ` +
+          `[NUDGE][SEND][OK] attempt=${attemptId} peer=${peerId.slice(-8)} source=${streamSource} ${this.formatNudgeTarget(payload)} ` +
           `totalMs=${totalMs} closeMs=${closeMs}`,
         );
       } catch (error: unknown) {

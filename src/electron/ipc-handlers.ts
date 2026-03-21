@@ -1994,6 +1994,53 @@ function setupGroupHandlers(
       await responder.respondToInvite(groupId, accept);
       console.log(`[IPC] Group invite response sent: ${accept ? 'accepted' : 'rejected'} for ${groupId}`);
 
+      if (accept) {
+        const acceptedChat = p2pCore.database.getChatByGroupId(groupId);
+        const creatorPeerId = acceptedChat?.group_creator_peer_id ?? null;
+        const creatorDirectChat = creatorPeerId ? p2pCore.database.getChatByPeerId(creatorPeerId) : null;
+
+        if (creatorPeerId && creatorDirectChat) {
+          const runAwaitingActivationFetch = async (phase: 'immediate' | 'retry_15s' | 'retry_60s') => {
+            try {
+              const beforeStatus = p2pCore.database.getChatByGroupId(groupId)?.group_status ?? 'missing';
+              if (beforeStatus !== 'awaiting_activation') {
+                console.log(
+                  `[IPC][GROUP_ACCEPT][FETCH][SKIP] group=${groupId} phase=${phase} reason=status_${beforeStatus}`,
+                );
+                return;
+              }
+
+              console.log(
+                `[IPC][GROUP_ACCEPT][FETCH][START] group=${groupId} phase=${phase} directChatId=${creatorDirectChat.id} creator=${creatorPeerId.slice(-8)}`,
+              );
+              const { checkedChatIds } = await p2pCore.messageHandler.checkOfflineMessages([creatorDirectChat.id]);
+              const afterStatus = p2pCore.database.getChatByGroupId(groupId)?.group_status ?? 'missing';
+              console.log(
+                `[IPC][GROUP_ACCEPT][FETCH][DONE] group=${groupId} phase=${phase} checked=${checkedChatIds.length} status=${afterStatus}`,
+              );
+            } catch (error: unknown) {
+              console.warn(
+                `[IPC][GROUP_ACCEPT][FETCH][FAIL] group=${groupId} phase=${phase} error=${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+              );
+            }
+          };
+
+          void runAwaitingActivationFetch('immediate');
+          setTimeout(() => {
+            void runAwaitingActivationFetch('retry_15s');
+          }, 15000);
+          setTimeout(() => {
+            void runAwaitingActivationFetch('retry_60s');
+          }, 60000);
+        } else {
+          console.log(
+            `[IPC][GROUP_ACCEPT][FETCH][SKIP] group=${groupId} reason=no_creator_direct_chat`,
+          );
+        }
+      }
+
       return { success: true, error: null };
     } catch (error) {
       console.error('[IPC] Failed to respond to group invite:', error);
