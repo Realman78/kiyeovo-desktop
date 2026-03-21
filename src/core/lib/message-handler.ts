@@ -89,6 +89,7 @@ export class MessageHandler {
   private groupInfoSyncInFlight = new Map<string, Promise<void>>();
   private groupInfoSyncPending = new Set<string>();
   private offlineCheckRunSeq = 0;
+  private nudgeSendAttemptSeq = 0;
   private groupOfflineManager: GroupOfflineManager;
   private groupMessaging: GroupMessaging;
   private groupAckRepublisher: GroupAckRepublisher;
@@ -102,6 +103,29 @@ export class MessageHandler {
       return `group=${payload.groupId.slice(0, 8)}`;
     }
     return 'kind=direct_session_reset';
+  }
+
+  private getNudgeConnectionSnapshot(peerId: string): {
+    totalConnections: number;
+    peerConnectionCount: number;
+    peerConnectionAddrs: string;
+    peerSuffixes: string;
+  } {
+    const allConnections = this.node.getConnections();
+    const peerConnections = allConnections.filter((conn) => conn.remotePeer.toString() === peerId);
+    const peerConnectionAddrs = peerConnections
+      .map((conn) => conn.remoteAddr.toString())
+      .join(',') || 'none';
+    const peerSuffixes = allConnections
+      .map((conn) => conn.remotePeer.toString().slice(-8))
+      .join(',') || 'none';
+
+    return {
+      totalConnections: allConnections.length,
+      peerConnectionCount: peerConnections.length,
+      peerConnectionAddrs,
+      peerSuffixes,
+    };
   }
 
   constructor(
@@ -214,14 +238,21 @@ export class MessageHandler {
     payload: BucketNudgePayload,
     cooldownKey: string
   ): void {
-    // Do not force-dial just to send a nudge.
-    const hasActiveConnection = this.node.getConnections().some(
-      conn => conn.remotePeer.toString() === peerId
+    const attemptId = ++this.nudgeSendAttemptSeq;
+    const startSnapshot = this.getNudgeConnectionSnapshot(peerId);
+    console.log(
+      `[NUDGE][SEND][START] attempt=${attemptId} peer=${peerId.slice(-8)} ${this.formatNudgeTarget(payload)} ` +
+      `cooldownKey=${cooldownKey} totalConnections=${startSnapshot.totalConnections} ` +
+      `peerConnections=${startSnapshot.peerConnectionCount} peerConnAddrs=${startSnapshot.peerConnectionAddrs}`,
     );
+
+    // Do not force-dial just to send a nudge.
+    const hasActiveConnection = startSnapshot.peerConnectionCount > 0;
     if (!hasActiveConnection) {
       console.log(
         `[NUDGE][SKIP_NO_CONN] peer=${peerId.slice(-8)} ${this.formatNudgeTarget(payload)} ` +
-        `reason=no_active_connection`,
+        `reason=no_active_connection attempt=${attemptId} totalConnections=${startSnapshot.totalConnections} ` +
+        `connectedPeers=${startSnapshot.peerSuffixes}`,
       );
       return;
     }
@@ -241,26 +272,63 @@ export class MessageHandler {
         }, remaining);
         this.nudgeTrailingTimers.set(cooldownKey, timer);
       }
-      console.log(`[NUDGE] Cooldown active for ${peerId.slice(-8)}, scheduling trailing nudge in ${remaining}ms`);
+      console.log(
+        `[NUDGE][COOLDOWN] attempt=${attemptId} peer=${peerId.slice(-8)} ${this.formatNudgeTarget(payload)} ` +
+        `elapsed=${elapsed} remaining=${remaining} cooldownMs=${BUCKET_NUDGE_COOLDOWN_MS}`,
+      );
       return;
     }
     this.nudgeCooldowns.set(cooldownKey, now);
 
     void (async () => {
+      const dialStartedAt = Date.now();
       try {
         const targetPeerId = peerIdFromString(peerId);
+        console.log(
+          `[NUDGE][DIAL][START] attempt=${attemptId} peer=${peerId.slice(-8)} protocol=${this.bucketNudgeProtocol} ` +
+          `timeoutMs=${BUCKET_NUDGE_DIAL_TIMEOUT_MS}`,
+        );
         const stream = await this.node.dialProtocol(targetPeerId, this.bucketNudgeProtocol, {
           signal: AbortSignal.timeout(BUCKET_NUDGE_DIAL_TIMEOUT_MS),
           runOnLimitedConnection: true,
         });
+        const dialMs = Date.now() - dialStartedAt;
+        const postDialSnapshot = this.getNudgeConnectionSnapshot(peerId);
+        console.log(
+          `[NUDGE][DIAL][OK] attempt=${attemptId} peer=${peerId.slice(-8)} dialMs=${dialMs} ` +
+          `totalConnections=${postDialSnapshot.totalConnections} ` +
+          `peerConnections=${postDialSnapshot.peerConnectionCount} peerConnAddrs=${postDialSnapshot.peerConnectionAddrs}`,
+        );
+
         const payloadBytes = new TextEncoder().encode(JSON.stringify(payload));
+        const sinkStartedAt = Date.now();
         await stream.sink([payloadBytes]);
+        const sinkMs = Date.now() - sinkStartedAt;
+        console.log(
+          `[NUDGE][WRITE][OK] attempt=${attemptId} peer=${peerId.slice(-8)} bytes=${payloadBytes.length} sinkMs=${sinkMs}`,
+        );
+
+        const closeStartedAt = Date.now();
         await stream.close();
-        console.log(`[NUDGE] Sent nudge to ${peerId.slice(-8)} ${this.formatNudgeTarget(payload)}`);
+        const closeMs = Date.now() - closeStartedAt;
+        const totalMs = Date.now() - dialStartedAt;
+        console.log(
+          `[NUDGE][SEND][OK] attempt=${attemptId} peer=${peerId.slice(-8)} ${this.formatNudgeTarget(payload)} ` +
+          `totalMs=${totalMs} closeMs=${closeMs}`,
+        );
       } catch (error: unknown) {
         const reason = error instanceof Error ? error.message : String(error);
+        const errorName = error instanceof Error ? error.name : 'UnknownError';
+        const errorCode = typeof (error as { code?: unknown })?.code === 'string'
+          ? (error as { code: string }).code
+          : 'n/a';
+        const elapsedMs = Date.now() - dialStartedAt;
+        const failSnapshot = this.getNudgeConnectionSnapshot(peerId);
         console.log(
-          `[NUDGE][SEND_FAIL] peer=${peerId.slice(-8)} ${this.formatNudgeTarget(payload)} reason=${reason}`,
+          `[NUDGE][SEND_FAIL] attempt=${attemptId} peer=${peerId.slice(-8)} ${this.formatNudgeTarget(payload)} ` +
+          `reason=${reason} errorName=${errorName} errorCode=${errorCode} elapsedMs=${elapsedMs} ` +
+          `totalConnections=${failSnapshot.totalConnections} peerConnections=${failSnapshot.peerConnectionCount} ` +
+          `peerConnAddrs=${failSnapshot.peerConnectionAddrs}`,
         );
         // Best-effort — peer offline or unreachable, offline bucket still delivers
       }
@@ -273,6 +341,11 @@ export class MessageHandler {
   private setupProtocolHandler(): void {
     void this.node.handle(this.bucketNudgeProtocol, async (context: StreamHandlerContext) => {
       const { remoteId, stream } = StreamHandler.getRemotePeerInfo(context);
+      const recvStartedAt = Date.now();
+      console.log(
+        `[NUDGE][RECV][IN] from=${remoteId.slice(-8)} protocol=${this.bucketNudgeProtocol} ` +
+        `totalConnections=${this.node.getConnections().length}`,
+      );
       try {
         if (this.database.isBlocked(remoteId)) return;
         if (!this.isKnownNudgeSender(remoteId)) {
@@ -282,12 +355,19 @@ export class MessageHandler {
 
         const nudgePayload = await this.readBucketNudgePayload(stream);
         console.log("MARINPARIN nudgepayloag", nudgePayload)
+        console.log(
+          `[NUDGE][RECV][PAYLOAD] from=${remoteId.slice(-8)} payload=${nudgePayload ? JSON.stringify(nudgePayload) : 'null'} ` +
+          `readMs=${Date.now() - recvStartedAt}`,
+        );
         await this.routeBucketNudge(remoteId, nudgePayload);
       } catch (error: unknown) {
         generalErrorHandler(error, `[NUDGE] Failed to process nudge from ${remoteId.slice(-8)}`);
       } finally {
         try {
           await stream.close();
+          console.log(
+            `[NUDGE][RECV][DONE] from=${remoteId.slice(-8)} totalMs=${Date.now() - recvStartedAt}`,
+          );
         } catch {
           // Best-effort close.
         }
