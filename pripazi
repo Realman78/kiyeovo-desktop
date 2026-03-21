@@ -1,5 +1,7 @@
 0. u stashu ti je enkripcija group info-a
 
+0.5 ako alice ne bude u prvih 15 chatova, neces dobit group update, mozda bi uvik tribalo procitat grupe ke se dohvacaju i obavezno njezine creatore fetchat u direct chat fetchu.
+
 1. [NUDGE][SEND_FAIL] peer=fz9zYUjU group=32398e08 reason=Remote closed connection during opening -> 2 korisnika u isto vrime prihvate, skuzi zac se jedan aktivira puno kasnije
 
 2. Chad accepts group invitation from Alice. Alice sends welcome and propagates the notification that Chad joined to other group members. however, Chad did not receive the WELCOME message so he never ACK-ed it. Chad is not in the group from his POV, but everyone else sees that he is. of course, when chad restarts the app, this works, so maybe it is not an issue since chad will read the messages from the group offline bucket

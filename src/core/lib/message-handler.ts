@@ -86,6 +86,8 @@ export class MessageHandler {
   private groupInfoStartupTimer: ReturnType<typeof setTimeout> | null = null;
   private groupControlRetryState = new Map<string, { attempts: number; lastSeenAt: number; lastError: string }>();
   private groupStateResyncRequestCooldowns = new Map<string, number>();
+  private groupInfoSyncInFlight = new Map<string, Promise<void>>();
+  private groupInfoSyncPending = new Set<string>();
   private offlineCheckRunSeq = 0;
   private groupOfflineManager: GroupOfflineManager;
   private groupMessaging: GroupMessaging;
@@ -1548,6 +1550,7 @@ export class MessageHandler {
     // Track max timestamp per peer to update after processing
     const maxTimestampPerPeer: Map<string, number> = new Map();
     let processedCount = 0;
+    const deferredGroupInfoSyncGroups = new Set<string>();
 
     const unreadFromChats: Map<number, number> = new Map();
     const userIdentity = this.usernameRegistry.getUserIdentity();
@@ -1634,7 +1637,11 @@ export class MessageHandler {
 
         // Check if this is a group control message - should we await this or let it process in bg?
         // eslint-disable-next-line no-await-in-loop
-        const groupResult = await this.tryRouteGroupControlMessage(decryptedContent, senderInfo);
+        const groupResult = await this.tryRouteGroupControlMessage(
+          decryptedContent,
+          senderInfo,
+          deferredGroupInfoSyncGroups,
+        );
         if (groupResult === 'retry') {
           console.log(
             `[OFFLINE][MSG][GROUP] run=${runId} msgId=${msg.id} from=${senderInfo.username} result=retry`,
@@ -1674,6 +1681,10 @@ export class MessageHandler {
       }
     }
 
+    for (const groupId of deferredGroupInfoSyncGroups) {
+      this.scheduleDeferredGroupInfoSync(groupId);
+    }
+
     // Update last read timestamp for each peer
     for (const [peerId, maxTimestamp] of maxTimestampPerPeer.entries()) {
       this.database.updateOfflineLastReadTimestampByPeerId(peerId, maxTimestamp);
@@ -1707,6 +1718,55 @@ export class MessageHandler {
       );
       this.enqueueImmediateGroupAckRepublish(peerId);
     }
+  }
+
+  private scheduleDeferredGroupInfoSync(groupId: string): void {
+    if (!groupId) return;
+
+    if (this.groupInfoSyncInFlight.has(groupId)) {
+      this.groupInfoSyncPending.add(groupId);
+      console.log(
+        `[GROUP-INFO][SYNC][DEFER] group=${groupId} reason=in_flight`,
+      );
+      return;
+    }
+
+    const syncPromise = this.runDeferredGroupInfoSync(groupId)
+      .catch((error: unknown) => {
+        generalErrorHandler(error, `[GROUP-INFO][SYNC] Deferred sync failed for group=${groupId}`);
+      })
+      .finally(() => {
+        this.groupInfoSyncInFlight.delete(groupId);
+        if (this.groupInfoSyncPending.delete(groupId)) {
+          this.scheduleDeferredGroupInfoSync(groupId);
+        }
+      });
+
+    this.groupInfoSyncInFlight.set(groupId, syncPromise);
+  }
+
+  private async runDeferredGroupInfoSync(groupId: string): Promise<void> {
+    const userIdentity = this.usernameRegistry.getUserIdentity();
+    if (!userIdentity) {
+      throw new Error('User identity not available');
+    }
+
+    const myPeerId = this.node.peerId.toString();
+    const myUser = this.database.getUserByPeerId(myPeerId);
+    const myUsername = myUser?.username || `user_${myPeerId.slice(-8)}`;
+    const responder = new GroupResponder({
+      node: this.node,
+      database: this.database,
+      userIdentity,
+      myPeerId,
+      myUsername,
+      onGroupChatActivated: this.onGroupChatActivated,
+      onGroupMembersUpdated: this.onGroupMembersUpdated,
+      onMessageReceived: this.onMessageReceived,
+      nudgeGroupRefetch: this.nudgePeerGroupRefetch.bind(this),
+    });
+
+    await responder.syncGroupInfoForLocalChat(groupId);
   }
 
   // Process an ACK from a peer - clear acknowledged messages from our bucket.
@@ -1833,6 +1893,8 @@ export class MessageHandler {
     this.groupStateCatchupInFlight.clear();
     this.groupStateCatchupPending.clear();
     this.peerActivityCheckCooldowns.clear();
+    this.groupInfoSyncInFlight.clear();
+    this.groupInfoSyncPending.clear();
 
     if (this.cleanupPeerEvents) {
       this.cleanupPeerEvents();
@@ -1905,6 +1967,7 @@ export class MessageHandler {
   private async tryRouteGroupControlMessage(
     decryptedContent: string,
     senderInfo: OfflineSenderInfo,
+    deferredGroupInfoSyncGroups: Set<string>,
   ): Promise<'handled' | 'retry' | 'not_group'> {
     let parsed: { type?: string };
     try {
@@ -1952,36 +2015,35 @@ export class MessageHandler {
     };
 
     try {
+      const responder = new GroupResponder(deps);
+      const creator = new GroupCreator(deps);
+      const groupId = (parsed as { groupId: string }).groupId;
+
       switch (type) {
         // --- Messages handled by GroupResponder (we are the invitee) ---
         case GroupMessageType.GROUP_INVITE: {
-          const responder = new GroupResponder(deps);
           await responder.handleGroupInvite(parsed as any);
           console.log(`[GROUP] Processed GROUP_INVITE from ${senderInfo.username}`);
           break;
         }
         case GroupMessageType.GROUP_INVITE_RESPONSE_ACK: {
-          const responder = new GroupResponder(deps);
           responder.handleInviteResponseAck(parsed as any);
           console.log(`[GROUP] Processed GROUP_INVITE_RESPONSE_ACK from ${senderInfo.username}`);
           break;
         }
         case GroupMessageType.GROUP_WELCOME: {
-          const responder = new GroupResponder(deps);
           await responder.handleGroupWelcome(parsed as any);
-
-          const groupId = (parsed as { groupId: string }).groupId;
+          deferredGroupInfoSyncGroups.add(groupId);
           this.groupMessaging.subscribeToGroupTopic(groupId)
           console.log(`[GROUP] Processed GROUP_WELCOME from ${senderInfo.username}`);
           break;
         }
         case GroupMessageType.GROUP_STATE_UPDATE: {
-          const responder = new GroupResponder(deps);
-          const groupId = (parsed as { groupId: string }).groupId;
           const beforeUpdateChat = this.database.getChatByGroupId(groupId);
           const previousKeyVersion = beforeUpdateChat?.key_version ?? 0;
           const previousGroupStatus = beforeUpdateChat?.group_status ?? null;
           await responder.handleGroupStateUpdate(parsed as any);
+
           const updatedChat = this.database.getChatByGroupId(groupId);
           const keyVersionAdvanced = (updatedChat?.key_version ?? 0) > previousKeyVersion;
           const becameRemoved = updatedChat?.group_status === 'removed';
@@ -1993,22 +2055,17 @@ export class MessageHandler {
                 : 'was_rekeying';
             this.scheduleGroupStateUpdateCatchup(updatedChat.id, groupId, trigger);
           }
-          if (
-            updatedChat?.group_status === 'removed'
-            || updatedChat?.group_status === 'left'
-            || updatedChat?.group_status === 'disbanded'
-          ) {
+          if (['removed', 'left', 'disbanded'].includes(updatedChat?.group_status || '')) {
             this.groupMessaging.deactivateGroup(groupId);
           } else {
             this.groupMessaging.subscribeToGroupTopic(groupId)
+            deferredGroupInfoSyncGroups.add(groupId);
           }
           console.log(`[GROUP] Processed GROUP_STATE_UPDATE from ${senderInfo.username}`);
           break;
         }
         case GroupMessageType.GROUP_KICK: {
-          const responder = new GroupResponder(deps);
           const removedSelf = await responder.handleGroupKick(parsed as any);
-          const groupId = (parsed as { groupId: string }).groupId;
           if (removedSelf) {
             this.groupMessaging.deactivateGroup(groupId);
           }
@@ -2016,8 +2073,6 @@ export class MessageHandler {
           break;
         }
         case GroupMessageType.GROUP_DISBAND: {
-          const responder = new GroupResponder(deps);
-          const groupId = (parsed as { groupId: string }).groupId;
           const disbandApplied = await responder.handleGroupDisband(parsed as any);
           if (disbandApplied) {
             this.groupMessaging.deactivateGroup(groupId);
@@ -2028,9 +2083,7 @@ export class MessageHandler {
 
         // --- Messages handled by GroupCreator (we are the creator) ---
         case GroupMessageType.GROUP_INVITE_RESPONSE: {
-          const creator = new GroupCreator(deps);
           await creator.processInviteResponse(parsed as any);
-          const groupId = (parsed as { groupId: string }).groupId;
           const chat = this.database.getChatByGroupId(groupId);
           if (chat?.group_status === 'active' && (chat.key_version ?? 0) > 0) {
             this.groupMessaging.subscribeToGroupTopic(groupId)
@@ -2039,9 +2092,7 @@ export class MessageHandler {
           break;
         }
         case GroupMessageType.GROUP_LEAVE_REQUEST: {
-          const creator = new GroupCreator(deps);
           await creator.processLeaveRequest(parsed as any, senderInfo.peer_id);
-          const groupId = (parsed as { groupId: string }).groupId;
           const chat = this.database.getChatByGroupId(groupId);
           if (chat?.group_status === 'active' && (chat.key_version ?? 0) > 0) {
             this.groupMessaging.subscribeToGroupTopic(groupId)
@@ -2050,27 +2101,24 @@ export class MessageHandler {
           break;
         }
         case GroupMessageType.GROUP_STATE_RESYNC_REQUEST: {
-          const creator = new GroupCreator(deps);
           await creator.processStateResyncRequest(parsed as any, senderInfo.peer_id);
           console.log(`[GROUP] Processed GROUP_STATE_RESYNC_REQUEST from ${senderInfo.username}`);
           break;
         }
         case GroupMessageType.GROUP_INVITE_DELIVERED_ACK: {
-          const creator = new GroupCreator(deps);
           await creator.handleInviteDeliveredAck(parsed as any, senderInfo.peer_id);
           console.log(`[GROUP] Processed GROUP_INVITE_DELIVERED_ACK from ${senderInfo.username}`);
           break;
         }
         case GroupMessageType.GROUP_CONTROL_ACK: {
-          const creator = new GroupCreator(deps);
           await creator.handleControlAck(parsed as any, senderInfo.peer_id);
           console.log(`[GROUP] Processed GROUP_CONTROL_ACK from ${senderInfo.username}`);
           break;
         }
 
-        // --- Messages not yet implemented — consume without saving as text ---
+        // TODO I dont remember why I put this here
         case GroupMessageType.GROUP_MESSAGE:
-          console.log(`[GROUP] Received ${type} from ${senderInfo.username} — handler not yet implemented, consuming`);
+          console.log(`[GROUP] Received ${type} from ${senderInfo.username}`);
           break;
 
         default:

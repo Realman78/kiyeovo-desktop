@@ -40,6 +40,7 @@ import {
 } from './types.js';
 import { putJsonToDHT } from './group-dht-publish.js';
 import { nudgeGroupRefetchIfKnownGroup } from './group-refetch-nudge.js';
+import { QueryEvent } from '@libp2p/kad-dht';
 
 export interface GroupCreatorDeps {
   node: ChatNode;
@@ -485,25 +486,17 @@ export class GroupCreator {
       `[GROUP][TRACE][LEAVE][IN] group=${request.groupId} from=${senderPeerId.slice(-8)} peerId=${request.peerId.slice(-8)} msgId=${request.messageId}`,
     );
 
-    const chat = database.getChatByGroupId(request.groupId);
-    if (!chat || chat.created_by !== myPeerId) {
-      console.log(
-        `[GROUP][TRACE][LEAVE][DROP] group=${request.groupId} reason=not_creator chatExists=${!!chat}`,
-      );
-      return;
-    }
-    if (chat.group_status === 'disbanded') {
-      console.log(
-        `[GROUP][TRACE][LEAVE][DROP] group=${request.groupId} from=${senderPeerId.slice(-8)} reason=group_disbanded`,
-      );
-      return;
-    }
-    if (request.peerId !== senderPeerId) {
-      console.log(
-        `[GROUP][TRACE][LEAVE][DROP] group=${request.groupId} reason=peer_mismatch payloadPeer=${request.peerId.slice(-8)} sender=${senderPeerId.slice(-8)}`,
-      );
-      return;
-    }
+    const validated = this.validateCreatorInboundGroupControl({
+      traceTag: 'LEAVE',
+      groupId: request.groupId,
+      messageId: request.messageId,
+      senderPeerId,
+      payloadPeerId: request.peerId,
+      disbandedReason: 'group_disbanded',
+      requireTimestamp: false,
+    });
+    if (!validated.ok) return;
+    const chat = validated.chat;
 
     const leavingUser = database.getUserByPeerId(request.peerId);
     if (!leavingUser) {
@@ -544,7 +537,7 @@ export class GroupCreator {
         ? await this.snapshotPrevEpochBoundaries(request.groupId, prevVersion, preRotationParticipants)
         : {};
 
-      const { groupKey, keyVersion } = await this.rotateGroupKey(request.groupId, request.peerId, 'leave');
+      const { groupKey, keyVersion } = this.rotateGroupKey(request.groupId, request.peerId, 'leave');
       rotationCommitted = true;
       if (prevVersion >= 1) {
         this.deps.onRegisterPrevEpochGrace?.(request.groupId, prevVersion);
@@ -607,42 +600,16 @@ export class GroupCreator {
   }
 
   async processStateResyncRequest(request: GroupStateResyncRequest, senderPeerId: string): Promise<void> {
-    const { database, myPeerId } = this.deps;
+    const { database } = this.deps;
     console.log(
       `[GROUP][TRACE][RESYNC_REQ][IN] group=${request.groupId} from=${senderPeerId.slice(-8)} requester=${request.requesterPeerId.slice(-8)} msgId=${request.messageId} knownKeyVersion=${request.knownKeyVersion}`,
     );
 
-    const chat = database.getChatByGroupId(request.groupId);
-    if (!chat || chat.created_by !== myPeerId) {
-      console.log(
-        `[GROUP][TRACE][RESYNC_REQ][DROP] group=${request.groupId} reason=not_creator chatExists=${!!chat}`,
-      );
+    const validation = this.validateStateResyncRequest(request, senderPeerId);
+    if (!validation.ok) {
       return;
     }
-    if (chat.group_status === 'disbanded') {
-      console.log(
-        `[GROUP][TRACE][RESYNC_REQ][DROP] group=${request.groupId} reason=disbanded`,
-      );
-      return;
-    }
-    if (request.requesterPeerId !== senderPeerId) {
-      console.log(
-        `[GROUP][TRACE][RESYNC_REQ][DROP] group=${request.groupId} msgId=${request.messageId} reason=peer_mismatch payloadPeer=${request.requesterPeerId.slice(-8)} sender=${senderPeerId.slice(-8)}`,
-      );
-      return;
-    }
-    if (!Number.isFinite(request.timestamp) || request.timestamp <= 0) {
-      console.log(
-        `[GROUP][TRACE][RESYNC_REQ][DROP] group=${request.groupId} msgId=${request.messageId} reason=invalid_timestamp`,
-      );
-      return;
-    }
-    if (request.timestamp > Date.now() + GROUP_MESSAGE_MAX_FUTURE_SKEW_MS) {
-      console.log(
-        `[GROUP][TRACE][RESYNC_REQ][DROP] group=${request.groupId} msgId=${request.messageId} reason=future_timestamp ts=${request.timestamp}`,
-      );
-      return;
-    }
+    const chat = validation.chat;
 
     const requester = database.getUserByPeerId(request.requesterPeerId);
     if (!requester) {
@@ -700,6 +667,82 @@ export class GroupCreator {
         `[GROUP][TRACE][RESYNC_REQ][QUEUE_RETRY] group=${request.groupId} requester=${request.requesterPeerId.slice(-8)} reason=${reason}`,
       );
     }
+  }
+
+  private validateStateResyncRequest(
+    request: GroupStateResyncRequest,
+    senderPeerId: string,
+  ): { ok: true; chat: NonNullable<ReturnType<ChatDatabase['getChatByGroupId']>> } | { ok: false } {
+    return this.validateCreatorInboundGroupControl({
+      traceTag: 'RESYNC_REQ',
+      groupId: request.groupId,
+      messageId: request.messageId,
+      senderPeerId,
+      payloadPeerId: request.requesterPeerId,
+      disbandedReason: 'disbanded',
+      requireTimestamp: true,
+      timestamp: request.timestamp,
+    });
+  }
+
+  private validateControlTimestamp(
+    timestamp: number,
+  ): { ok: true } | { ok: false; reason: 'invalid_timestamp' | 'future_timestamp' } {
+    if (!Number.isFinite(timestamp) || timestamp <= 0) {
+      return { ok: false, reason: 'invalid_timestamp' };
+    }
+    if (timestamp > Date.now() + GROUP_MESSAGE_MAX_FUTURE_SKEW_MS) {
+      return { ok: false, reason: 'future_timestamp' };
+    }
+    return { ok: true };
+  }
+
+  private validateCreatorInboundGroupControl(options: {
+    traceTag: 'LEAVE' | 'RESYNC_REQ';
+    groupId: string;
+    messageId: string;
+    senderPeerId: string;
+    payloadPeerId: string;
+    disbandedReason: 'group_disbanded' | 'disbanded';
+    requireTimestamp: boolean;
+    timestamp?: number;
+  }): { ok: true; chat: NonNullable<ReturnType<ChatDatabase['getChatByGroupId']>> } | { ok: false } {
+    const { database, myPeerId } = this.deps;
+    const chat = database.getChatByGroupId(options.groupId);
+    if (!chat || chat.created_by !== myPeerId) {
+      console.log(
+        `[GROUP][TRACE][${options.traceTag}][DROP] group=${options.groupId} reason=not_creator chatExists=${!!chat}`,
+      );
+      return { ok: false };
+    }
+    if (chat.group_status === 'disbanded') {
+      const fromSuffix = options.traceTag === 'LEAVE'
+        ? ` from=${options.senderPeerId.slice(-8)}`
+        : '';
+      console.log(
+        `[GROUP][TRACE][${options.traceTag}][DROP] group=${options.groupId}${fromSuffix} reason=${options.disbandedReason}`,
+      );
+      return { ok: false };
+    }
+    if (options.payloadPeerId !== options.senderPeerId) {
+      console.log(
+        `[GROUP][TRACE][${options.traceTag}][DROP] group=${options.groupId} msgId=${options.messageId} reason=peer_mismatch payloadPeer=${options.payloadPeerId.slice(-8)} sender=${options.senderPeerId.slice(-8)}`,
+      );
+      return { ok: false };
+    }
+    if (options.requireTimestamp) {
+      const timestampCheck = this.validateControlTimestamp(options.timestamp ?? NaN);
+      if (!timestampCheck.ok) {
+        const suffix = timestampCheck.reason === 'future_timestamp' && options.timestamp !== undefined
+          ? ` ts=${options.timestamp}`
+          : '';
+        console.log(
+          `[GROUP][TRACE][${options.traceTag}][DROP] group=${options.groupId} msgId=${options.messageId} reason=${timestampCheck.reason}${suffix}`,
+        );
+        return { ok: false };
+      }
+    }
+    return { ok: true, chat };
   }
 
   async kickMember(groupId: string, targetPeerId: string): Promise<void> {
@@ -1461,24 +1504,9 @@ export class GroupCreator {
     // Includes observed seqs from all members (tracked on message receipt) + our own sending seq
     const senderSeqBoundaries: Record<string, number> = {};
     if (prevVersion >= 1) {
-      if (prevEpochBoundaries) {
-        for (const [peerId, seq] of Object.entries(prevEpochBoundaries)) {
-          if (Number.isFinite(seq) && seq >= 0) {
-            senderSeqBoundaries[peerId] = seq;
-          }
-        }
-      } else {
-        const observed = database.getAllMemberSeqs(groupId, prevVersion);
-        for (const [peerId, seq] of Object.entries(observed)) {
+      for (const [peerId, seq] of Object.entries(prevEpochBoundaries)) {
+        if (Number.isFinite(seq) && seq >= 0) {
           senderSeqBoundaries[peerId] = seq;
-        }
-        // Also include our own sending seq (may be higher than what we've "observed" from ourselves)
-        const mySeq = database.getCurrentSeq(groupId, prevVersion);
-        if (mySeq > 0) {
-          senderSeqBoundaries[this.deps.myPeerId] = Math.max(
-            senderSeqBoundaries[this.deps.myPeerId] ?? 0,
-            mySeq,
-          );
         }
       }
     }
@@ -1536,13 +1564,13 @@ export class GroupCreator {
       const versionedStart = Date.now();
       await putJsonToDHT(this.deps.node, versionedDhtKey, signedVersioned, { warnOnQueryError: true, warnPrefix: 'GROUP' });
       console.log(
-        `[GROUP-INFO][PUBLISH][VERSIONED_OK] group=${groupId} keyVersion=${keyVersion} took=${Date.now() - versionedStart}ms`
+        `MARINPARIN [GROUP-INFO][PUBLISH][VERSIONED_OK] group=${groupId} keyVersion=${keyVersion} took=${Date.now() - versionedStart}ms`
       );
 
       const latestStart = Date.now();
       await putJsonToDHT(this.deps.node, latestDhtKey, signedLatest, { warnOnQueryError: true, warnPrefix: 'GROUP' });
       console.log(
-        `[GROUP-INFO][PUBLISH][LATEST_OK] group=${groupId} keyVersion=${keyVersion} took=${Date.now() - latestStart}ms`
+        `MARINPARIN [GROUP-INFO][PUBLISH][LATEST_OK] group=${groupId} keyVersion=${keyVersion} took=${Date.now() - latestStart}ms`
       );
     } catch (error: unknown) {
       const reason = error instanceof Error ? error.message : String(error);
@@ -1657,13 +1685,18 @@ export class GroupCreator {
 
     let best: GroupOfflineStore | null = null;
 
-    for await (const event of node.services.dht.get(keyBytes) as AsyncIterable<import('@libp2p/kad-dht').QueryEvent>) {
+    for await (const event of node.services.dht.get(keyBytes) as AsyncIterable<QueryEvent>) {
       if (event.name !== 'VALUE' || event.value.length === 0) continue;
       let parsed: GroupOfflineStore;
       try {
         const decompressed = gunzipSync(Buffer.from(event.value));
         parsed = JSON.parse(decompressed.toString('utf8')) as GroupOfflineStore;
       } catch {
+        continue;
+      }
+
+      if (!this.verifyGroupOfflineStoreSignature(parsed, sender.signing_public_key, bucketKey)) {
+        console.log("MARINPARIN vjv prejaka provjera pa pada signature", parsed, sender, bucketKey)
         continue;
       }
 
@@ -1680,7 +1713,7 @@ export class GroupCreator {
     const maxSeqInMessages = best.messages.length > 0
       ? Math.max(...best.messages.map((m) => m.seq))
       : 0;
-    return Math.max(best.highestSeq ?? 0, maxSeqInMessages);
+    return Math.max(best.highestSeq, maxSeqInMessages);
   }
 
   // --- Helpers ---
@@ -1717,6 +1750,51 @@ export class GroupCreator {
 
     if (!ed25519.verify(sigBytes, payloadBytes, pubKeyBytes)) {
       throw new Error('Signature verification failed');
+    }
+  }
+
+  private verifyGroupOfflineStoreSignature(
+    store: GroupOfflineStore,
+    signingPubKeyBase64: string,
+    expectedBucketKey: string,
+  ): boolean {
+    try {
+      if (!store || typeof store !== 'object') return false;
+      if (!Array.isArray(store.messages)) return false;
+      if (typeof store.storeSignature !== 'string' || !store.storeSignature) return false;
+      if (!store.storeSignedPayload || typeof store.storeSignedPayload !== 'object') return false;
+
+      const payload = store.storeSignedPayload;
+      if (!Array.isArray(payload.messageIds)) return false;
+      if (!Number.isFinite(payload.highestSeq) || payload.highestSeq < 0) return false;
+      if (!Number.isFinite(payload.version) || payload.version < 0) return false;
+      if (!Number.isFinite(payload.timestamp) || payload.timestamp <= 0) return false;
+      if (typeof payload.bucketKey !== 'string' || payload.bucketKey !== expectedBucketKey) return false;
+
+      if (!Number.isFinite(store.highestSeq) || store.highestSeq < 0) return false;
+      if (!Number.isFinite(store.version) || store.version < 0) return false;
+      if (!Number.isFinite(store.lastUpdated) || store.lastUpdated <= 0) return false;
+
+      if (payload.highestSeq !== store.highestSeq) return false;
+      if (payload.version !== store.version) return false;
+      if (payload.timestamp !== store.lastUpdated) return false;
+
+      const messageIds = store.messages.map((message) => message.messageId);
+      if (messageIds.length !== payload.messageIds.length) return false;
+      for (let index = 0; index < messageIds.length; index++) {
+        if (messageIds[index] !== payload.messageIds[index]) return false;
+      }
+
+      for (const message of store.messages) {
+        if (!Number.isFinite(message.seq) || message.seq < 0) return false;
+      }
+
+      const payloadBytes = new TextEncoder().encode(JSON.stringify(payload));
+      const signatureBytes = Buffer.from(store.storeSignature, 'base64');
+      const pubKeyBytes = Buffer.from(signingPubKeyBase64, 'base64');
+      return ed25519.verify(signatureBytes, payloadBytes, pubKeyBytes);
+    } catch {
+      return false;
     }
   }
 

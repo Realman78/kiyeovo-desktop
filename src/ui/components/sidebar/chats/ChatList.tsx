@@ -4,7 +4,7 @@ import { Search } from "lucide-react";
 import { ChatPreview } from "./ChatPreview";
 import { useDispatch, useSelector } from "react-redux";
 import type { RootState } from "../../../state/store";
-import { setActiveChat, setOfflineFetchStatus, markOfflineFetched, markOfflineFetchFailed } from "../../../state/slices/chatSlice";
+import { setActiveChat, setOfflineFetchStatus, markOfflineFetched, markOfflineFetchFailed, type Chat } from "../../../state/slices/chatSlice";
 import { EmptyChatList } from "./EmptyChatList";
 
 export const ChatList: FC = () => {
@@ -17,6 +17,36 @@ export const ChatList: FC = () => {
     const selectedChatId = useSelector((state: RootState) => state.chat.activeChat);
     const isConnected = useSelector((state: RootState) => state.user.connected);
     const dispatch = useDispatch();
+
+    const shouldFetchOfflineForChat = (chat: Chat): boolean => {
+        return !chat.fetchedOffline && !chat.isFetchingOffline && !chat.blocked;
+    };
+
+    const fetchDirectOfflineForChat = async (chat: Chat): Promise<void> => {
+        if (chat.type !== 'direct') return;
+        if (!shouldFetchOfflineForChat(chat)) return;
+        if (!isConnected) return;
+
+        console.log(`[UI] Fetching offline messages for direct chat ${chat.id}...`);
+        dispatch(setOfflineFetchStatus({ chatId: chat.id, isFetching: true }));
+        try {
+            const result = await window.kiyeovoAPI.checkOfflineMessagesForChat(chat.id);
+            if (result.success) {
+                if (result.checkedChatIds.length > 0) {
+                    console.log(`[UI] Offline messages fetched for chat(s): ${result.checkedChatIds.join(', ')}`);
+                } else {
+                    console.log(`[UI] No offline messages for chat ${chat.id}`);
+                }
+                dispatch(markOfflineFetched(chat.id));
+            } else {
+                console.log(`[UI] Offline fetch failed for chat ${chat.id}`);
+                dispatch(markOfflineFetchFailed(chat.id));
+            }
+        } catch (error) {
+            console.error(`[UI] Failed to fetch offline messages for chat ${chat.id}:`, error);
+            dispatch(markOfflineFetchFailed(chat.id));
+        }
+    };
 
     useEffect(() => {
         if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
@@ -55,48 +85,45 @@ export const ChatList: FC = () => {
         // Check if we need to fetch offline messages for this chat
         // Skip offline message fetching for blocked chats
         const chat = chats.find(c => c.id === chatId);
-        if (chat && !chat.fetchedOffline && !chat.isFetchingOffline && !chat.blocked) {
-            if (!isConnected) {
-                return;
-            }
-            console.log(`[UI] Fetching offline messages for chat ${chatId}...`);
-            dispatch(setOfflineFetchStatus({ chatId, isFetching: true }));
+        if (!chat || !shouldFetchOfflineForChat(chat)) return;
+        if (!isConnected) return;
 
-            try {
-                if (chat.type === 'group') {
-                    const result = await window.kiyeovoAPI.checkGroupOfflineMessagesForChat(chatId);
-                    if (result.success && (result.failedChatIds ?? []).includes(chatId)) {
-                        console.log(`[UI] Offline fetch failed for group chat ${chatId}`);
-                        dispatch(markOfflineFetchFailed(chatId));
-                    } else if (result.success) {
-                        if (result.checkedChatIds.length > 0) {
-                            console.log(`[UI] Offline messages fetched for chat(s): ${result.checkedChatIds.join(', ')}`);
-                        } else {
-                            console.log(`[UI] No offline messages for chat ${chatId}`);
-                        }
-                        dispatch(markOfflineFetched(chatId));
-                    } else {
-                        console.log(`[UI] Offline fetch failed for chat ${chatId}`);
-                        dispatch(markOfflineFetchFailed(chatId));
-                    }
-                } else {
-                    const result = await window.kiyeovoAPI.checkOfflineMessagesForChat(chatId);
-                    if (result.success) {
-                        if (result.checkedChatIds.length > 0) {
-                            console.log(`[UI] Offline messages fetched for chat(s): ${result.checkedChatIds.join(', ')}`);
-                        } else {
-                            console.log(`[UI] No offline messages for chat ${chatId}`);
-                        }
-                        dispatch(markOfflineFetched(chatId));
-                    } else {
-                        console.log(`[UI] Offline fetch failed for chat ${chatId}`);
-                        dispatch(markOfflineFetchFailed(chatId));
-                    }
-                }
-            } catch (error) {
-                console.error(`[UI] Failed to fetch offline messages for chat ${chatId}:`, error);
-                dispatch(markOfflineFetchFailed(chatId));
+        // Group open path: first ensure creator's direct chat is fetched if it still needs sync.
+        // This helps ingest GROUP_STATE_UPDATE control messages before group epoch scanning.
+        if (chat.type === 'group' && chat.groupCreatorPeerId) {
+            const creatorDirectChat = chats.find(
+                (candidate) => candidate.type === 'direct' && candidate.peerId === chat.groupCreatorPeerId,
+            );
+            if (creatorDirectChat && shouldFetchOfflineForChat(creatorDirectChat)) {
+                await fetchDirectOfflineForChat(creatorDirectChat);
             }
+        }
+
+        try {
+            if (chat.type === 'group') {
+                console.log(`[UI] Fetching offline messages for chat ${chatId}...`);
+                dispatch(setOfflineFetchStatus({ chatId, isFetching: true }));
+                const result = await window.kiyeovoAPI.checkGroupOfflineMessagesForChat(chatId);
+                if (result.success && (result.failedChatIds ?? []).includes(chatId)) {
+                    console.log(`[UI] Offline fetch failed for group chat ${chatId}`);
+                    dispatch(markOfflineFetchFailed(chatId));
+                } else if (result.success) {
+                    if (result.checkedChatIds.length > 0) {
+                        console.log(`[UI] Offline messages fetched for chat(s): ${result.checkedChatIds.join(', ')}`);
+                    } else {
+                        console.log(`[UI] No offline messages for chat ${chatId}`);
+                    }
+                    dispatch(markOfflineFetched(chatId));
+                } else {
+                    console.log(`[UI] Offline fetch failed for chat ${chatId}`);
+                    dispatch(markOfflineFetchFailed(chatId));
+                }
+            } else {
+                await fetchDirectOfflineForChat(chat);
+            }
+        } catch (error) {
+            console.error(`[UI] Failed to fetch offline messages for chat ${chatId}:`, error);
+            dispatch(markOfflineFetchFailed(chatId));
         }
     }
 

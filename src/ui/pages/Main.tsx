@@ -405,16 +405,34 @@ export const Main = () => {
           .sort((a: any, b: any) => b.lastMessageTimestamp - a.lastMessageTimestamp)
           .slice(0, 15);
 
-        const topGroupChatIds = startupChats
+        const topStartupGroupChats = startupChats
           .filter((c: any) => c.type === 'group' && (
             c.groupStatus === 'active'
             || c.groupStatus === 'rekeying'
             || (c.groupStatus === 'removed' && c.needsRemovedCatchup)
-          ))
-          .map((chat: any) => chat.id);
-        const topDirectChatIds = startupChats
-          .filter((c: any) => c.type === 'direct')
-          .map((chat: any) => chat.id);
+          ));
+        const topGroupChatIds = topStartupGroupChats.map((chat: any) => chat.id);
+
+        const topDirectChatIdSet = new Set<number>(
+          startupChats
+            .filter((c: any) => c.type === 'direct')
+            .map((chat: any) => chat.id),
+        );
+
+        // Ensure creator direct chats are included so GROUP_STATE_UPDATE control
+        // messages are ingested before group-offline epoch scanning.
+        for (const groupChat of topStartupGroupChats) {
+          const creatorPeerId = groupChat.groupCreatorPeerId;
+          if (!creatorPeerId) continue;
+          const creatorDirectChat = mappedChats.find(
+            (c: any) => c.type === 'direct' && c.peerId === creatorPeerId,
+          );
+          if (creatorDirectChat) {
+            topDirectChatIdSet.add(creatorDirectChat.id);
+          }
+        }
+
+        const topDirectChatIds = Array.from(topDirectChatIdSet);
 
         const groupCheckTask = async () => {
           if (topGroupChatIds.length === 0 || !isConnected) return;

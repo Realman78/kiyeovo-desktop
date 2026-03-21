@@ -26,6 +26,8 @@ import {
 } from './types.js';
 import { nudgeGroupRefetchIfKnownGroup } from './group-refetch-nudge.js';
 
+const TERMINAL_STATES = ["removed", "left", "invite_expired", "disbanded"]
+
 export interface GroupResponderDeps {
   node: ChatNode;
   database: ChatDatabase;
@@ -56,20 +58,19 @@ export class GroupResponder {
 
   async handleGroupInvite(invite: GroupInvite): Promise<void> {
     const { database } = this.deps;
-    console.log(
-      `[GROUP][TRACE][INVITE][IN] group=${invite.groupId} inviteId=${invite.inviteId} from=${invite.inviterPeerId.slice(-8)} expiresAt=${invite.expiresAt}`,
-    );
+    const {groupId, inviterPeerId, expiresAt} = invite;
+    console.log(`[GROUP][INVITE][IN] group=${groupId} from=${inviterPeerId.slice(-8)} expiresAt=${expiresAt}`,);
 
     // Check blocked
     if (database.isBlocked(invite.inviterPeerId)) {
-      console.log(`[GROUP][TRACE][INVITE][DROP] group=${invite.groupId} reason=blocked from=${invite.inviterPeerId.slice(-8)}`);
+      console.log(`[GROUP][INVITE][DROP] group=${groupId} reason=blocked from=${inviterPeerId.slice(-8)}`);
       return;
     }
 
     // Verify inviter is a known contact
-    const inviter = database.getUserByPeerId(invite.inviterPeerId);
+    const inviter = database.getUserByPeerId(inviterPeerId);
     if (!inviter) {
-      console.log(`[GROUP][TRACE][INVITE][DROP] group=${invite.groupId} reason=unknown_sender from=${invite.inviterPeerId.slice(-8)}`);
+      console.log(`[GROUP][INVITE][DROP] group=${groupId} reason=unknown_sender from=${inviterPeerId.slice(-8)}`);
       return;
     }
 
@@ -77,14 +78,14 @@ export class GroupResponder {
     this.verifySignature(invite, inviter.signing_public_key);
 
     // Check expiry
-    if (Date.now() > invite.expiresAt) {
+    if (Date.now() > expiresAt) {
       console.log(
-        `[GROUP][TRACE][INVITE][DROP] group=${invite.groupId} inviteId=${invite.inviteId} reason=expired now=${Date.now()} expiresAt=${invite.expiresAt}`,
+        `[GROUP][INVITE][DROP] group=${groupId} reason=expired now=${Date.now()} expiresAt=${expiresAt}`,
       );
       return;
     }
 
-    const existing = database.getChatByGroupId(invite.groupId);
+    const existing = database.getChatByGroupId(groupId);
     if (existing) {
       // `left` normally deletes the chat row, but just in case
       const canReactivate =
@@ -92,17 +93,8 @@ export class GroupResponder {
         || existing.group_status === 'left'
         || existing.group_status === 'invite_expired';
 
-      if (canReactivate) {
-        this.createInviteNotificationIfMissing(invite);
-        console.log(
-          `[GROUP][TRACE][INVITE][ARCHIVED_REINVITE] group=${invite.groupId} inviteId=${invite.inviteId} chatId=${existing.id} currentStatus=${existing.group_status}`,
-        );
-        await this.trySendInviteDeliveredAck(invite, 'reactivated');
-        return;
-      }
-
-      console.log(`[GROUP][TRACE][INVITE][DUPLICATE] group=${invite.groupId} inviteId=${invite.inviteId} chatId=${existing.id}`);
-      await this.trySendInviteDeliveredAck(invite, 'duplicate');
+      if (canReactivate) this.createInviteNotificationIfMissing(invite);
+      await this.trySendInviteDeliveredAck(invite, canReactivate ? 'reactivated' : 'duplicate');
       return;
     }
 
@@ -127,11 +119,9 @@ export class GroupResponder {
     });
 
     database.transitionChatGroupStatus(chatId, 'invited_pending' satisfies GroupStatus, 'invite_received');
-    console.log(
-      `[GROUP][TRACE][INVITE][APPLY] group=${invite.groupId} inviteId=${invite.inviteId} chatId=${chatId} status=invited_pending`,
-    );
+    console.log(`[GROUP][INVITE][APPLY] group=${invite.groupId} chatId=${chatId} status=invited_pending`,);
 
-    // Create notification for UI
+    // Notification for UI
     this.createInviteNotificationIfMissing(invite);
 
     await this.trySendInviteDeliveredAck(invite, 'new');
@@ -151,16 +141,12 @@ export class GroupResponder {
   async respondToInvite(groupId: string, accept: boolean): Promise<void> {
     const { database, myPeerId } = this.deps;
     console.log(
-      `[GROUP][TRACE][RESP_SEND][START] group=${groupId} decision=${accept ? 'accept' : 'reject'}`,
+      `[GROUP][RESP_SEND][START] group=${groupId} decision=${accept ? 'accept' : 'reject'}`,
     );
 
     const chat = database.getChatByGroupId(groupId);
     if (!chat) throw new Error(`Group ${groupId} not found`);
-    const isTerminalStatus =
-      chat.group_status === 'removed'
-      || chat.group_status === 'left'
-      || chat.group_status === 'invite_expired'
-      || chat.group_status === 'disbanded';
+    const isTerminalStatus = TERMINAL_STATES.includes(chat.group_status || '')
     if (chat.group_status !== 'invited_pending' && !isTerminalStatus) {
       throw new Error(`Cannot respond to group ${groupId} in status ${chat.group_status}`);
     }
@@ -168,7 +154,7 @@ export class GroupResponder {
     const creatorPeerId = chat.group_creator_peer_id;
     if (!creatorPeerId) throw new Error(`Group ${groupId} has no creator`);
     console.log(
-      `[GROUP][TRACE][RESP_SEND][CHAT] group=${groupId} chatId=${chat.id} creator=${creatorPeerId.slice(-8)} status=${chat.group_status}`,
+      `[GROUP][RESP_SEND][CHAT] group=${groupId} chatId=${chat.id} creator=${creatorPeerId.slice(-8)} status=${chat.group_status}`,
     );
 
     // Find newest pending invite notification for this group
@@ -199,7 +185,7 @@ export class GroupResponder {
       throw new Error(`Invite for group ${groupId} has expired`);
     }
     console.log(
-      `[GROUP][TRACE][RESP_SEND][INVITE] group=${groupId} inviteId=${inviteData.inviteId} notificationId=${inviteNotification.id} expiresAt=${inviteData.expiresAt}`,
+      `[GROUP][RESP_SEND][INVITE] group=${groupId} inviteId=${inviteData.inviteId} notificationId=${inviteNotification.id} expiresAt=${inviteData.expiresAt}`,
     );
 
     const response: Omit<GroupInviteResponse, 'signature'> = {
@@ -215,7 +201,7 @@ export class GroupResponder {
     const signature = this.sign(response);
     const signedResponse: GroupInviteResponse = { ...response, signature };
     console.log(
-      `[GROUP][TRACE][RESP_SEND][PAYLOAD] group=${groupId} inviteId=${signedResponse.inviteId} msgId=${signedResponse.messageId} to=${creatorPeerId.slice(-8)} decision=${signedResponse.response}`,
+      `[GROUP][RESP_SEND][PAYLOAD] group=${groupId} inviteId=${signedResponse.inviteId} msgId=${signedResponse.messageId} to=${creatorPeerId.slice(-8)} decision=${signedResponse.response}`,
     );
 
     // Persist response for re-publish before first send (durability across crashes/restarts).
@@ -223,7 +209,7 @@ export class GroupResponder {
       groupId, creatorPeerId, 'GROUP_INVITE_RESPONSE', JSON.stringify(signedResponse),
     );
     console.log(
-      `[GROUP][TRACE][RESP_SEND][PENDING] group=${groupId} inviteId=${signedResponse.inviteId} msgId=${signedResponse.messageId} target=${creatorPeerId.slice(-8)} stored=true`,
+      `[GROUP][RESP_SEND][PENDING] group=${groupId} inviteId=${signedResponse.inviteId} msgId=${signedResponse.messageId} target=${creatorPeerId.slice(-8)} stored=true`,
     );
 
     // Update local UI state immediately after local intent is persisted.
@@ -237,13 +223,13 @@ export class GroupResponder {
       database.resetGroupRuntimeForReinvite(chat.id, groupId);
     }
     console.log(
-      `[GROUP][TRACE][RESP_SEND][LOCAL_STATE] group=${groupId} chatId=${chat.id} groupStatus=${nextGroupStatus} notification=${accept ? 'accepted' : 'rejected'}`,
+      `[GROUP][RESP_SEND][LOCAL_STATE] group=${groupId} chatId=${chat.id} groupStatus=${nextGroupStatus} notification=${accept ? 'accepted' : 'rejected'}`,
     );
 
     // Send via pairwise offline bucket to creator
     await this.sendControlMessageToPeer(creatorPeerId, signedResponse);
     console.log(
-      `[GROUP][TRACE][RESP_SEND][DONE] group=${groupId} inviteId=${signedResponse.inviteId} msgId=${signedResponse.messageId} target=${creatorPeerId.slice(-8)}`,
+      `[GROUP][RESP_SEND][DONE] group=${groupId} inviteId=${signedResponse.inviteId} msgId=${signedResponse.messageId} target=${creatorPeerId.slice(-8)}`,
     );
   }
 
@@ -293,7 +279,7 @@ export class GroupResponder {
     await this.sendControlMessageToPeer(creatorPeerId, signedLeaveRequest);
     this.applyLocalGroupLeaveState(chat.id, groupId);
     console.log(
-      `[GROUP][TRACE][LEAVE][DONE] group=${groupId} creator=${creatorPeerId.slice(-8)} msgId=${signedLeaveRequest.messageId}`,
+      `[GROUP][LEAVE][DONE] group=${groupId} creator=${creatorPeerId.slice(-8)} msgId=${signedLeaveRequest.messageId}`,
     );
   }
 
@@ -334,32 +320,32 @@ export class GroupResponder {
 
     await this.sendControlMessageToPeer(creatorPeerId, signedRequest);
     console.log(
-      `[GROUP][TRACE][RESYNC_REQ][SEND] group=${groupId} to=${creatorPeerId.slice(-8)} msgId=${signedRequest.messageId} knownKeyVersion=${signedRequest.knownKeyVersion}`,
+      `[GROUP][RESYNC_REQ][SEND] group=${groupId} to=${creatorPeerId.slice(-8)} msgId=${signedRequest.messageId} knownKeyVersion=${signedRequest.knownKeyVersion}`,
     );
   }
 
   handleInviteResponseAck(ack: GroupInviteResponseAck): void {
     const { database } = this.deps;
     console.log(
-      `[GROUP][TRACE][RESP_ACK][IN] group=${ack.groupId} inviteId=${ack.inviteId} ackedMsgId=${ack.ackedMessageId} ackId=${ack.ackId}`,
+      `[GROUP][RESP_ACK][IN] group=${ack.groupId} inviteId=${ack.inviteId} ackedMsgId=${ack.ackedMessageId} ackId=${ack.ackId}`,
     );
 
     const chat = database.getChatByGroupId(ack.groupId);
     if (!chat) {
-      console.log(`[GROUP][TRACE][RESP_ACK][DROP] group=${ack.groupId} reason=no_chat`);
+      console.log(`[GROUP][RESP_ACK][DROP] group=${ack.groupId} reason=no_chat`);
       return;
     }
 
     // Verify creator signature
     const creatorPeerId = chat.group_creator_peer_id;
     if (!creatorPeerId) {
-      console.log(`[GROUP][TRACE][RESP_ACK][DROP] group=${ack.groupId} reason=no_creator`);
+      console.log(`[GROUP][RESP_ACK][DROP] group=${ack.groupId} reason=no_creator`);
       return;
     }
 
     const creator = database.getUserByPeerId(creatorPeerId);
     if (!creator) {
-      console.log(`[GROUP][TRACE][RESP_ACK][DROP] group=${ack.groupId} reason=unknown_creator creator=${creatorPeerId.slice(-8)}`);
+      console.log(`[GROUP][RESP_ACK][DROP] group=${ack.groupId} reason=unknown_creator creator=${creatorPeerId.slice(-8)}`);
       return;
     }
 
@@ -371,7 +357,7 @@ export class GroupResponder {
     );
     if (!pendingResponse) {
       console.log(
-        `[GROUP][TRACE][RESP_ACK][DROP] group=${ack.groupId} reason=no_pending_response creator=${creatorPeerId.slice(-8)} pendingCount=${pendingAcks.length}`,
+        `[GROUP][RESP_ACK][DROP] group=${ack.groupId} reason=no_pending_response creator=${creatorPeerId.slice(-8)} pendingCount=${pendingAcks.length}`,
       );
       return;
     }
@@ -381,7 +367,7 @@ export class GroupResponder {
       storedResponse = JSON.parse(pendingResponse.message_payload) as GroupInviteResponse;
     } catch {
       console.log(
-        `[GROUP][TRACE][RESP_ACK][DROP] group=${ack.groupId} reason=invalid_pending_payload creator=${creatorPeerId.slice(-8)}`,
+        `[GROUP][RESP_ACK][DROP] group=${ack.groupId} reason=invalid_pending_payload creator=${creatorPeerId.slice(-8)}`,
       );
       return;
     }
@@ -389,13 +375,13 @@ export class GroupResponder {
     // ACK must match the currently pending response exactly.
     if (ack.ackedMessageId !== storedResponse.messageId) {
       console.log(
-        `[GROUP][TRACE][RESP_ACK][DROP] group=${ack.groupId} reason=message_id_mismatch pendingMsgId=${storedResponse.messageId} ackedMsgId=${ack.ackedMessageId}`,
+        `[GROUP][RESP_ACK][DROP] group=${ack.groupId} reason=message_id_mismatch pendingMsgId=${storedResponse.messageId} ackedMsgId=${ack.ackedMessageId}`,
       );
       return;
     }
     if (ack.inviteId !== storedResponse.inviteId) {
       console.log(
-        `[GROUP][TRACE][RESP_ACK][DROP] group=${ack.groupId} reason=invite_id_mismatch pendingInviteId=${storedResponse.inviteId} incomingInviteId=${ack.inviteId}`,
+        `[GROUP][RESP_ACK][DROP] group=${ack.groupId} reason=invite_id_mismatch pendingInviteId=${storedResponse.inviteId} incomingInviteId=${ack.inviteId}`,
       );
       return;
     }
@@ -403,7 +389,7 @@ export class GroupResponder {
     // Remove response from pending ACKs (stop re-publishing)
     database.removePendingAck(ack.groupId, creatorPeerId, 'GROUP_INVITE_RESPONSE');
     console.log(
-      `[GROUP][TRACE][RESP_ACK][APPLY] group=${ack.groupId} creator=${creatorPeerId.slice(-8)} inviteId=${ack.inviteId} ackedMsgId=${ack.ackedMessageId}`,
+      `[GROUP][RESP_ACK][APPLY] group=${ack.groupId} creator=${creatorPeerId.slice(-8)} inviteId=${ack.inviteId} ackedMsgId=${ack.ackedMessageId}`,
     );
   }
 
@@ -412,7 +398,7 @@ export class GroupResponder {
 
     const chat = database.getChatByGroupId(welcome.groupId);
     if (!chat) {
-      console.log(`[GROUP][TRACE][WELCOME][DROP] group=${welcome.groupId} reason=unknown_group`);
+      console.log(`[GROUP][WELCOME][DROP] group=${welcome.groupId} reason=unknown_group`);
       return;
     }
 
@@ -443,7 +429,7 @@ export class GroupResponder {
       }
       await this.sendWelcomeAck(welcome);
       console.log(
-        `[GROUP][TRACE][WELCOME][DUPLICATE] group=${welcome.groupId} msgId=${welcome.messageId} ackResent=true`,
+        `[GROUP][WELCOME][DUPLICATE] group=${welcome.groupId} msgId=${welcome.messageId} ackResent=true`,
       );
       return;
     }
@@ -489,7 +475,7 @@ export class GroupResponder {
     database.transitionChatGroupStatus(chat.id, 'active' satisfies GroupStatus, 'welcome_applied');
     database.updateChatStatus(chat.id, 'active');
     console.log(
-      `[GROUP][TRACE][WELCOME][APPLY] group=${welcome.groupId} chatId=${chat.id} keyVersion=${welcome.keyVersion} rosterSize=${welcome.roster.length} status=active`,
+      `[GROUP][WELCOME][APPLY] group=${welcome.groupId} chatId=${chat.id} keyVersion=${welcome.keyVersion} rosterSize=${welcome.roster.length} status=active`,
     );
 
     // Creator has definitely processed our invite response if they sent welcome.
@@ -515,43 +501,28 @@ export class GroupResponder {
     // Send ACK back to creator
     await this.sendWelcomeAck(welcome);
     console.log(
-      `[GROUP][TRACE][WELCOME][DONE] group=${welcome.groupId} msgId=${welcome.messageId} ackSent=true`,
+      `[GROUP][WELCOME][DONE] group=${welcome.groupId} msgId=${welcome.messageId} ackSent=true`,
     );
-    void this.syncGroupInfoChainFromDht(welcome.groupId, chat.id, welcome.keyVersion, creator.signing_public_key);
   }
 
   async handleGroupStateUpdate(update: GroupStateUpdate): Promise<void> {
     const { database, userIdentity } = this.deps;
+    const inbound = this.resolveChatAndCreatorForInbound({
+      groupId: update.groupId,
+      messageId: update.messageId,
+      dropTag: 'STATE_UPDATE',
+    });
+    if (!inbound) return;
+    const { chat, creatorPeerId, creator } = inbound;
 
-    const chat = database.getChatByGroupId(update.groupId);
-    if (!chat) {
-      console.log(`[GROUP][TRACE][STATE_UPDATE][DROP] group=${update.groupId} reason=unknown_group`);
-      return;
-    }
-
-    const creatorPeerId = chat.group_creator_peer_id;
-    if (!creatorPeerId) {
-      console.log(`[GROUP][TRACE][STATE_UPDATE][DROP] group=${update.groupId} reason=no_creator`);
-      return;
-    }
-
-    const creator = database.getUserByPeerId(creatorPeerId);
-    if (!creator) {
-      console.log(`[GROUP][TRACE][STATE_UPDATE][DROP] group=${update.groupId} reason=unknown_creator creator=${creatorPeerId.slice(-8)}`);
-      return;
-    }
-    if (!Number.isFinite(update.timestamp) || update.timestamp <= 0) {
-      console.log(
-        `[GROUP][TRACE][STATE_UPDATE][DROP] group=${update.groupId} msgId=${update.messageId} reason=missing_or_invalid_timestamp`,
-      );
-      return;
-    }
-    const normalizedEventTimestamp = this.normalizeRemoteEventTimestamp(
+    const normalizedEventTimestamp = this.normalizeInboundTimestampOrDrop(
       update.timestamp,
       'STATE_UPDATE',
       update.groupId,
       update.messageId,
     );
+    if (normalizedEventTimestamp === null) return;
+
     this.verifySignature(update, creator.signing_public_key);
 
     if (chat.group_status === 'left' || chat.group_status === 'removed' || chat.group_status === 'disbanded') {
@@ -562,7 +533,7 @@ export class GroupResponder {
         update.messageId,
       );
       console.log(
-        `[GROUP][TRACE][STATE_UPDATE][DROP] group=${update.groupId} msgId=${update.messageId} reason=local_terminal_status status=${chat.group_status}`,
+        `[GROUP][STATE_UPDATE][DROP] group=${update.groupId} msgId=${update.messageId} reason=local_terminal_status status=${chat.group_status}`,
       );
       return;
     }
@@ -576,7 +547,7 @@ export class GroupResponder {
         update.messageId,
       );
       console.log(
-        `[GROUP][TRACE][STATE_UPDATE][DUPLICATE] group=${update.groupId} msgId=${update.messageId} currentKeyVersion=${currentKeyVersion} incomingKeyVersion=${update.keyVersion}`,
+        `[GROUP][STATE_UPDATE][DUPLICATE] group=${update.groupId} msgId=${update.messageId} currentKeyVersion=${currentKeyVersion} incomingKeyVersion=${update.keyVersion}`,
       );
       return;
     }
@@ -601,7 +572,7 @@ export class GroupResponder {
         update.messageId,
       );
       console.log(
-        `[GROUP][TRACE][STATE_UPDATE][APPLY_SELF_KICK] group=${update.groupId} msgId=${update.messageId} keyVersion=${update.keyVersion}`,
+        `[GROUP][STATE_UPDATE][APPLY_SELF_KICK] group=${update.groupId} msgId=${update.messageId} keyVersion=${update.keyVersion}`,
       );
       return;
     }
@@ -658,7 +629,7 @@ export class GroupResponder {
       );
     } else {
       console.log(
-        `[GROUP][TRACE][STATE_UPDATE][RESYNC_APPLY] group=${update.groupId} msgId=${update.messageId} keyVersion=${update.keyVersion}`,
+        `[GROUP][STATE_UPDATE][RESYNC_APPLY] group=${update.groupId} msgId=${update.messageId} keyVersion=${update.keyVersion}`,
       );
     }
 
@@ -669,45 +640,47 @@ export class GroupResponder {
       update.messageId,
     );
     console.log(
-      `[GROUP][TRACE][STATE_UPDATE][APPLY] group=${update.groupId} msgId=${update.messageId} keyVersion=${update.keyVersion} rosterSize=${update.roster.length} event=${update.event} target=${update.targetPeerId.slice(-8)}`,
+      `[GROUP][STATE_UPDATE][APPLY] group=${update.groupId} msgId=${update.messageId} keyVersion=${update.keyVersion} rosterSize=${update.roster.length} event=${update.event} target=${update.targetPeerId.slice(-8)}`,
     );
-    void this.syncGroupInfoChainFromDht(update.groupId, chat.id, update.keyVersion, creator.signing_public_key);
+  }
+
+  async syncGroupInfoForLocalChat(groupId: string): Promise<void> {
+    const chat = this.deps.database.getChatByGroupId(groupId);
+    if (!chat) return;
+
+    const localKeyVersion = chat.key_version ?? 0;
+    if (localKeyVersion < 1) return;
+
+    const creatorPeerId = chat.group_creator_peer_id;
+    if (!creatorPeerId) return;
+    const creator = this.deps.database.getUserByPeerId(creatorPeerId);
+    if (!creator) return;
+
+    await this.syncGroupInfoChainFromDht(groupId, chat.id, localKeyVersion, creator.signing_public_key);
   }
 
   async handleGroupKick(kick: GroupKick): Promise<boolean> {
-    const { database } = this.deps;
-    const chat = database.getChatByGroupId(kick.groupId);
-    if (!chat) {
-      console.log(`[GROUP][TRACE][KICK][DROP] group=${kick.groupId} reason=unknown_group`);
-      return false;
-    }
+    const inbound = this.resolveChatAndCreatorForInbound({
+      groupId: kick.groupId,
+      messageId: kick.messageId,
+      dropTag: 'KICK',
+    });
+    if (!inbound) return false;
+    const { chat, creatorPeerId, creator } = inbound;
 
-    const creatorPeerId = chat.group_creator_peer_id;
-    if (!creatorPeerId) {
-      console.log(`[GROUP][TRACE][KICK][DROP] group=${kick.groupId} reason=no_creator`);
-      return false;
-    }
-    const creator = database.getUserByPeerId(creatorPeerId);
-    if (!creator) {
-      console.log(`[GROUP][TRACE][KICK][DROP] group=${kick.groupId} reason=unknown_creator creator=${creatorPeerId.slice(-8)}`);
-      return false;
-    }
-    if (!Number.isFinite(kick.timestamp) || kick.timestamp <= 0) {
-      console.log(`[GROUP][TRACE][KICK][DROP] group=${kick.groupId} msgId=${kick.messageId} reason=invalid_timestamp`);
-      return false;
-    }
-    const normalizedKickTimestamp = this.normalizeRemoteEventTimestamp(
+    const normalizedKickTimestamp = this.normalizeInboundTimestampOrDrop(
       kick.timestamp,
       'KICK',
       kick.groupId,
       kick.messageId,
     );
+    if (normalizedKickTimestamp === null) return false;
 
     this.verifySignature(kick, creator.signing_public_key);
 
     if (kick.kickedPeerId !== this.deps.myPeerId) {
       console.log(
-        `[GROUP][TRACE][KICK][DROP] group=${kick.groupId} msgId=${kick.messageId} reason=not_target target=${kick.kickedPeerId.slice(-8)}`,
+        `[GROUP][KICK][DROP] group=${kick.groupId} msgId=${kick.messageId} reason=not_target target=${kick.kickedPeerId.slice(-8)}`,
       );
       return false;
     }
@@ -726,7 +699,7 @@ export class GroupResponder {
         kick.messageId,
       );
       console.log(
-        `[GROUP][TRACE][KICK][DUPLICATE] group=${kick.groupId} msgId=${kick.messageId} currentKeyVersion=${currentKeyVersion} incomingKeyVersion=${kick.keyVersion}`,
+        `[GROUP][KICK][DUPLICATE] group=${kick.groupId} msgId=${kick.messageId} currentKeyVersion=${currentKeyVersion} incomingKeyVersion=${kick.keyVersion}`,
       );
       return true;
     }
@@ -738,7 +711,7 @@ export class GroupResponder {
         kick.messageId,
       );
       console.log(
-        `[GROUP][TRACE][KICK][DROP] group=${kick.groupId} msgId=${kick.messageId} reason=stale_key_version currentKeyVersion=${currentKeyVersion} incomingKeyVersion=${kick.keyVersion}`,
+        `[GROUP][KICK][DROP] group=${kick.groupId} msgId=${kick.messageId} reason=stale_key_version currentKeyVersion=${currentKeyVersion} incomingKeyVersion=${kick.keyVersion}`,
       );
       return false;
     }
@@ -767,7 +740,7 @@ export class GroupResponder {
       kick.messageId,
     );
     console.log(
-      `[GROUP][TRACE][KICK][APPLY] group=${kick.groupId} msgId=${kick.messageId} keyVersion=${kick.keyVersion}`,
+      `[GROUP][KICK][APPLY] group=${kick.groupId} msgId=${kick.messageId} keyVersion=${kick.keyVersion}`,
     );
     return true;
   }
@@ -776,20 +749,17 @@ export class GroupResponder {
     const { database } = this.deps;
     const chat = database.getChatByGroupId(disband.groupId);
     const fallbackCreator = database.getUserByPeerId(disband.creatorPeerId);
-    if (!Number.isFinite(disband.timestamp) || disband.timestamp <= 0) {
-      console.log(`[GROUP][TRACE][DISBAND][DROP] group=${disband.groupId} msgId=${disband.messageId} reason=invalid_timestamp`);
-      return false;
-    }
-    const normalizedDisbandTimestamp = this.normalizeRemoteEventTimestamp(
+    const normalizedDisbandTimestamp = this.normalizeInboundTimestampOrDrop(
       disband.timestamp,
       'DISBAND',
       disband.groupId,
       disband.messageId,
     );
+    if (normalizedDisbandTimestamp === null) return false;
 
     if (!chat) {
       if (!fallbackCreator) {
-        console.log(`[GROUP][TRACE][DISBAND][DROP] group=${disband.groupId} reason=unknown_group_and_creator`);
+        console.log(`[GROUP][DISBAND][DROP] group=${disband.groupId} reason=unknown_group_and_creator`);
         return false;
       }
       this.verifySignature(disband, fallbackCreator.signing_public_key);
@@ -800,50 +770,41 @@ export class GroupResponder {
         GroupMessageType.GROUP_DISBAND,
         disband.messageId,
       );
-      console.log(`[GROUP][TRACE][DISBAND][ACK_ONLY_NO_CHAT] group=${disband.groupId} msgId=${disband.messageId}`);
+      console.log(`[GROUP][DISBAND][ACK_ONLY_NO_CHAT] group=${disband.groupId} msgId=${disband.messageId}`);
       return true;
     }
-
-    const creatorPeerId = chat.group_creator_peer_id;
-    if (!creatorPeerId) {
-      console.log(`[GROUP][TRACE][DISBAND][DROP] group=${disband.groupId} reason=no_creator`);
-      return false;
-    }
-    if (creatorPeerId !== disband.creatorPeerId) {
-      console.log(
-        `[GROUP][TRACE][DISBAND][DROP] group=${disband.groupId} msgId=${disband.messageId} reason=creator_mismatch expected=${creatorPeerId.slice(-8)} got=${disband.creatorPeerId.slice(-8)}`,
-      );
-      return false;
-    }
-
-    const creator = fallbackCreator ?? database.getUserByPeerId(creatorPeerId);
-    if (!creator) {
-      console.log(`[GROUP][TRACE][DISBAND][DROP] group=${disband.groupId} reason=unknown_creator creator=${creatorPeerId.slice(-8)}`);
-      return false;
-    }
+    const inbound = this.resolveChatAndCreatorForInbound({
+      groupId: disband.groupId,
+      messageId: disband.messageId,
+      dropTag: 'DISBAND',
+      expectedCreatorPeerId: disband.creatorPeerId,
+      preferredCreator: fallbackCreator,
+    });
+    if (!inbound) return false;
+    const { chat: chatWithCreator, creatorPeerId, creator } = inbound;
 
     this.verifySignature(disband, creator.signing_public_key);
 
-    if (chat.group_status !== 'disbanded') {
-      this.applyLocalGroupDisbandedState(chat.id, disband.groupId);
+    if (chatWithCreator.group_status !== 'disbanded') {
+      this.applyLocalGroupDisbandedState(chatWithCreator.id, disband.groupId);
       await this.appendDisbandSystemMessage(
-        chat.id,
+        chatWithCreator.id,
         disband.groupId,
         creatorPeerId,
         creator.username,
         normalizedDisbandTimestamp,
       );
       this.deps.onGroupMembersUpdated?.({
-        chatId: chat.id,
+        chatId: chatWithCreator.id,
         groupId: disband.groupId,
         memberPeerId: creatorPeerId,
       });
       console.log(
-        `[GROUP][TRACE][DISBAND][APPLY] group=${disband.groupId} msgId=${disband.messageId}`,
+        `[GROUP][DISBAND][APPLY] group=${disband.groupId} msgId=${disband.messageId}`,
       );
     } else {
       console.log(
-        `[GROUP][TRACE][DISBAND][DUPLICATE] group=${disband.groupId} msgId=${disband.messageId}`,
+        `[GROUP][DISBAND][DUPLICATE] group=${disband.groupId} msgId=${disband.messageId}`,
       );
     }
 
@@ -864,7 +825,7 @@ export class GroupResponder {
       throw new Error(`Invalid pending ACK payload for ${targetPeerId}`);
     }
     console.log(
-      `[GROUP][TRACE][REPUBLISH][RESPONDER] target=${targetPeerId.slice(-8)} ${this.describeControlMessage(parsed)}`,
+      `[GROUP][REPUBLISH][RESPONDER] target=${targetPeerId.slice(-8)} ${this.describeControlMessage(parsed)}`,
     );
     await this.sendControlMessageToPeer(targetPeerId, parsed);
   }
@@ -879,7 +840,7 @@ export class GroupResponder {
       welcome.messageId,
     );
     console.log(
-      `[GROUP][TRACE][WELCOME_ACK][SEND] group=${welcome.groupId} to=${creatorPeerId.slice(-8)} ackedMsgId=${welcome.messageId}`,
+      `[GROUP][WELCOME_ACK][SEND] group=${welcome.groupId} to=${creatorPeerId.slice(-8)} ackedMsgId=${welcome.messageId}`,
     );
   }
 
@@ -894,7 +855,7 @@ export class GroupResponder {
     const signature = this.sign(ack);
     const signedAck: GroupInviteDeliveredAck = { ...ack, signature };
     console.log(
-      `[GROUP][TRACE][DELIVERED_ACK][SEND] group=${invite.groupId} inviteId=${invite.inviteId} to=${invite.inviterPeerId.slice(-8)} ackId=${signedAck.ackId}`,
+      `[GROUP][DELIVERED_ACK][SEND] group=${invite.groupId} inviteId=${invite.inviteId} to=${invite.inviterPeerId.slice(-8)} ackId=${signedAck.ackId}`,
     );
     await this.sendControlMessageToPeer(invite.inviterPeerId, signedAck);
   }
@@ -919,6 +880,69 @@ export class GroupResponder {
   }
 
   // --- Helpers ---
+
+  private resolveChatAndCreatorForInbound(options: {
+    groupId: string;
+    messageId: string;
+    dropTag: 'STATE_UPDATE' | 'KICK' | 'DISBAND';
+    expectedCreatorPeerId?: string;
+    preferredCreator?: ReturnType<ChatDatabase['getUserByPeerId']> | null;
+  }): {
+    chat: NonNullable<ReturnType<ChatDatabase['getChatByGroupId']>>;
+    creatorPeerId: string;
+    creator: NonNullable<ReturnType<ChatDatabase['getUserByPeerId']>>;
+  } | null {
+    const { database } = this.deps;
+    const chat = database.getChatByGroupId(options.groupId);
+    if (!chat) {
+      console.log(`[GROUP][${options.dropTag}][DROP] group=${options.groupId} reason=unknown_group`);
+      return null;
+    }
+
+    const creatorPeerId = chat.group_creator_peer_id;
+    if (!creatorPeerId) {
+      console.log(`[GROUP][${options.dropTag}][DROP] group=${options.groupId} reason=no_creator`);
+      return null;
+    }
+
+    if (options.expectedCreatorPeerId && creatorPeerId !== options.expectedCreatorPeerId) {
+      console.log(
+        `[GROUP][${options.dropTag}][DROP] group=${options.groupId} msgId=${options.messageId} reason=creator_mismatch expected=${creatorPeerId.slice(-8)} got=${options.expectedCreatorPeerId.slice(-8)}`,
+      );
+      return null;
+    }
+
+    const creator = (
+      options.preferredCreator?.peer_id === creatorPeerId
+        ? options.preferredCreator
+        : database.getUserByPeerId(creatorPeerId)
+    );
+    if (!creator) {
+      console.log(`[GROUP][${options.dropTag}][DROP] group=${options.groupId} reason=unknown_creator creator=${creatorPeerId.slice(-8)}`);
+      return null;
+    }
+
+    return { chat, creatorPeerId, creator };
+  }
+
+  private normalizeInboundTimestampOrDrop(
+    timestamp: number,
+    messageType: 'STATE_UPDATE' | 'KICK' | 'DISBAND',
+    groupId: string,
+    messageId: string,
+  ): number | null {
+    if (!Number.isFinite(timestamp) || timestamp <= 0) {
+      console.log(`[GROUP][${messageType}][DROP] group=${groupId} msgId=${messageId} reason=invalid_timestamp`);
+      return null;
+    }
+
+    return this.normalizeRemoteEventTimestamp(
+      timestamp,
+      messageType,
+      groupId,
+      messageId,
+    );
+  }
 
   private sign(payload: object): string {
     const payloadBytes = new TextEncoder().encode(JSON.stringify(payload));
@@ -976,7 +1000,7 @@ export class GroupResponder {
     const lastAckSent = database.getOfflineLastAckSentByPeerId(peerId);
     const shouldSendAck = lastReadTimestamp > lastAckSent;
     console.log(
-      `[GROUP][TRACE][SEND] to=${peerId.slice(-8)} bucket=*${bucketTag} shouldAck=${shouldSendAck} ackTs=${shouldSendAck ? lastReadTimestamp : 0} ${this.describeControlMessage(message)}`,
+      `[GROUP][SEND] to=${peerId.slice(-8)} bucket=*${bucketTag} shouldAck=${shouldSendAck} ackTs=${shouldSendAck ? lastReadTimestamp : 0} ${this.describeControlMessage(message)}`,
     );
 
     const offlineMessage = OfflineMessageManager.createOfflineMessage(
@@ -998,7 +1022,7 @@ export class GroupResponder {
       { bypassControlReserve: true },
     );
     console.log(
-      `[GROUP][TRACE][SEND][DHT_OK] to=${peerId.slice(-8)} bucket=*${bucketTag} offlineMsgId=${offlineMessage.id} ${this.describeControlMessage(message)}`,
+      `[GROUP][SEND][DHT_OK] to=${peerId.slice(-8)} bucket=*${bucketTag} offlineMsgId=${offlineMessage.id} ${this.describeControlMessage(message)}`,
     );
 
     if (shouldSendAck) {
@@ -1032,27 +1056,21 @@ export class GroupResponder {
     if (history.length === 0) return;
 
     const historyByVersion = new Map<number, typeof history[number]>();
+    let minMissingVersion = Number.POSITIVE_INFINITY;
+    let missingEpochCount = 0;
     for (const row of history) {
       historyByVersion.set(row.key_version, row);
-    }
-
-    const missingLocalVersions: number[] = [];
-    for (const row of history) {
       const needsStateHash = !row.state_hash;
       const needsUsedUntil = row.key_version < localKeyVersion && row.used_until == null;
       if (needsStateHash || needsUsedUntil) {
-        missingLocalVersions.push(row.key_version);
+        missingEpochCount += 1;
+        if (row.key_version < minMissingVersion) {
+          minMissingVersion = row.key_version;
+        }
       }
     }
-    if (missingLocalVersions.length === 0) {
-      console.log(
-        `[GROUP-INFO][SYNC][SKIP] group=${groupId} chatId=${chatId} reason=already_synced localKeyVersion=${localKeyVersion}`,
-      );
-      return;
-    }
-    console.log(
-      `[GROUP-INFO][SYNC][START] group=${groupId} chatId=${chatId} localKeyVersion=${localKeyVersion} missingEpochs=${missingLocalVersions.length}`,
-    );
+    if (missingEpochCount === 0) return;
+    console.log(`[GROUP-INFO][START] group=${groupId} localKeyVersion=${localKeyVersion} missingEpochs=${missingEpochCount}`);
 
     const creatorPubBytes = Buffer.from(creatorSigningPubKeyBase64, 'base64');
     const creatorPubKeyBase64url = toBase64Url(creatorPubBytes);
@@ -1074,7 +1092,6 @@ export class GroupResponder {
     }
 
     const maxRelevantVersion = Math.min(latestVersion, localKeyVersion);
-    const minMissingVersion = Math.min(...missingLocalVersions);
     if (minMissingVersion > maxRelevantVersion) {
       console.log(
         `[GROUP-INFO][SYNC][SKIP] group=${groupId} chatId=${chatId} reason=latest_behind_local latestVersion=${latestVersion} localKeyVersion=${localKeyVersion}`,
@@ -1083,50 +1100,43 @@ export class GroupResponder {
     }
 
     let fetchStartVersion = minMissingVersion;
+    let previousStateHash = '';
     if (fetchStartVersion > 1) {
-      const previous = historyByVersion.get(fetchStartVersion - 1);
-      if (!previous?.state_hash) {
+      let anchorVersion = fetchStartVersion - 1;
+      while (anchorVersion >= 1) {
+        const anchorStateHash = historyByVersion.get(anchorVersion)?.state_hash;
+        if (anchorStateHash) {
+          fetchStartVersion = anchorVersion + 1;
+          previousStateHash = anchorStateHash;
+          break;
+        }
+        anchorVersion -= 1;
+      }
+      if (anchorVersion < 1) {
         fetchStartVersion = 1;
       }
     }
-    if (fetchStartVersion > maxRelevantVersion) {
-      console.log(
-        `[GROUP-INFO][SYNC][SKIP] group=${groupId} chatId=${chatId} reason=nothing_to_fetch fetchStart=${fetchStartVersion} maxRelevant=${maxRelevantVersion}`,
-      );
-      return;
-    }
-    console.log(
-      `[GROUP-INFO][SYNC][FETCH_PLAN] group=${groupId} chatId=${chatId} latestVersion=${latestVersion} fetchRange=${fetchStartVersion}-${maxRelevantVersion} concurrency=5`,
-    );
 
+    console.log(`[GROUP-INFO][SYNC][FETCH_PLAN] group=${groupId} fetchRange=${fetchStartVersion}-${maxRelevantVersion}`);
+    
+    const fetchConcurrency = 5;
     const versionedRecords = await this.fetchVersionedRecordsRange(
       groupId,
       creatorPubKeyBase64url,
       creatorPubBytes,
       fetchStartVersion,
       maxRelevantVersion,
-      5,
+      fetchConcurrency,
     );
     if (!versionedRecords) {
       return;
     }
 
-    let previousStateHash = '';
-    if (fetchStartVersion > 1) {
-      previousStateHash = historyByVersion.get(fetchStartVersion - 1)?.state_hash ?? '';
-      if (!previousStateHash) {
-        console.warn(
-          `[GROUP-INFO][SYNC][CHAIN_FAIL] group=${groupId} chatId=${chatId} reason=missing_anchor_hash version=${fetchStartVersion - 1}`,
-        );
-        return;
-      }
-    }
+    // Check chain hash validity
     for (let version = fetchStartVersion; version <= maxRelevantVersion; version++) {
       const record = versionedRecords.get(version);
       if (!record) {
-        console.warn(
-          `[GROUP-INFO][SYNC][CHAIN_FAIL] group=${groupId} chatId=${chatId} reason=version_gap version=${version} maxRelevantVersion=${maxRelevantVersion}`,
-        );
+        console.warn(`[GROUP-INFO][SYNC][CHAIN_FAIL] group=${groupId} chatId=${chatId} reason=version_gap version=${version}`);
         return;
       }
 
@@ -1147,6 +1157,8 @@ export class GroupResponder {
       previousStateHash = record.stateHash;
     }
 
+    // if local state is more updated than dht info-latest state,
+    // check if we even fetched it correctly in the versioned records
     if (latestVersion <= maxRelevantVersion) {
       const latestVersioned = versionedRecords.get(latestVersion);
       if (!latestVersioned || latestVersioned.stateHash !== latest.latestStateHash) {
@@ -1209,6 +1221,7 @@ export class GroupResponder {
         const version = versions[current];
         if (version === undefined) break;
         const dhtKey = `${this.groupInfoVersionPrefix}/${groupId}/${creatorPubKeyBase64url}/${version}`;
+        console.log("MARINPARIN fetchan verziju ", version, groupId)
         const record = await this.fetchVersionedGroupInfoRecord(dhtKey, groupId, version, creatorPubKey);
         if (!record) {
           failedVersion = version;
@@ -1362,7 +1375,7 @@ export class GroupResponder {
     const now = Date.now();
     if (timestamp > now + GROUP_MESSAGE_MAX_FUTURE_SKEW_MS) {
       console.warn(
-        `[GROUP][TRACE][${messageType}][TIMESTAMP_CLAMP] group=${groupId} msgId=${messageId} remoteTs=${timestamp} clampedTs=${now}`,
+        `[GROUP][${messageType}][TIMESTAMP_CLAMP] group=${groupId} msgId=${messageId} remoteTs=${timestamp} clampedTs=${now}`,
       );
       return now;
     }
