@@ -49,6 +49,8 @@ export async function groupOfflineMessageValidator(
   key: Uint8Array,
   value: Uint8Array
 ): Promise<void> {
+  const startedAt = Date.now();
+  let acceptedMessageCount = 0;
   if (value.length > GROUP_OFFLINE_STORE_MAX_COMPRESSED_BYTES) {
     throw new Error(
       `Group offline store too large (${value.length}B > ${GROUP_OFFLINE_STORE_MAX_COMPRESSED_BYTES}B)`,
@@ -174,9 +176,16 @@ export async function groupOfflineMessageValidator(
       throw new Error(`Message ${messageId} signature verification failed`);
     }
   }
-  console.log(
-    `DHT validator: accepted write to ${keyStr.slice(0, 80)}... with ${store.messages.length} messages`
-  );
+  acceptedMessageCount = store.messages.length;
+  const validatorMs = Date.now() - startedAt;
+  const timingLog =
+    `[GROUP-VALIDATOR][OFFLINE][TIMING] key=${keyStr.slice(0, 80)}... ` +
+    `compressedBytes=${value.length} messages=${acceptedMessageCount} took=${validatorMs}ms`;
+  if (validatorMs > 1000) {
+    console.warn(timingLog);
+  } else {
+    console.log(timingLog);
+  }
 }
 
 // --- Group offline bucket selector ---
