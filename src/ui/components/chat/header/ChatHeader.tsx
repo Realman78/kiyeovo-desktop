@@ -664,7 +664,9 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
   const pendingInvitePeers = groupMembers
     .filter((member) => member.status === 'pending')
     .map((member) => ({ peerId: member.peerId, username: member.username }));
-  const kickableMembers = groupMembers.filter((member) => member.status === 'confirmed');
+  const kickableMembers = groupMembers.filter(
+    (member) => member.status === 'confirmed' || member.status === 'accepted',
+  );
   const groupInfoCreatorName = isCurrentUserGroupCreator
     ? 'You'
     : (groupInfoDetails?.creatorUsername || activeChat?.groupCreatorUsername || 'Unknown');
