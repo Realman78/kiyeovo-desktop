@@ -135,7 +135,8 @@ async function createBootstrapNode(): Promise<ChatNode> {
         minTimeout: isAnonymousMode ? 30000 : 5000,
         maxTimeout: isAnonymousMode ? 120000 : 30000,
       },
-      abortConnectionOnPingFailure: !isAnonymousMode,
+      // Keep connections alive on transient ping misses; periodic health checker handles reconnect policy.
+      abortConnectionOnPingFailure: false,
     },
     services: {
       pubsub: gossipsub({

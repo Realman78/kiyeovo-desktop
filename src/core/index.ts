@@ -152,6 +152,10 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
   let dhtStatusCheckSeq = 0;
   let reconnectInProgress = false;
   let currentDhtConnected: boolean | null = null;
+  let consecutiveProbeFailures = 0;
+  let lastReconnectAt = 0;
+  const DHT_RECONNECT_FAILURE_THRESHOLD = 3;
+  const DHT_RECONNECT_COOLDOWN_MS = 120_000;
   const activeDhtProtocol = getNetworkModeConfig(networkMode).dhtProtocol;
   const emitDhtStatus = (connected: boolean, reason: string) => {
     const peers = node.getConnections().map((p) => p.remotePeer.toString());
@@ -246,12 +250,14 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
         console.log(`[P2P Core] Peers: ${allConnections.map(p => p.remotePeer.toString())}`);
 
         if (allConnections.length === 0) {
+          consecutiveProbeFailures = 0;
           emitDhtStatus(false, 'no_connections');
           return;
         }
 
         const dhtConnections = await getDhtCapableConnections();
         if (dhtConnections.length === 0) {
+          consecutiveProbeFailures = 0;
           emitDhtStatus(false, 'no_dht_protocol_peers');
           return;
         }
@@ -259,13 +265,32 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
         // Verify at least one DHT-capable peer is reachable before reporting "connected".
         const anyAlive = await probeAnyAliveConnection(dhtConnections);
         if (!anyAlive) {
+          consecutiveProbeFailures += 1;
           emitDhtStatus(false, 'probe_failed');
+          console.warn(
+            `[DHT-STATUS][CORE][RECONNECT][GATE] probeFailures=${consecutiveProbeFailures}/${DHT_RECONNECT_FAILURE_THRESHOLD}`,
+          );
+
+          if (consecutiveProbeFailures < DHT_RECONNECT_FAILURE_THRESHOLD) {
+            return;
+          }
+
+          const now = Date.now();
+          const sinceLastReconnect = now - lastReconnectAt;
+          if (lastReconnectAt > 0 && sinceLastReconnect < DHT_RECONNECT_COOLDOWN_MS) {
+            console.log(
+              `[DHT-STATUS][CORE][RECONNECT][SKIP] reason=cooldown probeFailures=${consecutiveProbeFailures} ` +
+              `waitMs=${DHT_RECONNECT_COOLDOWN_MS - sinceLastReconnect}`,
+            );
+            return;
+          }
 
           if (reconnectInProgress) {
             console.log('[P2P Core] Reconnect already in progress, skipping duplicate reconnect attempt');
             return;
           }
 
+          lastReconnectAt = now;
           reconnectInProgress = true;
           try {
             console.log('[P2P Core] All sampled connections appear stale; closing and reconnecting...');
@@ -282,6 +307,7 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
             const liveCount = aliveAfterReconnect ? dhtAfterReconnect.length : 0;
             emitDhtStatus(liveCount > 0, 'post_reconnect_dht_probe');
             if (liveCount > 0) {
+              consecutiveProbeFailures = 0;
               console.log(`[P2P Core] Network status: ${liveCount} DHT peer(s) connected after reconnect`);
             }
             return;
@@ -290,6 +316,7 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
           }
         }
 
+        consecutiveProbeFailures = 0;
         const liveCount = dhtConnections.length;
         emitDhtStatus(liveCount > 0, 'probe_ok');
         if (liveCount > 0) {

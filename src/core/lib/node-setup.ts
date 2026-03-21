@@ -382,7 +382,8 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
           minTimeout: isAnonymousMode ? 30000 : 5000,    // 30s for Tor, 5s for local
           maxTimeout: isAnonymousMode ? 120000 : 30000,  // 2 min for Tor, 30s for local
         },
-        abortConnectionOnPingFailure: !isAnonymousMode,  // Don't abort on Tor, do on local
+        // Keep connections alive on transient ping misses; periodic health checker handles reconnect policy.
+        abortConnectionOnPingFailure: false,
       },
       connectionGater: createConnectionGater(database),
       services: {
