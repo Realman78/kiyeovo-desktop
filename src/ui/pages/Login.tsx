@@ -196,9 +196,6 @@ export const Login = ({ initStatus }: LoginProps) => {
                     error={modeError}
                     onChange={handleNetworkModeChange}
                 />
-                <div className="mt-2 text-center w-114">
-                    <p className="text-xs text-muted-foreground">*Privacy notice: Fast and Anonymous modes currently share the same identity. If you use both modes, someone who knows your identity in one mode could link it to the other. For maximum privacy, use only Anonymous mode.</p>
-                </div>
             </div>
             <div className="text-xs text-muted-foreground">
                 {isModeSaving ? `Applying ${networkMode === NETWORK_MODES.ANONYMOUS ? 'Anonymous' : 'Fast'} mode...` : ''}
