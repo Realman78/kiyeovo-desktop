@@ -31,6 +31,7 @@ import type {
   CallSignalMessage,
   CallSignalType,
   UnsignedCallSignalMessage,
+  CallMediaType,
 } from '../types.js';
 import {
   CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES,
@@ -90,6 +91,7 @@ type ActiveCall = {
   callId: string;
   peerId: string;
   direction: 'incoming' | 'outgoing';
+  mediaType: CallMediaType;
   state: 'ringing_out' | 'ringing_in' | 'connecting' | 'active';
 };
 
@@ -627,6 +629,7 @@ export class MessageHandler {
       peerId: activeCall.peerId,
       state: activeCall.state,
       direction: activeCall.direction,
+      mediaType: activeCall.mediaType,
       timestamp: Date.now(),
     });
   }
@@ -641,6 +644,7 @@ export class MessageHandler {
       peerId: previous.peerId,
       state: 'ended',
       direction: previous.direction,
+      mediaType: previous.mediaType,
       reason,
       timestamp: Date.now(),
     });
@@ -735,7 +739,9 @@ export class MessageHandler {
 
     switch (signal.type) {
       case 'CALL_OFFER':
-        return typeof signal.offerSdp === 'string' && signal.offerSdp.length > 0;
+        return typeof signal.offerSdp === 'string'
+          && signal.offerSdp.length > 0
+          && (signal.mediaType === 'audio' || signal.mediaType === 'video');
       case 'CALL_ANSWER':
         return typeof signal.answerSdp === 'string' && signal.answerSdp.length > 0;
       case 'CALL_ICE':
@@ -772,7 +778,7 @@ export class MessageHandler {
 
     switch (signal.type) {
       case 'CALL_OFFER':
-        return { ...common, offerSdp: signal.offerSdp };
+        return { ...common, offerSdp: signal.offerSdp, mediaType: signal.mediaType };
       case 'CALL_ANSWER':
         return { ...common, answerSdp: signal.answerSdp };
       case 'CALL_ICE':
@@ -813,6 +819,7 @@ export class MessageHandler {
           toPeerId: input.toPeerId,
           timestamp,
           offerSdp: input.offerSdp,
+          mediaType: input.mediaType,
         };
         break;
       case 'CALL_ANSWER':
@@ -1035,6 +1042,7 @@ export class MessageHandler {
         callId: signal.callId,
         peerId: remoteId,
         direction: 'incoming',
+        mediaType: signal.mediaType,
         state: 'ringing_in',
       });
       this.onCallIncoming({ signal, receivedAt: Date.now() });
@@ -1085,6 +1093,7 @@ export class MessageHandler {
         callId: signal.callId,
         peerId: remoteId,
         direction: this.activeCall?.direction ?? 'outgoing',
+        mediaType: this.activeCall?.mediaType ?? 'audio',
         state: 'connecting',
       });
       return;
@@ -1114,6 +1123,7 @@ export class MessageHandler {
     peerId: string,
     callId: string,
     offerSdp: string,
+    mediaType: CallMediaType = 'audio',
   ): Promise<{ success: boolean; error: string | null }> {
     try {
       this.ensureFastModeForCalls();
@@ -1135,6 +1145,7 @@ export class MessageHandler {
       callId,
       toPeerId: peerId,
       offerSdp,
+      mediaType,
     });
     if (!sent.success) return sent;
 
@@ -1142,6 +1153,7 @@ export class MessageHandler {
       callId,
       peerId,
       direction: 'outgoing',
+      mediaType,
       state: 'ringing_out',
     });
     return { success: true, error: null };
@@ -1164,6 +1176,7 @@ export class MessageHandler {
       callId,
       peerId,
       direction: 'incoming',
+      mediaType: this.activeCall?.mediaType ?? 'audio',
       state: 'connecting',
     });
     return { success: true, error: null };

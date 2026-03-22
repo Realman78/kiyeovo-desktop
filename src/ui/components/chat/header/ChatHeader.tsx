@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useSelector, useDispatch } from "react-redux";
 import type { RootState } from "../../../state/store";
 import { Button } from "../../ui/Button";
-import { Bell, BellOff, MoreVertical, Shield, UserPlus, Ban, UserCheck, Info, Trash2, AlertCircle, Users, Clock, RefreshCw, LogOut, Bug, UserMinus, Phone, PhoneOff } from "lucide-react";
+import { Bell, BellOff, MoreVertical, Shield, UserPlus, Ban, UserCheck, Info, Trash2, AlertCircle, Users, Clock, RefreshCw, LogOut, Bug, UserMinus, Phone, PhoneOff, Video } from "lucide-react";
 import { DropdownMenu, DropdownMenuItem } from "../../ui/DropdownMenu";
 import { updateChat, clearMessages, removeChat, setOfflineFetchStatus, markOfflineFetched, markOfflineFetchFailed } from "../../../state/slices/chatSlice";
 import { AboutUserModal } from "./AboutUserModal";
@@ -484,7 +484,7 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
     }
   };
 
-  const handleCallClick = async () => {
+  const handleStartCallClick = async (callMode: 'audio' | 'video') => {
     if (!peerId || !activeChat || activeChat.type !== 'direct') return;
     if (isBlocked) {
       toast.error('Cannot call a blocked user');
@@ -504,11 +504,18 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
       }
       return;
     }
-
-    const start = await callService.startOutgoingCall(peerId);
+    const start = await callService.startOutgoingCall(peerId, callMode);
     if (!start.success) {
       toast.error(start.error || 'Failed to start call');
     }
+  };
+
+  const handleAudioCallClick = () => {
+    void handleStartCallClick('audio');
+  };
+
+  const handleVideoCallClick = () => {
+    void handleStartCallClick('video');
   };
 
   const confirmDeleteAllMessages = async () => {
@@ -680,10 +687,14 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
     && activeChat?.status === 'active'
     && !isBlocked
     && Boolean(peerId);
-  const callButtonDisabled = !canStartDirectCall || (Boolean(activeCall) && !hasActiveCallWithThisPeer);
-  const callButtonTitle = hasActiveCallWithThisPeer
-    ? 'Hang up'
-    : (callButtonDisabled ? 'User is offline or another call is active' : 'Start call');
+  const hasAnotherPeerActiveCall = Boolean(activeCall) && !hasActiveCallWithThisPeer;
+  const startCallDisabled = !canStartDirectCall || hasAnotherPeerActiveCall;
+  const audioCallButtonTitle = startCallDisabled
+    ? 'User is offline or another call is active'
+    : 'Start audio call';
+  const videoCallButtonTitle = startCallDisabled
+    ? 'User is offline or another call is active'
+    : 'Start video call';
   const groupCreatorLinkState = activeChat
     ? getGroupCreatorLinkState(activeChat, chats, myPeerId)
     : { broken: false };
@@ -799,20 +810,40 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
 
     <div className="flex items-center gap-1">
       {!isGroup && (
-        <Button
-          variant="ghost"
-          size="icon"
-          className="text-muted-foreground hover:text-foreground"
-          onClick={handleCallClick}
-          title={callButtonTitle}
-          disabled={callButtonDisabled}
-        >
-          {hasActiveCallWithThisPeer ? (
+        hasActiveCallWithThisPeer ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="text-muted-foreground hover:text-foreground"
+            onClick={handleAudioCallClick}
+            title="Hang up"
+          >
             <PhoneOff className="w-4 h-4" />
-          ) : (
-            <Phone className="w-4 h-4" />
-          )}
-        </Button>
+          </Button>
+        ) : (
+          <>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="text-muted-foreground hover:text-foreground"
+              onClick={handleAudioCallClick}
+              title={audioCallButtonTitle}
+              disabled={startCallDisabled}
+            >
+              <Phone className="w-4 h-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="text-muted-foreground hover:text-foreground"
+              onClick={handleVideoCallClick}
+              title={videoCallButtonTitle}
+              disabled={startCallDisabled}
+            >
+              <Video className="w-4 h-4" />
+            </Button>
+          </>
+        )
       )}
       {isGroup && (
         <Button

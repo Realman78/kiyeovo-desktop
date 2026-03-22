@@ -72,7 +72,12 @@ declare global {
             retryGroupOfflineBackup: (chatId: number, messageId: string) => Promise<{ success: boolean; error: string | null }>;
 
             // Call signaling
-            startCall: (peerId: string, callId: string, offerSdp: string) => Promise<{ success: boolean; error: string | null }>;
+            startCall: (
+                peerId: string,
+                callId: string,
+                offerSdp: string,
+                mediaType?: 'audio' | 'video',
+            ) => Promise<{ success: boolean; error: string | null }>;
             acceptCall: (peerId: string, callId: string, answerSdp: string) => Promise<{ success: boolean; error: string | null }>;
             rejectCall: (
                 peerId: string,

@@ -1,11 +1,12 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
-import type { CallDirection, CallLifecycleState } from '../../types';
+import type { CallDirection, CallLifecycleState, CallMediaType } from '../../types';
 
 export interface IncomingCall {
   callId: string;
   peerId: string;
   peerName: string;
   offerSdp: string;
+  mediaType: CallMediaType;
   receivedAt: number;
 }
 
@@ -14,6 +15,7 @@ export interface ActiveCall {
   peerId: string;
   peerName: string;
   direction: CallDirection;
+  mediaType: CallMediaType;
   state: Exclude<CallLifecycleState, 'idle' | 'ended'>;
   startedAt: number;
   reason?: string;
@@ -47,6 +49,7 @@ const callSlice = createSlice({
           peerId: action.payload.peerId,
           peerName: action.payload.peerName,
           direction: 'incoming',
+          mediaType: action.payload.mediaType,
           state: 'ringing_in',
           startedAt: action.payload.receivedAt,
         };
@@ -63,6 +66,7 @@ const callSlice = createSlice({
         peerId: string;
         peerName: string;
         direction: CallDirection;
+        mediaType?: CallMediaType;
         state: CallLifecycleState;
         reason?: string;
         timestamp: number;
@@ -97,6 +101,7 @@ const callSlice = createSlice({
           peerId: payload.peerId,
           peerName: payload.peerName,
           direction: payload.direction,
+          mediaType: payload.mediaType ?? 'audio',
           state: payload.state,
           startedAt: payload.timestamp,
           reason: payload.reason,
@@ -104,6 +109,7 @@ const callSlice = createSlice({
       } else {
         state.activeCall.state = payload.state;
         state.activeCall.direction = payload.direction;
+        state.activeCall.mediaType = payload.mediaType ?? state.activeCall.mediaType;
         state.activeCall.peerName = payload.peerName;
         state.activeCall.reason = payload.reason;
       }

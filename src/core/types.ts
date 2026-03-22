@@ -790,6 +790,8 @@ export type CallSignalType =
   | 'CALL_END'
   | 'CALL_BUSY';
 
+export type CallMediaType = 'audio' | 'video';
+
 type BaseCallSignal = {
   type: CallSignalType;
   callId: string;
@@ -802,6 +804,7 @@ type BaseCallSignal = {
 export type CallOfferSignal = BaseCallSignal & {
   type: 'CALL_OFFER';
   offerSdp: string;
+  mediaType: CallMediaType;
 };
 
 export type CallAnswerSignal = BaseCallSignal & {
@@ -854,6 +857,7 @@ export type CallSignalOutgoingInput =
     callId: string;
     toPeerId: string;
     offerSdp: string;
+    mediaType: CallMediaType;
     timestamp?: number;
   }
   | {
@@ -910,6 +914,7 @@ export interface CallStateChangedEvent {
   peerId: string;
   state: 'idle' | 'ringing_out' | 'ringing_in' | 'connecting' | 'active' | 'ended';
   direction: 'incoming' | 'outgoing';
+  mediaType?: CallMediaType;
   reason?: string;
   timestamp: number;
 }

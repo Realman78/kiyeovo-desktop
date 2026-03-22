@@ -409,6 +409,7 @@ export const Main = () => {
         peerId: data.signal.fromPeerId,
         peerName,
         offerSdp: data.signal.offerSdp,
+        mediaType: data.signal.mediaType,
         receivedAt: data.receivedAt,
       }));
     });
@@ -424,6 +425,7 @@ export const Main = () => {
         peerId: data.peerId,
         peerName,
         direction: data.direction,
+        mediaType: data.mediaType,
         state: data.state,
         reason: data.reason,
         timestamp: data.timestamp,
@@ -443,12 +445,14 @@ export const Main = () => {
         return;
       }
 
-      dispatch(applyLocalCallState({
-        callId: event.callId,
-        peerId: event.peerId,
-        state: event.state,
-        reason: event.reason,
-      }));
+      if (event.type === 'state') {
+        dispatch(applyLocalCallState({
+          callId: event.callId,
+          peerId: event.peerId,
+          state: event.state,
+          reason: event.reason,
+        }));
+      }
     });
 
     return () => {

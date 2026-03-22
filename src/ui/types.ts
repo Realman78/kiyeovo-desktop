@@ -14,6 +14,7 @@ export type MessageSentStatus = 'online' | 'offline' | null;
 
 export type CallDirection = 'incoming' | 'outgoing';
 export type CallLifecycleState = 'idle' | 'ringing_out' | 'ringing_in' | 'connecting' | 'active' | 'ended';
+export type CallMediaType = 'audio' | 'video';
 
 export type IncomingCallSignal = {
   type: 'CALL_OFFER';
@@ -23,6 +24,7 @@ export type IncomingCallSignal = {
   timestamp: number;
   signature: string;
   offerSdp: string;
+  mediaType: CallMediaType;
 };
 
 export type CallSignal = {
@@ -55,6 +57,7 @@ export interface CallStateChangedEvent {
   peerId: string;
   state: CallLifecycleState;
   direction: CallDirection;
+  mediaType?: CallMediaType;
   reason?: string;
   timestamp: number;
 }

@@ -123,8 +123,13 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     },
 
     // Call signaling
-    startCall: async (peerId: string, callId: string, offerSdp: string): Promise<{ success: boolean; error: string | null }> => {
-        return ipcRenderer.invoke(IPC_CHANNELS.CALL_START, peerId, callId, offerSdp);
+    startCall: async (
+        peerId: string,
+        callId: string,
+        offerSdp: string,
+        mediaType: 'audio' | 'video' = 'audio',
+    ): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.CALL_START, peerId, callId, offerSdp, mediaType);
     },
     acceptCall: async (peerId: string, callId: string, answerSdp: string): Promise<{ success: boolean; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.CALL_ACCEPT, peerId, callId, answerSdp);

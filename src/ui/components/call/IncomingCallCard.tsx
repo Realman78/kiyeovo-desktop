@@ -25,6 +25,7 @@ export const IncomingCallCard = () => {
         callId: incomingCall.callId,
         peerId: incomingCall.peerId,
         offerSdp: incomingCall.offerSdp,
+        mediaType: incomingCall.mediaType,
       });
       if (!result.success) {
         toast.error(result.error || 'Failed to accept call');
@@ -103,7 +104,9 @@ export const IncomingCallCard = () => {
         <GripVertical className="mx-auto h-3.5 w-3.5" />
       </button>
       <div className="flex items-center justify-center gap-2">
-        <div className="text-sm font-semibold text-foreground">Incoming Call from {incomingCall.peerName}...</div>
+        <div className="text-sm font-semibold text-foreground">
+          Incoming {incomingCall.mediaType} call from {incomingCall.peerName}...
+        </div>
       </div>
       <div className="mt-3 flex items-center justify-end gap-2">
         <Button

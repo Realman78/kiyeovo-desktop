@@ -1,10 +1,11 @@
-import type { CallDirection, CallSignal, CallStateChangedEvent } from '../../types';
+import type { CallDirection, CallMediaType, CallSignal, CallStateChangedEvent } from '../../types';
 import { DEFAULT_WEBRTC_ICE_SERVERS } from '../../../core/default-bootstrap-nodes';
 
 type CurrentCall = {
   callId: string;
   peerId: string;
   direction: CallDirection;
+  mediaType: CallMediaType;
 };
 
 export type CallServiceEvent =
@@ -18,6 +19,14 @@ export type CallServiceEvent =
   | {
     type: 'error';
     message: string;
+  }
+  | {
+    type: 'media';
+    callId: string;
+    peerId: string;
+    mediaType: CallMediaType;
+    localStream: MediaStream | null;
+    remoteStream: MediaStream | null;
   };
 
 class CallService {
@@ -42,6 +51,18 @@ class CallService {
 
   private emit(event: CallServiceEvent): void {
     this.listeners.forEach((listener) => listener(event));
+  }
+
+  private emitMediaUpdate(context: CurrentCall | null = this.currentCall): void {
+    if (!context) return;
+    this.emit({
+      type: 'media',
+      callId: context.callId,
+      peerId: context.peerId,
+      mediaType: context.mediaType,
+      localStream: this.localStream,
+      remoteStream: this.remoteStream,
+    });
   }
 
   private getIceServers(): RTCIceServer[] {
@@ -79,6 +100,7 @@ class CallService {
         });
       });
       this.attachRemoteAudio();
+      this.emitMediaUpdate(context);
     };
 
     pc.onconnectionstatechange = () => {
@@ -152,9 +174,20 @@ class CallService {
     });
   }
 
-  private async getLocalStream(): Promise<MediaStream> {
-    if (this.localStream) return this.localStream;
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+  private async getLocalStream(mediaType: CallMediaType): Promise<MediaStream> {
+    if (this.localStream) {
+      const hasVideoTrack = this.localStream.getVideoTracks().length > 0;
+      if ((mediaType === 'video' && hasVideoTrack) || (mediaType === 'audio' && !hasVideoTrack)) {
+        return this.localStream;
+      }
+      this.localStream.getTracks().forEach((track) => track.stop());
+      this.localStream = null;
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: mediaType === 'video',
+    });
     stream.getAudioTracks().forEach((track) => {
       track.enabled = !this.muted;
     });
@@ -162,11 +195,12 @@ class CallService {
     return stream;
   }
 
-  private async addLocalAudioTracks(pc: RTCPeerConnection): Promise<void> {
-    const stream = await this.getLocalStream();
-    stream.getAudioTracks().forEach((track) => {
+  private async addLocalTracks(pc: RTCPeerConnection, mediaType: CallMediaType): Promise<void> {
+    const stream = await this.getLocalStream(mediaType);
+    stream.getTracks().forEach((track) => {
       pc.addTrack(track, stream);
     });
+    this.emitMediaUpdate();
   }
 
   private async flushPendingRemoteIce(): Promise<void> {
@@ -262,6 +296,7 @@ class CallService {
     this.clearRingTimeout();
     this.closePeerConnection();
     this.stopStreams();
+    this.emitMediaUpdate(context);
     this.currentCall = null;
     this.emit({
       type: 'state',
@@ -275,7 +310,10 @@ class CallService {
     }
   }
 
-  async startOutgoingCall(peerId: string): Promise<{ success: boolean; callId?: string; error?: string }> {
+  async startOutgoingCall(
+    peerId: string,
+    mediaType: CallMediaType = 'audio',
+  ): Promise<{ success: boolean; callId?: string; error?: string }> {
     if (this.currentCall) {
       return { success: false, error: 'Another call is already in progress' };
     }
@@ -285,13 +323,14 @@ class CallService {
       callId,
       peerId,
       direction: 'outgoing',
+      mediaType,
     };
 
     try {
       this.currentCall = context;
       this.sentDisconnectHangupCallId = null;
       this.peerConnection = this.createPeerConnection(context);
-      await this.addLocalAudioTracks(this.peerConnection);
+      await this.addLocalTracks(this.peerConnection, context.mediaType);
       const offer = await this.peerConnection.createOffer();
       await this.peerConnection.setLocalDescription(offer);
       const offerSdp = this.peerConnection.localDescription?.sdp;
@@ -299,7 +338,7 @@ class CallService {
         throw new Error('Failed to create call offer');
       }
 
-      const response = await window.kiyeovoAPI.startCall(peerId, callId, offerSdp);
+      const response = await window.kiyeovoAPI.startCall(peerId, callId, offerSdp, mediaType);
       if (!response.success) {
         throw new Error(response.error || 'Failed to start call');
       }
@@ -310,6 +349,7 @@ class CallService {
       this.clearRingTimeout();
       this.closePeerConnection();
       this.stopStreams();
+      this.emitMediaUpdate(context);
       this.currentCall = null;
       return { success: false, error: message };
     }
@@ -319,6 +359,7 @@ class CallService {
     callId: string;
     peerId: string;
     offerSdp: string;
+    mediaType: CallMediaType;
   }): Promise<{ success: boolean; error?: string }> {
     if (this.currentCall && (this.currentCall.callId !== params.callId || this.currentCall.peerId !== params.peerId)) {
       return { success: false, error: 'Another call is already in progress' };
@@ -336,13 +377,14 @@ class CallService {
       callId: params.callId,
       peerId: params.peerId,
       direction: 'incoming',
+      mediaType: params.mediaType,
     };
 
     try {
       this.currentCall = context;
       this.sentDisconnectHangupCallId = null;
       this.peerConnection = this.createPeerConnection(context);
-      await this.addLocalAudioTracks(this.peerConnection);
+      await this.addLocalTracks(this.peerConnection, context.mediaType);
 
       await this.peerConnection.setRemoteDescription({
         type: 'offer',
@@ -373,6 +415,7 @@ class CallService {
       this.clearRingTimeout();
       this.closePeerConnection();
       this.stopStreams();
+      this.emitMediaUpdate(context);
       this.currentCall = null;
       return { success: false, error: message };
     }
@@ -393,6 +436,7 @@ class CallService {
       this.clearRingTimeout();
       this.closePeerConnection();
       this.stopStreams();
+      this.emitMediaUpdate(this.currentCall);
       this.currentCall = null;
     }
     this.emit({
@@ -426,6 +470,7 @@ class CallService {
       this.clearRingTimeout();
       this.closePeerConnection();
       this.stopStreams();
+      this.emitMediaUpdate(this.currentCall);
       this.currentCall = null;
     }
 
@@ -447,6 +492,13 @@ class CallService {
     return {
       muted: this.muted,
       deafened: this.deafened,
+    };
+  }
+
+  getMediaStreams(): { localStream: MediaStream | null; remoteStream: MediaStream | null } {
+    return {
+      localStream: this.localStream,
+      remoteStream: this.remoteStream,
     };
   }
 
@@ -496,6 +548,7 @@ class CallService {
           this.clearRingTimeout();
           this.closePeerConnection();
           this.stopStreams();
+          this.emitMediaUpdate(this.currentCall);
           this.currentCall = null;
           this.emit({
             type: 'state',
@@ -532,6 +585,7 @@ class CallService {
         this.clearRingTimeout();
         this.closePeerConnection();
         this.stopStreams();
+        this.emitMediaUpdate(this.currentCall);
         this.currentCall = null;
       }
       return;
@@ -542,7 +596,14 @@ class CallService {
         callId: event.callId,
         peerId: event.peerId,
         direction: event.direction,
+        mediaType: event.mediaType ?? 'audio',
       };
+    } else if (
+      this.currentCall.callId === event.callId
+      && this.currentCall.peerId === event.peerId
+      && event.mediaType
+    ) {
+      this.currentCall.mediaType = event.mediaType;
     }
   }
 
