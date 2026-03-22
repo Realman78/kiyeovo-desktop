@@ -195,7 +195,7 @@ export const CallManagerCard = () => {
         // Playback can fail before user gesture.
       });
     }
-  }, [remoteVideoStream, isVideoCall, mediaTick]);
+  }, [remoteVideoStream, isVideoCall, mediaTick, activeCall?.state, isVideoExpanded]);
 
   if (!activeCall) return null;
   if (activeCall.state === 'ringing_in' && incomingCall) return null;

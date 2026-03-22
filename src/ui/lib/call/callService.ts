@@ -278,18 +278,13 @@ class CallService {
     reason: 'hangup' | 'disconnect' | 'failed' | 'rejected' | 'busy' | 'timeout',
     sendHangup: boolean,
   ): Promise<void> {
-    let hangupError: string | null = null;
-    if (sendHangup && this.sentDisconnectHangupCallId !== context.callId) {
+    const shouldSendHangup = sendHangup
+      && this.sentDisconnectHangupCallId !== context.callId
+      && reason !== 'disconnect'
+      && reason !== 'failed';
+
+    if (shouldSendHangup) {
       this.sentDisconnectHangupCallId = context.callId;
-      const hangupReason = reason === 'disconnect' || reason === 'failed' ? reason : 'hangup';
-      try {
-        const response = await window.kiyeovoAPI.hangupCall(context.peerId, context.callId, hangupReason);
-        if (!response.success) {
-          hangupError = response.error || 'Failed to notify remote call end';
-        }
-      } catch (error: unknown) {
-        hangupError = error instanceof Error ? error.message : 'Failed to notify remote call end';
-      }
     }
 
     this.clearDisconnectTimer();
@@ -305,8 +300,20 @@ class CallService {
       state: 'ended',
       reason,
     });
-    if (hangupError) {
-      this.emit({ type: 'error', message: hangupError });
+
+    if (!shouldSendHangup) {
+      return;
+    }
+
+    const hangupReason: 'hangup' = 'hangup';
+    try {
+      const response = await window.kiyeovoAPI.hangupCall(context.peerId, context.callId, hangupReason);
+      if (!response.success) {
+        this.emit({ type: 'error', message: response.error || 'Failed to notify remote call end' });
+      }
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to notify remote call end';
+      this.emit({ type: 'error', message });
     }
   }
 
@@ -454,18 +461,8 @@ class CallService {
     callId: string,
     reason: 'hangup' | 'disconnect' | 'failed' = 'hangup',
   ): Promise<{ success: boolean; error?: string }> {
-    let response: { success: boolean; error?: string | null };
-    try {
-      response = await window.kiyeovoAPI.hangupCall(peerId, callId, reason);
-    } catch (error: unknown) {
-      response = {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to hang up call',
-      };
-    }
-
     const matchesCurrentCall = this.currentCall?.callId === callId && this.currentCall.peerId === peerId;
-    if (matchesCurrentCall) {
+    if (matchesCurrentCall && this.currentCall) {
       this.clearDisconnectTimer();
       this.clearRingTimeout();
       this.closePeerConnection();
@@ -481,6 +478,17 @@ class CallService {
       state: 'ended',
       reason,
     });
+
+    let response: { success: boolean; error?: string | null };
+    try {
+      response = await window.kiyeovoAPI.hangupCall(peerId, callId, reason);
+    } catch (error: unknown) {
+      response = {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to hang up call',
+      };
+    }
+
     if (!response.success) {
       const message = response.error ?? 'Failed to hang up call';
       return { success: false, error: message };
