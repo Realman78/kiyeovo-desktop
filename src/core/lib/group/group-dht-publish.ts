@@ -23,7 +23,7 @@ export async function putJsonToDHT(
   for await (const event of node.services.dht.put(keyBytes, valueBytes) as AsyncIterable<QueryEvent>) {
     if (event.name === 'QUERY_ERROR' && options?.warnOnQueryError) {
       const prefix = options.warnPrefix ?? 'GROUP';
-      console.warn(`[${prefix}] DHT put error for ${dhtKey}`);
+      console.warn(`[${prefix}] DHT put error for ${dhtKey}:`, event);
     }
     if (event.name === 'PEER_RESPONSE') {
       successCount++;

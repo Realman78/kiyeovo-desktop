@@ -1,5 +1,5 @@
 import { useEffect, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { GripVertical, Maximize2, Mic, MicOff, Minimize2, PhoneCall, PhoneOff, Volume2, VolumeX } from 'lucide-react';
+import { GripVertical, Mic, MicOff, PhoneCall, PhoneOff, Volume2, VolumeX } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { useToast } from '../ui/use-toast';
 import { useAppSelector } from '../../state/hooks';
@@ -36,7 +36,6 @@ export const CallManagerCard = () => {
   const { toast } = useToast();
   const activeCall = useAppSelector((state) => state.call.activeCall);
   const incomingCall = useAppSelector((state) => state.call.incomingCall);
-  const [isMinimized, setIsMinimized] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [isDeafened, setIsDeafened] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -46,7 +45,6 @@ export const CallManagerCard = () => {
   useEffect(() => {
     if (!activeCall) return;
     const audioState = callService.getAudioControlState();
-    setIsMinimized(false);
     setIsMuted(audioState.muted);
     setIsDeafened(audioState.deafened);
   }, [activeCall?.callId]);
@@ -123,69 +121,6 @@ export const CallManagerCard = () => {
     window.addEventListener('pointercancel', onPointerCancel);
   };
 
-  if (isMinimized) {
-    return (
-      <div className={`fixed ${positionClassName} z-109 w-fit rounded-lg border border-border bg-card/95 backdrop-blur px-3 py-2 shadow-xl`}>
-        <button
-          type="button"
-          className={`absolute top-1 left-1 z-10 h-5 w-5 rounded text-muted-foreground transition hover:bg-accent/70 hover:text-foreground cursor-move ${isDraggingAnchor ? 'bg-accent/80 text-foreground' : ''}`}
-          title="Drag to snap card position"
-          aria-label="Drag to snap card position"
-          onPointerDown={handleAnchorPointerDown}
-        >
-          <GripVertical className="mx-auto h-3.5 w-3.5" />
-        </button>
-        <div className="flex items-center justify-between gap-2">
-          <div className="min-w-0">
-            <div className={`text-[11px] font-semibold text-foreground tracking-wide ${activeCall.state === "active" ? "" : 'uppercase'}`}>
-              {activeCall.state === "active"
-                ? `${activeCall.peerName}${timerText ? ` • ${timerText}` : ''}`
-                : stateLabel(activeCall.state)}
-            </div>
-          </div>
-          <div className="flex items-center gap-1">
-            <Button
-              variant={isMuted ? 'secondary' : 'ghost'}
-              size="icon"
-              className="h-8 w-8"
-              onClick={handleToggleMute}
-              title={isMuted ? 'Unmute' : 'Mute'}
-            >
-              {isMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-            </Button>
-            <Button
-              variant={isDeafened ? 'secondary' : 'ghost'}
-              size="icon"
-              className="h-8 w-8"
-              onClick={handleToggleDeafen}
-              title={isDeafened ? 'Undeafen' : 'Deafen'}
-            >
-              {isDeafened ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              onClick={() => setIsMinimized(false)}
-              title="Expand"
-            >
-              <Maximize2 className="w-4 h-4" />
-            </Button>
-            <Button
-              variant="destructive"
-              size="icon"
-              className="h-8 w-8"
-              onClick={handleHangup}
-              title="Hang up"
-            >
-              <PhoneOff className="w-4 h-4" />
-            </Button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className={`fixed ${positionClassName} z-109 w-fit rounded-lg border border-border bg-card/95 backdrop-blur px-4 py-3 shadow-xl`}>
       <button
@@ -206,15 +141,6 @@ export const CallManagerCard = () => {
               : stateLabel(activeCall.state)}
           </div>
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8"
-          onClick={() => setIsMinimized(true)}
-          title="Minimize"
-        >
-          <Minimize2 className="w-4 h-4" />
-        </Button>
       </div>
       <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
         <Button variant={isMuted ? 'secondary' : 'outline'} size="sm" onClick={handleToggleMute}>
@@ -225,7 +151,6 @@ export const CallManagerCard = () => {
         </Button>
         <Button variant="destructive" size="sm" onClick={handleHangup}>
           <PhoneOff className="w-4 h-4" />
-          Hang up
         </Button>
       </div>
     </div>

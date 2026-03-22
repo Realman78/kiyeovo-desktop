@@ -4,6 +4,8 @@
 
 2. Does changing the username of a user (locally) affect negatively on any other aspects?
 
+3. Investigate DHT put errors for group info
+
 6. nekakav rate limit na DHT zapise (na validatorima)
 
 7. Stavi u README da se poveca SCRYPTN_N
