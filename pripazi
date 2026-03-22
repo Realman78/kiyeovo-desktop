@@ -2,6 +2,8 @@
 
 1. [NUDGE][SEND_FAIL] peer=fz9zYUjU group=32398e08 reason=Remote closed connection during opening -> do libp2p je jednostavno. probal san fixat i zasad nemoren replicirat. zbrisat cu ovo ako se kad desi opet
 
+2. Does changing the username of a user (locally) affect negatively on any other aspects?
+
 6. nekakav rate limit na DHT zapise (na validatorima)
 
 7. Stavi u README da se poveca SCRYPTN_N

@@ -1180,8 +1180,10 @@ export class MessageHandler {
       toPeerId: peerId,
       reason,
     });
+    if (this.isActiveCallMatch(peerId, callId)) {
+      this.clearActiveCall(reason);
+    }
     if (!sent.success) return sent;
-    this.clearActiveCall(reason);
     return { success: true, error: null };
   }
 
@@ -1196,8 +1198,10 @@ export class MessageHandler {
       toPeerId: peerId,
       reason,
     });
+    if (this.isActiveCallMatch(peerId, callId)) {
+      this.clearActiveCall(reason);
+    }
     if (!sent.success) return sent;
-    this.clearActiveCall(reason);
     return { success: true, error: null };
   }
 
