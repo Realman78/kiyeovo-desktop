@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Phone, PhoneOff } from 'lucide-react';
+import { Maximize2, Minimize2, Phone, PhoneOff } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { useToast } from '../ui/use-toast';
 import { useAppDispatch, useAppSelector } from '../../state/hooks';
@@ -11,6 +11,7 @@ export const IncomingCallCard = () => {
   const { toast } = useToast();
   const incomingCall = useAppSelector((state) => state.call.incomingCall);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isMinimized, setIsMinimized] = useState(false);
 
   if (!incomingCall) return null;
 
@@ -51,9 +52,68 @@ export const IncomingCallCard = () => {
     }
   };
 
+  if (isMinimized) {
+    return (
+      <div className="fixed bottom-24 right-4 z-[110] w-[320px] rounded-lg border border-border bg-card/95 backdrop-blur px-3 py-2 shadow-xl">
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <div className="text-[11px] font-semibold text-foreground uppercase tracking-wide">Incoming call</div>
+            <div className="text-[11px] text-muted-foreground truncate">
+              {incomingCall.peerName} ({incomingCall.peerId})
+            </div>
+          </div>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => setIsMinimized(false)}
+              disabled={isSubmitting}
+              title="Expand"
+            >
+              <Maximize2 className="w-4 h-4" />
+            </Button>
+            <Button
+              variant="destructive"
+              size="icon"
+              className="h-8 w-8"
+              onClick={handleReject}
+              disabled={isSubmitting}
+              title="Reject"
+            >
+              <PhoneOff className="w-4 h-4" />
+            </Button>
+            <Button
+              variant="default"
+              size="icon"
+              className="h-8 w-8"
+              onClick={handleAccept}
+              disabled={isSubmitting}
+              title="Accept"
+            >
+              <Phone className="w-4 h-4" />
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="fixed top-4 right-4 z-[110] w-[320px] rounded-lg border border-border bg-card/95 backdrop-blur px-4 py-3 shadow-xl">
-      <div className="text-sm font-semibold text-foreground">Incoming Call</div>
+    <div className="fixed bottom-24 right-4 z-[110] w-[320px] rounded-lg border border-border bg-card/95 backdrop-blur px-4 py-3 shadow-xl">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-sm font-semibold text-foreground">Incoming Call</div>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          onClick={() => setIsMinimized(true)}
+          disabled={isSubmitting}
+          title="Minimize"
+        >
+          <Minimize2 className="w-4 h-4" />
+        </Button>
+      </div>
       <div className="mt-1 text-xs text-muted-foreground truncate">
         {incomingCall.peerName} ({incomingCall.peerId})
       </div>
