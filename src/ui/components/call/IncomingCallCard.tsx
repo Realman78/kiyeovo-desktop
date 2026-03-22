@@ -102,7 +102,7 @@ export const IncomingCallCard = () => {
   return (
     <div className="fixed bottom-24 right-4 z-110 w-[320px] rounded-lg border border-border bg-card/95 backdrop-blur px-4 py-3 shadow-xl">
       <div className="flex items-center justify-between gap-2">
-        <div className="text-sm font-semibold text-foreground">Incoming Call from {incomingCall.peerName}</div>
+        <div className="text-sm font-semibold text-foreground">Incoming Call from {incomingCall.peerName}...</div>
         <Button
           variant="ghost"
           size="icon"

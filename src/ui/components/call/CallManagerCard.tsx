@@ -20,6 +20,17 @@ function stateLabel(state: string): string {
   }
 }
 
+function formatCallDuration(totalSeconds: number): string {
+  const safe = Math.max(0, totalSeconds);
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+  const seconds = safe % 60;
+  if (hours > 0) {
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
 export const CallManagerCard = () => {
   const { toast } = useToast();
   const activeCall = useAppSelector((state) => state.call.activeCall);
@@ -27,6 +38,7 @@ export const CallManagerCard = () => {
   const [isMinimized, setIsMinimized] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [isDeafened, setIsDeafened] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   useEffect(() => {
     if (!activeCall) return;
@@ -36,8 +48,25 @@ export const CallManagerCard = () => {
     setIsDeafened(audioState.deafened);
   }, [activeCall?.callId]);
 
+  useEffect(() => {
+    if (!activeCall) {
+      setElapsedSeconds(0);
+      return;
+    }
+
+    const updateElapsed = () => {
+      setElapsedSeconds(Math.floor((Date.now() - activeCall.startedAt) / 1000));
+    };
+
+    updateElapsed();
+    const interval = setInterval(updateElapsed, 1000);
+    return () => clearInterval(interval);
+  }, [activeCall?.callId, activeCall?.startedAt]);
+
   if (!activeCall) return null;
   if (activeCall.state === 'ringing_in' && incomingCall) return null;
+  const showTimer = activeCall.state === 'active';
+  const timerText = showTimer ? formatCallDuration(elapsedSeconds) : null;
 
   const handleHangup = async () => {
     const result = await callService.hangupCall(activeCall.peerId, activeCall.callId, 'hangup');
@@ -59,8 +88,10 @@ export const CallManagerCard = () => {
       <div className="fixed bottom-24 right-4 z-109 w-[320px] rounded-lg border border-border bg-card/95 backdrop-blur px-3 py-2 shadow-xl">
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
-            <div className="text-[11px] font-semibold text-foreground uppercase tracking-wide">
-              {activeCall.state === "active" ? activeCall.peerName : stateLabel(activeCall.state)}
+            <div className={`text-[11px] font-semibold text-foreground tracking-wide ${activeCall.state === "active" ? "" : 'uppercase'}`}>
+              {activeCall.state === "active"
+                ? `${activeCall.peerName}${timerText ? ` • ${timerText}` : ''}`
+                : stateLabel(activeCall.state)}
             </div>
           </div>
           <div className="flex items-center gap-1">
@@ -107,11 +138,15 @@ export const CallManagerCard = () => {
   }
 
   return (
-    <div className="fixed bottom-24 right-4 z-109 w-[320px] rounded-lg border border-border bg-card/95 backdrop-blur px-4 py-3 shadow-xl">
+    <div className="fixed bottom-24 right-4 z-109 w-fit rounded-lg border border-border bg-card/95 backdrop-blur px-4 py-3 shadow-xl">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <PhoneCall className="w-4 h-4 text-primary" />
-          <div className="text-sm font-semibold text-foreground">{activeCall.state === "active" ? activeCall.peerName : stateLabel(activeCall.state)}</div>
+          <div className="text-sm font-semibold text-foreground">
+            {activeCall.state === "active"
+              ? `${activeCall.peerName}${timerText ? ` • ${timerText}` : ''}`
+              : stateLabel(activeCall.state)}
+          </div>
         </div>
         <Button
           variant="ghost"
