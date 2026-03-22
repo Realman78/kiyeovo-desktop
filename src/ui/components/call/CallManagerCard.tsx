@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import {
   ArrowLeftRight,
+  Fullscreen,
   GripVertical,
-  Maximize2,
   Mic,
   MicOff,
   Minimize2,
@@ -58,6 +58,7 @@ export const CallManagerCard = () => {
   const [remoteVideoStream, setRemoteVideoStream] = useState<MediaStream | null>(null);
   const largeVideoRef = useRef<HTMLVideoElement | null>(null);
   const smallVideoRef = useRef<HTMLVideoElement | null>(null);
+  const compactRemotePreviewRef = useRef<HTMLVideoElement | null>(null);
   const previousAnchorRef = useRef<CallCardAnchor | null>(null);
   const { anchor, setAnchor, positionClassName, snapToClosestCorner } = useCallCardAnchor();
 
@@ -177,6 +178,22 @@ export const CallManagerCard = () => {
     }
   }, [smallVideoStream, isVideoExpanded]);
 
+  useEffect(() => {
+    const compactPreview = compactRemotePreviewRef.current;
+    if (!compactPreview) return;
+
+    if (compactPreview.srcObject !== remoteVideoStream) {
+      compactPreview.srcObject = remoteVideoStream;
+    }
+
+    compactPreview.muted = true;
+    if (remoteVideoStream) {
+      void compactPreview.play().catch(() => {
+        // Playback can fail before user gesture.
+      });
+    }
+  }, [remoteVideoStream, isVideoCall]);
+
   if (!activeCall) return null;
   if (activeCall.state === 'ringing_in' && incomingCall) return null;
 
@@ -184,6 +201,7 @@ export const CallManagerCard = () => {
   const timerText = showTimer ? formatCallDuration(elapsedSeconds) : null;
   const largeHasVideo = Boolean(largeVideoStream && largeVideoStream.getVideoTracks().length > 0);
   const smallHasVideo = Boolean(smallVideoStream && smallVideoStream.getVideoTracks().length > 0);
+  const remotePreviewHasVideo = Boolean(remoteVideoStream && remoteVideoStream.getVideoTracks().length > 0);
 
   const handleHangup = async () => {
     if (isVideoExpanded) {
@@ -281,18 +299,18 @@ export const CallManagerCard = () => {
             <div className="absolute top-1 left-1 rounded bg-black/55 px-1.5 py-0.5 text-[10px] text-white/80">
               {isSmallLocal ? 'You' : activeCall.peerName}
             </div>
-          </div>
-
-          <div className="absolute top-4 right-4 flex items-center gap-2">
             <Button
               variant="outline"
               size="sm"
-              className="border-white/20 bg-black/40 text-white hover:bg-black/55"
+              className="absolute top-1 right-1 h-6 w-6 border-white/20 bg-black/45 p-0 text-white hover:bg-black/60"
               onClick={() => setIsVideoStreamsSwapped((prev) => !prev)}
               title="Swap videos"
             >
-              <ArrowLeftRight className="w-4 h-4" />
+              <ArrowLeftRight className="h-3.5 w-3.5" />
             </Button>
+          </div>
+
+          <div className="absolute top-4 right-4 flex items-center gap-2">
             <Button
               variant="outline"
               size="sm"
@@ -316,7 +334,8 @@ export const CallManagerCard = () => {
         >
           <GripVertical className="mx-auto h-3.5 w-3.5" />
         </button>
-        <div className="flex items-center justify-center gap-2">
+
+        <div className="flex items-start justify-between gap-3 pr-1">
           <div className="flex items-center gap-2">
             <PhoneCall className="w-4 h-4 text-primary" />
             <div className="text-sm font-semibold text-foreground">
@@ -331,7 +350,29 @@ export const CallManagerCard = () => {
               </span>
             )}
           </div>
+
+          {isVideoCall && (
+            <div className="relative h-16 w-24 shrink-0 overflow-hidden rounded-md border border-border/70 bg-muted/30">
+              {remotePreviewHasVideo ? (
+                <video
+                  ref={compactRemotePreviewRef}
+                  autoPlay
+                  muted
+                  playsInline
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <div className="flex h-full w-full items-center justify-center text-[10px] text-muted-foreground">
+                  No remote video
+                </div>
+              )}
+              <div className="absolute bottom-1 left-1 rounded bg-black/55 px-1 py-0.5 text-[9px] text-white/85">
+                {activeCall.peerName}
+              </div>
+            </div>
+          )}
         </div>
+
         <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
           {isVideoCall && (
             <Button
@@ -340,7 +381,7 @@ export const CallManagerCard = () => {
               onClick={isVideoExpanded ? exitVideoFullscreen : enterVideoFullscreen}
               title={isVideoExpanded ? 'Exit fullscreen' : 'Fullscreen video'}
             >
-              {isVideoExpanded ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+              {isVideoExpanded ? <Minimize2 className="w-4 h-4" /> : <Fullscreen className="w-4 h-4" />}
             </Button>
           )}
           <Button variant={isMuted ? 'secondary' : 'outline'} size="sm" onClick={handleToggleMute}>
