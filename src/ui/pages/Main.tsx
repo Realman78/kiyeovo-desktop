@@ -8,6 +8,7 @@ import { applyCoreCallState, applyLocalCallState, setCallError, setIncomingCall,
 import { useToast } from '../components/ui/use-toast';
 import type { RootState } from '../state/store';
 import { useNotifications } from '../hooks/useNotifications';
+import { useCallRingtone } from '../hooks/useCallRingtone';
 import { store } from '../state/store';
 import { callService } from '../lib/call/callService';
 import { IncomingCallCard } from '../components/call/IncomingCallCard';
@@ -22,6 +23,7 @@ export const Main = () => {
   const incomingCall = useSelector((state: RootState) => state.call.incomingCall);
 
   useNotifications();
+  useCallRingtone();
 
   const resolvePeerName = (peerId: string): string => {
     const state = store.getState();
