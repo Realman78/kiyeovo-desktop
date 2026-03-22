@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
-import { Maximize2, Mic, MicOff, Minimize2, PhoneCall, PhoneOff, Volume2, VolumeX } from 'lucide-react';
+import { useEffect, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { GripVertical, Maximize2, Mic, MicOff, Minimize2, PhoneCall, PhoneOff, Volume2, VolumeX } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { useToast } from '../ui/use-toast';
 import { useAppSelector } from '../../state/hooks';
 import { callService } from '../../lib/call/callService';
+import { useCallCardAnchor } from './useCallCardAnchor';
 
 function stateLabel(state: string): string {
   switch (state) {
@@ -39,6 +40,8 @@ export const CallManagerCard = () => {
   const [isMuted, setIsMuted] = useState(false);
   const [isDeafened, setIsDeafened] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [isDraggingAnchor, setIsDraggingAnchor] = useState(false);
+  const { positionClassName, snapToClosestCorner } = useCallCardAnchor();
 
   useEffect(() => {
     if (!activeCall) return;
@@ -83,9 +86,55 @@ export const CallManagerCard = () => {
     setIsDeafened(callService.toggleDeafen());
   };
 
+  const handleAnchorPointerDown = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const handle = event.currentTarget;
+    const pointerId = event.pointerId;
+    setIsDraggingAnchor(true);
+
+    try {
+      handle.setPointerCapture(pointerId);
+    } catch {
+      // no-op: pointer capture can fail on some environments, snap still works via window listener
+    }
+
+    const cleanup = () => {
+      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', onPointerCancel);
+      try {
+        handle.releasePointerCapture(pointerId);
+      } catch {
+        // no-op: if capture was never set, release can throw
+      }
+      setIsDraggingAnchor(false);
+    };
+
+    const onPointerUp = (upEvent: PointerEvent) => {
+      cleanup();
+      snapToClosestCorner(upEvent.clientX, upEvent.clientY);
+    };
+
+    const onPointerCancel = () => {
+      cleanup();
+    };
+
+    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerCancel);
+  };
+
   if (isMinimized) {
     return (
-      <div className="fixed bottom-24 right-4 z-109 w-[320px] rounded-lg border border-border bg-card/95 backdrop-blur px-3 py-2 shadow-xl">
+      <div className={`fixed ${positionClassName} z-109 w-fit rounded-lg border border-border bg-card/95 backdrop-blur px-3 py-2 shadow-xl`}>
+        <button
+          type="button"
+          className={`absolute top-1 left-1 z-10 h-5 w-5 rounded text-muted-foreground transition hover:bg-accent/70 hover:text-foreground cursor-move ${isDraggingAnchor ? 'bg-accent/80 text-foreground' : ''}`}
+          title="Drag to snap card position"
+          aria-label="Drag to snap card position"
+          onPointerDown={handleAnchorPointerDown}
+        >
+          <GripVertical className="mx-auto h-3.5 w-3.5" />
+        </button>
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
             <div className={`text-[11px] font-semibold text-foreground tracking-wide ${activeCall.state === "active" ? "" : 'uppercase'}`}>
@@ -138,7 +187,16 @@ export const CallManagerCard = () => {
   }
 
   return (
-    <div className="fixed bottom-24 right-4 z-109 w-fit rounded-lg border border-border bg-card/95 backdrop-blur px-4 py-3 shadow-xl">
+    <div className={`fixed ${positionClassName} z-109 w-fit rounded-lg border border-border bg-card/95 backdrop-blur px-4 py-3 shadow-xl`}>
+      <button
+        type="button"
+        className={`absolute top-1 left-1 z-10 h-5 w-5 rounded text-muted-foreground transition hover:bg-accent/70 hover:text-foreground cursor-move ${isDraggingAnchor ? 'bg-accent/80 text-foreground' : ''}`}
+        title="Drag to snap card position"
+        aria-label="Drag to snap card position"
+        onPointerDown={handleAnchorPointerDown}
+      >
+        <GripVertical className="mx-auto h-3.5 w-3.5" />
+      </button>
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <PhoneCall className="w-4 h-4 text-primary" />
