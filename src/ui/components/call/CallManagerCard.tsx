@@ -56,6 +56,7 @@ export const CallManagerCard = () => {
   const [isVideoStreamsSwapped, setIsVideoStreamsSwapped] = useState(false);
   const [localVideoStream, setLocalVideoStream] = useState<MediaStream | null>(null);
   const [remoteVideoStream, setRemoteVideoStream] = useState<MediaStream | null>(null);
+  const [mediaTick, setMediaTick] = useState(0);
   const largeVideoRef = useRef<HTMLVideoElement | null>(null);
   const smallVideoRef = useRef<HTMLVideoElement | null>(null);
   const compactRemotePreviewRef = useRef<HTMLVideoElement | null>(null);
@@ -90,6 +91,7 @@ export const CallManagerCard = () => {
       setIsVideoStreamsSwapped(false);
       setLocalVideoStream(null);
       setRemoteVideoStream(null);
+      setMediaTick(0);
       return;
     }
 
@@ -132,6 +134,7 @@ export const CallManagerCard = () => {
       if (event.callId !== activeCall.callId || event.peerId !== activeCall.peerId) return;
       setLocalVideoStream(event.localStream);
       setRemoteVideoStream(event.remoteStream);
+      setMediaTick((value) => value + 1);
     });
     return unsubscribe;
   }, [activeCall?.callId, activeCall?.peerId]);
@@ -160,7 +163,7 @@ export const CallManagerCard = () => {
         // Playback can fail before user gesture.
       });
     }
-  }, [largeVideoStream, isVideoExpanded]);
+  }, [largeVideoStream, isVideoExpanded, mediaTick]);
 
   useEffect(() => {
     const smallVideo = smallVideoRef.current;
@@ -176,7 +179,7 @@ export const CallManagerCard = () => {
         // Playback can fail before user gesture.
       });
     }
-  }, [smallVideoStream, isVideoExpanded]);
+  }, [smallVideoStream, isVideoExpanded, mediaTick]);
 
   useEffect(() => {
     const compactPreview = compactRemotePreviewRef.current;
@@ -192,7 +195,7 @@ export const CallManagerCard = () => {
         // Playback can fail before user gesture.
       });
     }
-  }, [remoteVideoStream, isVideoCall]);
+  }, [remoteVideoStream, isVideoCall, mediaTick]);
 
   if (!activeCall) return null;
   if (activeCall.state === 'ringing_in' && incomingCall) return null;
@@ -202,6 +205,7 @@ export const CallManagerCard = () => {
   const largeHasVideo = Boolean(largeVideoStream && largeVideoStream.getVideoTracks().length > 0);
   const smallHasVideo = Boolean(smallVideoStream && smallVideoStream.getVideoTracks().length > 0);
   const remotePreviewHasVideo = Boolean(remoteVideoStream && remoteVideoStream.getVideoTracks().length > 0);
+  const showCompactPreview = isVideoCall && activeCall.state === 'active' && !isVideoExpanded;
 
   const handleHangup = async () => {
     if (isVideoExpanded) {
@@ -351,7 +355,7 @@ export const CallManagerCard = () => {
             )}
           </div>
 
-          {isVideoCall && (
+          {showCompactPreview && (
             <div className="relative h-16 w-24 shrink-0 overflow-hidden rounded-md border border-border/70 bg-muted/30">
               {remotePreviewHasVideo ? (
                 <video
