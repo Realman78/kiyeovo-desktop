@@ -7,9 +7,13 @@ import { identify } from '@libp2p/identify';
 import { ping } from '@libp2p/ping';
 import { gossipsub } from '@chainsafe/libp2p-gossipsub';
 import { multiaddr } from '@multiformats/multiaddr';
+import { LevelDatastore } from 'datastore-level';
+import { mkdir } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import dotenv from 'dotenv';
 
 import type { PeerId } from '@libp2p/interface';
+import type { Datastore } from 'interface-datastore';
 import type { ChatNode } from './types.js';
 
 import { PeerIdManager } from './lib/peer-id-manager.js';
@@ -36,6 +40,12 @@ import {
 
 dotenv.config();
 
+type BootstrapRuntime = {
+  node: ChatNode;
+  datastore: LevelDatastore;
+  datastorePath: string;
+};
+
 function readBootstrapNetworkMode(): 'fast' | 'anonymous' {
   const raw = process.env.BOOTSTRAP_NETWORK_MODE?.trim().toLowerCase();
   if (isNetworkMode(raw)) {
@@ -49,13 +59,20 @@ function readBootstrapNetworkMode(): 'fast' | 'anonymous' {
   return DEFAULT_NETWORK_MODE;
 }
 
-async function createBootstrapNode(): Promise<ChatNode> {
+async function createBootstrapNode(): Promise<BootstrapRuntime> {
   const { privateKey } = await PeerIdManager.loadOrCreate(BOOTSTRAP_PEER_ID_FILE);
   const networkMode = readBootstrapNetworkMode();
   const modeConfig = getNetworkModeConfig(networkMode);
   const modeRuntime = getNetworkModeRuntime(networkMode);
   const torConfig = getTorConfig();
   const isAnonymousMode = networkMode === NETWORK_MODES.ANONYMOUS;
+  const datastorePath = resolve(join('./bootstrap-datastore', networkMode));
+
+  await mkdir(datastorePath, { recursive: true });
+  const datastore = new LevelDatastore(datastorePath);
+  await datastore.open();
+  // datastore-level can resolve a separate interface-datastore type instance; cast to libp2p Datastore type for wiring.
+  const libp2pDatastore = datastore as unknown as Datastore;
 
   const announceAddrs: string[] = [];
   if (process.env.BOOTSTRAP_ANNOUNCE_ADDRS) {
@@ -104,6 +121,7 @@ async function createBootstrapNode(): Promise<ChatNode> {
   console.log(`[STACK][BOOTSTRAP] transport=tcp`);
   console.log(`[STACK][BOOTSTRAP] dhtProtocol=${modeConfig.dhtProtocol}`);
   console.log(`[STACK][BOOTSTRAP] announceCount=${announceAddrs.length}`);
+  console.log(`[STACK][BOOTSTRAP] datastore=${datastorePath}`);
   console.log(`[STACK][BOOTSTRAP] tor_defaults_proxy=${torConfig.socksHost}:${torConfig.socksPort}`);
 
   const transports = [tcp()];
@@ -115,95 +133,114 @@ async function createBootstrapNode(): Promise<ChatNode> {
     console.log('Bootstrap: fast mode enabled (non-onion announce filtering active)');
   }
 
-  const bootstrap = await createLibp2p({
-    privateKey: privateKey,
-    addresses: {
-      listen: [BOOTSTRAP_LISTEN_ADDRESS],
-      announce: announceAddrs
-    },
-    transports: transports,
-    connectionEncrypters: [noise()],
-    streamMuxers: [yamux()],
-    connectionManager: {
-      maxConnections: 500,
-      maxPeerAddrsToDial: 10,
-    },
-    connectionMonitor: {
-      enabled: true,
-      pingInterval: isAnonymousMode ? 120000 : 30000,
-      pingTimeout: {
-        minTimeout: isAnonymousMode ? 30000 : 5000,
-        maxTimeout: isAnonymousMode ? 120000 : 30000,
+  try {
+    const bootstrap = await createLibp2p({
+      privateKey: privateKey,
+      datastore: libp2pDatastore,
+      addresses: {
+        listen: [BOOTSTRAP_LISTEN_ADDRESS],
+        announce: announceAddrs
       },
-      // Keep connections alive on transient ping misses; periodic health checker handles reconnect policy.
-      abortConnectionOnPingFailure: false,
-    },
-    services: {
-      pubsub: gossipsub({
-        doPX: true,
-        fallbackToFloodsub: false,
-        allowPublishToZeroTopicPeers: false,
-      }),
-      dht: kadDHT({
-        protocol: modeConfig.dhtProtocol,
-        peerInfoMapper: isAnonymousMode ? filterOnionAddressesMapper : passthroughMapper,
-        clientMode: false,
-        kBucketSize: K_BUCKET_SIZE,
-        prefixLength: PREFIX_LENGTH,
-        validators: {
-          [modeRuntime.dhtNamespaceNames.offline]: offlineMessageValidator,
-          [modeRuntime.dhtNamespaceNames.username]: usernameRegistrationValidator,
-          [modeRuntime.dhtNamespaceNames.groupOffline]: groupOfflineMessageValidator,
-          [modeRuntime.dhtNamespaceNames.groupInfoLatest]: groupInfoLatestValidator,
-          [modeRuntime.dhtNamespaceNames.groupInfoVersion]: groupInfoVersionedValidator,
+      transports: transports,
+      connectionEncrypters: [noise()],
+      streamMuxers: [yamux()],
+      connectionManager: {
+        maxConnections: 500,
+        maxPeerAddrsToDial: 10,
+      },
+      connectionMonitor: {
+        enabled: true,
+        pingInterval: isAnonymousMode ? 120000 : 30000,
+        pingTimeout: {
+          minTimeout: isAnonymousMode ? 30000 : 5000,
+          maxTimeout: isAnonymousMode ? 120000 : 30000,
         },
-        selectors: {
-          [modeRuntime.dhtNamespaceNames.offline]: offlineMessageSelector,
-          [modeRuntime.dhtNamespaceNames.username]: usernameRegistrationSelector,
-          [modeRuntime.dhtNamespaceNames.groupOffline]: groupOfflineMessageSelector,
-          [modeRuntime.dhtNamespaceNames.groupInfoLatest]: groupInfoLatestSelector,
-          [modeRuntime.dhtNamespaceNames.groupInfoVersion]: groupInfoVersionedSelector,
-        },
-        validateUpdate: async (key, existing, incoming) => {
-          const keyStr = new TextDecoder().decode(key);
-          if (keyStr.startsWith(modeRuntime.dhtKeyPrefixes.offline)) {
-            return offlineMessageValidateUpdate(key, existing, incoming);
+        // Keep connections alive on transient ping misses; periodic health checker handles reconnect policy.
+        abortConnectionOnPingFailure: false,
+      },
+      services: {
+        pubsub: gossipsub({
+          doPX: true,
+          fallbackToFloodsub: false,
+          allowPublishToZeroTopicPeers: false,
+        }),
+        dht: kadDHT({
+          protocol: modeConfig.dhtProtocol,
+          peerInfoMapper: isAnonymousMode ? filterOnionAddressesMapper : passthroughMapper,
+          clientMode: false,
+          kBucketSize: K_BUCKET_SIZE,
+          prefixLength: PREFIX_LENGTH,
+          validators: {
+            [modeRuntime.dhtNamespaceNames.offline]: offlineMessageValidator,
+            [modeRuntime.dhtNamespaceNames.username]: usernameRegistrationValidator,
+            [modeRuntime.dhtNamespaceNames.groupOffline]: groupOfflineMessageValidator,
+            [modeRuntime.dhtNamespaceNames.groupInfoLatest]: groupInfoLatestValidator,
+            [modeRuntime.dhtNamespaceNames.groupInfoVersion]: groupInfoVersionedValidator,
+          },
+          selectors: {
+            [modeRuntime.dhtNamespaceNames.offline]: offlineMessageSelector,
+            [modeRuntime.dhtNamespaceNames.username]: usernameRegistrationSelector,
+            [modeRuntime.dhtNamespaceNames.groupOffline]: groupOfflineMessageSelector,
+            [modeRuntime.dhtNamespaceNames.groupInfoLatest]: groupInfoLatestSelector,
+            [modeRuntime.dhtNamespaceNames.groupInfoVersion]: groupInfoVersionedSelector,
+          },
+          validateUpdate: async (key, existing, incoming) => {
+            const keyStr = new TextDecoder().decode(key);
+            if (keyStr.startsWith(modeRuntime.dhtKeyPrefixes.offline)) {
+              return offlineMessageValidateUpdate(key, existing, incoming);
+            }
+            if (keyStr.startsWith(modeRuntime.dhtKeyPrefixes.username)) {
+              return usernameRegistrationValidateUpdate(key, existing, incoming);
+            }
+            if (keyStr.startsWith(modeRuntime.dhtKeyPrefixes.groupOffline)) {
+              return groupOfflineValidateUpdate(key, existing, incoming);
+            }
+            if (keyStr.startsWith(modeRuntime.dhtKeyPrefixes.groupInfoLatest)) {
+              return groupInfoLatestValidateUpdate(key, existing, incoming);
+            }
+            if (keyStr.startsWith(modeRuntime.dhtKeyPrefixes.groupInfoVersion)) {
+              return groupInfoVersionedValidateUpdate(key, existing, incoming);
+            }
+            console.warn(
+              `[MODE-GUARD][REJECT][dht_validate_update][bootstrap] mode=${networkMode} reason=unknown_namespace key=${keyStr}`
+            );
+            throw new Error('cross_mode_dht_key_rejected');
           }
-          if (keyStr.startsWith(modeRuntime.dhtKeyPrefixes.username)) {
-            return usernameRegistrationValidateUpdate(key, existing, incoming);
-          }
-          if (keyStr.startsWith(modeRuntime.dhtKeyPrefixes.groupOffline)) {
-            return groupOfflineValidateUpdate(key, existing, incoming);
-          }
-          if (keyStr.startsWith(modeRuntime.dhtKeyPrefixes.groupInfoLatest)) {
-            return groupInfoLatestValidateUpdate(key, existing, incoming);
-          }
-          if (keyStr.startsWith(modeRuntime.dhtKeyPrefixes.groupInfoVersion)) {
-            return groupInfoVersionedValidateUpdate(key, existing, incoming);
-          }
-          console.warn(
-            `[MODE-GUARD][REJECT][dht_validate_update][bootstrap] mode=${networkMode} reason=unknown_namespace key=${keyStr}`
-          );
-          throw new Error('cross_mode_dht_key_rejected');
-        }
-      }),
-      identify: identify({
-        runOnConnectionOpen: true
-      }),
-      ping: ping({
-        timeout: isAnonymousMode ? 60000 : 10000,
-      })
-    }
-  });
+        }),
+        identify: identify({
+          runOnConnectionOpen: true
+        }),
+        ping: ping({
+          timeout: isAnonymousMode ? 60000 : 10000,
+        })
+      }
+    });
 
-  await bootstrap.start();
-  return bootstrap as ChatNode;
+    await bootstrap.start();
+    return {
+      node: bootstrap as ChatNode,
+      datastore,
+      datastorePath,
+    };
+  } catch (error: unknown) {
+    try {
+      await datastore.close();
+    } catch (closeError: unknown) {
+      console.warn(
+        `[STACK][BOOTSTRAP] failed to close datastore after startup error: ${
+          closeError instanceof Error ? closeError.message : String(closeError)
+        }`
+      );
+    }
+    throw error;
+  }
 }
 
 async function main(): Promise<void> {
   try {
-    const bootstrap = await createBootstrapNode();
+    const { node: bootstrap, datastore, datastorePath } = await createBootstrapNode();
     console.log(`Bootstrap Peer ID: ${bootstrap.peerId.toString()}`);
+    console.log(`[STACK][BOOTSTRAP] datastore_opened=${datastorePath}`);
 
     bootstrap.getMultiaddrs().forEach(addr => {
       console.log(`Listening on: ${addr.toString()}`);
@@ -221,21 +258,42 @@ async function main(): Promise<void> {
 
     console.log('Bootstrap node ready for connections...');
 
-    // Graceful shutdown
-    process.on('SIGINT', () => {
-      void (async () => {
-        console.log('\nShutting down bootstrap node...');
+    let shuttingDown = false;
+    const shutdown = async (signal: 'SIGINT' | 'SIGTERM'): Promise<void> => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+
+      console.log(`\nShutting down bootstrap node (${signal})...`);
+
+      try {
         await bootstrap.stop();
-        process.exit(0);
-      })();
+      } catch (stopError: unknown) {
+        console.error(
+          `[STACK][BOOTSTRAP] failed to stop libp2p cleanly: ${
+            stopError instanceof Error ? stopError.message : String(stopError)
+          }`
+        );
+      }
+
+      try {
+        await datastore.close();
+      } catch (closeError: unknown) {
+        console.error(
+          `[STACK][BOOTSTRAP] failed to close datastore cleanly: ${
+            closeError instanceof Error ? closeError.message : String(closeError)
+          }`
+        );
+      }
+
+      process.exit(0);
+    };
+
+    process.on('SIGINT', () => {
+      void shutdown('SIGINT');
     });
 
     process.on('SIGTERM', () => {
-      void (async () => {
-        console.log('\nShutting down bootstrap node...');
-        await bootstrap.stop();
-        process.exit(0);
-      })();
+      void shutdown('SIGTERM');
     });
 
 
@@ -250,4 +308,4 @@ process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>) =>
   process.exit(1);
 });
 
-main().catch(console.error); 
+main().catch(console.error);

@@ -319,6 +319,15 @@ export const CallManagerCard = () => {
               variant="outline"
               size="sm"
               className="border-white/20 bg-black/40 text-white hover:bg-black/55"
+              onClick={() => setIsVideoStreamsSwapped((prev) => !prev)}
+              title="Swap videos"
+            >
+              <ArrowLeftRight className="w-4 h-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-white/20 bg-black/40 text-white hover:bg-black/55"
               onClick={exitVideoFullscreen}
               title="Exit fullscreen"
             >

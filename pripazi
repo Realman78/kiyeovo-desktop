@@ -4,8 +4,13 @@
 
 2. Does changing the username of a user (locally) affect negatively on any other aspects?
 
-3. Investigate DHT put errors for group info - [GROUP] DHT put error for /kiyeovo-fast-group-info-v/71e3f6bb-c60e-4dc7-b9cf-f16ad07b42a3/F9ntCrDHH8x8pdhLMgUsrJsjXyF-hCUE0M1TPylpiEo/26
+4. DHT put error for /kiyeovo-fast-group-info-v/71e3f6bb-c60e-4dc7-b9cf-f16ad07b42a3/F9ntCrDHH8x8pdhLMgUsrJsjXyF-hCUE0M1TPylpiEo/29:
+  from: PeerId(12D3KooWBEmK9VyRzDPpkhVdfH1LhpMTz4DH8NhA6e7pdi6AXstV),
+  error: LimitedConnectionError: Cannot open protocol stream on limited connection
 
+  - ovo gori se dogada jer se DHT stream po defaultu ne runna na limited connectionima. to bi trebalo u libp2p patchat
+  - ovo necu zasad ali ako se desi da je previse konekcija limited i da se replikacija ne dogada, moralo bi se osposobit.
+  
 6. nekakav rate limit na DHT zapise (na validatorima)
 
 7. Stavi u README da se poveca SCRYPTN_N
