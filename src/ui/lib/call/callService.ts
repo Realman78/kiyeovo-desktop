@@ -1,4 +1,5 @@
 import type { CallDirection, CallSignal, CallStateChangedEvent } from '../../types';
+import { DEFAULT_WEBRTC_ICE_SERVERS } from '../../../core/default-bootstrap-nodes';
 
 type CurrentCall = {
   callId: string;
@@ -42,23 +43,7 @@ class CallService {
   }
 
   private getIceServers(): RTCIceServer[] {
-    const servers: RTCIceServer[] = [];
-    const stunUrl = (import.meta.env.VITE_STUN_URL as string | undefined)?.trim();
-    const turnUrl = (import.meta.env.VITE_TURN_URL as string | undefined)?.trim();
-    const turnUsername = (import.meta.env.VITE_TURN_USERNAME as string | undefined)?.trim();
-    const turnPassword = (import.meta.env.VITE_TURN_PASSWORD as string | undefined)?.trim();
-
-    if (stunUrl) {
-      servers.push({ urls: stunUrl });
-    }
-    if (turnUrl && turnUsername && turnPassword) {
-      servers.push({
-        urls: turnUrl,
-        username: turnUsername,
-        credential: turnPassword,
-      });
-    }
-    return servers;
+    return DEFAULT_WEBRTC_ICE_SERVERS.map((server) => ({ ...server }));
   }
 
   private createPeerConnection(context: CurrentCall): RTCPeerConnection {
