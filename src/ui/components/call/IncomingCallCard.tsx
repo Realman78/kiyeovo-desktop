@@ -102,7 +102,7 @@ export const IncomingCallCard = () => {
       >
         <GripVertical className="mx-auto h-3.5 w-3.5" />
       </button>
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex items-center justify-center gap-2">
         <div className="text-sm font-semibold text-foreground">Incoming Call from {incomingCall.peerName}...</div>
       </div>
       <div className="mt-3 flex items-center justify-end gap-2">

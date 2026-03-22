@@ -132,7 +132,7 @@ export const CallManagerCard = () => {
       >
         <GripVertical className="mx-auto h-3.5 w-3.5" />
       </button>
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex items-center justify-center gap-2">
         <div className="flex items-center gap-2">
           <PhoneCall className="w-4 h-4 text-primary" />
           <div className="text-sm font-semibold text-foreground">

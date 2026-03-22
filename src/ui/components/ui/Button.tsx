@@ -1,7 +1,7 @@
 import * as React from "react";
 
 // Base button classes
-const baseClasses = "inline-flex disabled:cursor-not-allowed cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium font-mono tracking-wide transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background  disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 uppercase";
+const baseClasses = "box-border inline-flex disabled:cursor-not-allowed cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium font-mono tracking-wide transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background  disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 uppercase";
 
 // Variant styles
 const variantClasses = {
