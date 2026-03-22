@@ -1,22 +1,10 @@
 0. u stashu ti je enkripcija group info-a
 
-0.5 ako alice ne bude u prvih 15 chatova, neces dobit group update, mozda bi uvik tribalo procitat grupe ke se dohvacaju i obavezno njezine creatore fetchat u direct chat fetchu.
-
-1. [NUDGE][SEND_FAIL] peer=fz9zYUjU group=32398e08 reason=Remote closed connection during opening -> 2 korisnika u isto vrime prihvate, skuzi zac se jedan aktivira puno kasnije
-
-2. Chad accepts group invitation from Alice. Alice sends welcome and propagates the notification that Chad joined to other group members. however, Chad did not receive the WELCOME message so he never ACK-ed it. Chad is not in the group from his POV, but everyone else sees that he is. of course, when chad restarts the app, this works, so maybe it is not an issue since chad will read the messages from the group offline bucket
-
-3. I joined with a user and while the joining was happening, Alice (creator) was sending messages, but Chad did not receive them in real time, only when I checked missed messages. Alice error: [GROUP-MSG] Retrying publish for group=c883e511-02a7-4f23-9df9-4f495c094c44 after retryable error: PublishError.NoPeersSubscribedToTopic (attempt1Ms=1)
-we already went thourgh this and have not found the issue, I will have to investigate later. What do you say to the idea that if Chad is online when a new user joins or leaves or is removed, that the check missed messages gets triggered on his end? of course, only if he is online when the actual system message arrives, not when he comes online and the system message is fetched from the bucket. dont implement, let us just think about it
-
-4. delete user & chat, ako si creator nemores ih vise izbacit iz tog chata - izgleda da moren ipak
-- jako cudno kada alice zbrise chada i onda ga izbaci iz grupe
-
-5. High: if a user has a full bucket, he wont be able to receive GROUP_STATE_UPDATE or any other group control message -- dodani reserve slotovi
+1. [NUDGE][SEND_FAIL] peer=fz9zYUjU group=32398e08 reason=Remote closed connection during opening -> do libp2p je jednostavno. probal san fixat i zasad nemoren replicirat. zbrisat cu ovo ako se kad desi opet
 
 6. nekakav rate limit na DHT zapise (na validatorima)
 
-7 Stavi u README da se poveca SCRYPTN_N
+7. Stavi u README da se poveca SCRYPTN_N
 
 8. OPTIMIZATION - protobuf umisto JSON-a za offline poruke
 

@@ -1,5 +1,24 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { InitStatus, IPC_CHANNELS, KeyExchangeEvent, MessageSentStatus, PasswordRequest, ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent, GroupChatActivatedEvent, GroupMembersUpdatedEvent, SendMessageResponse, GroupOfflineGapWarning } from '../core';
+import {
+    InitStatus,
+    IPC_CHANNELS,
+    KeyExchangeEvent,
+    MessageSentStatus,
+    PasswordRequest,
+    ContactRequestEvent,
+    ChatCreatedEvent,
+    KeyExchangeFailedEvent,
+    MessageReceivedEvent,
+    GroupChatActivatedEvent,
+    GroupMembersUpdatedEvent,
+    SendMessageResponse,
+    GroupOfflineGapWarning,
+    CallIncomingEvent,
+    CallSignalReceivedEvent,
+    CallStateChangedEvent,
+    CallErrorEvent,
+    CallSignalOutgoingInput,
+} from '../core';
 import type { NetworkMode } from '../core';
 import { ContactAttempt, Message } from '../core/lib/db/database';
 
@@ -101,6 +120,51 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     },
     retryGroupOfflineBackup: async (chatId: number, messageId: string): Promise<{ success: boolean; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.RETRY_GROUP_OFFLINE_BACKUP, chatId, messageId);
+    },
+
+    // Call signaling
+    startCall: async (peerId: string, callId: string, offerSdp: string): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.CALL_START, peerId, callId, offerSdp);
+    },
+    acceptCall: async (peerId: string, callId: string, answerSdp: string): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.CALL_ACCEPT, peerId, callId, answerSdp);
+    },
+    rejectCall: async (
+        peerId: string,
+        callId: string,
+        reason?: 'rejected' | 'timeout' | 'offline' | 'policy'
+    ): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.CALL_REJECT, peerId, callId, reason);
+    },
+    hangupCall: async (
+        peerId: string,
+        callId: string,
+        reason?: 'hangup' | 'disconnect' | 'failed'
+    ): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.CALL_HANGUP, peerId, callId, reason);
+    },
+    sendCallSignal: async (signal: CallSignalOutgoingInput): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.CALL_SIGNAL_SEND, signal);
+    },
+    onCallIncoming: (callback: (data: CallIncomingEvent) => void) => {
+        const listener = (_event: any, data: CallIncomingEvent) => callback(data);
+        ipcRenderer.on(IPC_CHANNELS.CALL_INCOMING, listener);
+        return () => ipcRenderer.removeListener(IPC_CHANNELS.CALL_INCOMING, listener);
+    },
+    onCallSignalReceived: (callback: (data: CallSignalReceivedEvent) => void) => {
+        const listener = (_event: any, data: CallSignalReceivedEvent) => callback(data);
+        ipcRenderer.on(IPC_CHANNELS.CALL_SIGNAL_RECEIVED, listener);
+        return () => ipcRenderer.removeListener(IPC_CHANNELS.CALL_SIGNAL_RECEIVED, listener);
+    },
+    onCallStateChanged: (callback: (data: CallStateChangedEvent) => void) => {
+        const listener = (_event: any, data: CallStateChangedEvent) => callback(data);
+        ipcRenderer.on(IPC_CHANNELS.CALL_STATE_CHANGED, listener);
+        return () => ipcRenderer.removeListener(IPC_CHANNELS.CALL_STATE_CHANGED, listener);
+    },
+    onCallError: (callback: (data: CallErrorEvent) => void) => {
+        const listener = (_event: any, data: CallErrorEvent) => callback(data);
+        ipcRenderer.on(IPC_CHANNELS.CALL_ERROR, listener);
+        return () => ipcRenderer.removeListener(IPC_CHANNELS.CALL_ERROR, listener);
     },
 
     // Key exchange event

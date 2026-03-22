@@ -1,4 +1,22 @@
-import type { ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, InitStatus, PasswordRequest, MessageReceivedEvent, KeyExchangeEvent, NetworkMode, SendMessageResponse, GroupChatActivatedEvent, GroupMembersUpdatedEvent, GroupOfflineGapWarning } from './src/core/types';
+import type {
+    ContactRequestEvent,
+    ChatCreatedEvent,
+    KeyExchangeFailedEvent,
+    InitStatus,
+    PasswordRequest,
+    MessageReceivedEvent,
+    KeyExchangeEvent,
+    NetworkMode,
+    SendMessageResponse,
+    GroupChatActivatedEvent,
+    GroupMembersUpdatedEvent,
+    GroupOfflineGapWarning,
+    CallIncomingEvent,
+    CallSignalReceivedEvent,
+    CallStateChangedEvent,
+    CallErrorEvent,
+    CallSignalOutgoingInput,
+} from './src/core/types';
 import type { Chat, Message } from './src/core/lib/db/database';
 
 declare global {
@@ -52,6 +70,25 @@ declare global {
                 options?: { rekeyRetryHint?: boolean }
             ) => Promise<SendMessageResponse>;
             retryGroupOfflineBackup: (chatId: number, messageId: string) => Promise<{ success: boolean; error: string | null }>;
+
+            // Call signaling
+            startCall: (peerId: string, callId: string, offerSdp: string) => Promise<{ success: boolean; error: string | null }>;
+            acceptCall: (peerId: string, callId: string, answerSdp: string) => Promise<{ success: boolean; error: string | null }>;
+            rejectCall: (
+                peerId: string,
+                callId: string,
+                reason?: 'rejected' | 'timeout' | 'offline' | 'policy'
+            ) => Promise<{ success: boolean; error: string | null }>;
+            hangupCall: (
+                peerId: string,
+                callId: string,
+                reason?: 'hangup' | 'disconnect' | 'failed'
+            ) => Promise<{ success: boolean; error: string | null }>;
+            sendCallSignal: (signal: CallSignalOutgoingInput) => Promise<{ success: boolean; error: string | null }>;
+            onCallIncoming: (callback: (data: CallIncomingEvent) => void) => () => void;
+            onCallSignalReceived: (callback: (data: CallSignalReceivedEvent) => void) => () => void;
+            onCallStateChanged: (callback: (data: CallStateChangedEvent) => void) => () => void;
+            onCallError: (callback: (data: CallErrorEvent) => void) => () => void;
 
             // Key exchange events
             onKeyExchangeSent: (callback: (data: KeyExchangeEvent) => void) => () => void;

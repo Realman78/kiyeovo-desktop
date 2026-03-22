@@ -4,17 +4,75 @@ import Sidebar from '../components/sidebar/Sidebar';
 import ChatWrapper from '../components/chat/ChatWrapper';
 import { setChats, addChat, removePendingKeyExchange, setActiveChat, markOfflineFetched, markOfflineFetchFailed, updateFileTransferProgress, updateFileTransferStatus, updateFileTransferError, setPendingFileStatus, updateChat, setActivePendingKeyExchange, setOfflineFetchStatus } from '../state/slices/chatSlice';
 import { removeContactAttempt, setActiveContactAttempt, addMessage, type Chat } from '../state/slices/chatSlice';
+import { applyCoreCallState, applyLocalCallState, setCallError, setIncomingCall, setCallPeerName } from '../state/slices/callSlice';
 import { useToast } from '../components/ui/use-toast';
 import type { RootState } from '../state/store';
 import { useNotifications } from '../hooks/useNotifications';
 import { store } from '../state/store';
+import { callService } from '../lib/call/callService';
+import { IncomingCallCard } from '../components/call/IncomingCallCard';
+import { CallManagerCard } from '../components/call/CallManagerCard';
 
 export const Main = () => {
   const dispatch = useDispatch();
   const { toast } = useToast();
   const isConnected = useSelector((state: RootState) => state.user.connected);
+  const chats = useSelector((state: RootState) => state.chat.chats);
+  const activeCall = useSelector((state: RootState) => state.call.activeCall);
+  const incomingCall = useSelector((state: RootState) => state.call.incomingCall);
 
   useNotifications();
+
+  const resolvePeerName = (peerId: string): string => {
+    const state = store.getState();
+    const directChat = state.chat.chats.find((chat) => chat.type === 'direct' && chat.peerId === peerId);
+    if (directChat?.name) return directChat.name;
+    const user = state.chat.chats.find((chat) => chat.peerId === peerId && chat.username);
+    return user?.username ?? `user_${peerId.slice(-8)}`;
+  };
+
+  useEffect(() => {
+    if (activeCall) {
+      dispatch(setCallPeerName({
+        peerId: activeCall.peerId,
+        peerName: resolvePeerName(activeCall.peerId),
+      }));
+    }
+    if (incomingCall) {
+      dispatch(setCallPeerName({
+        peerId: incomingCall.peerId,
+        peerName: resolvePeerName(incomingCall.peerId),
+      }));
+    }
+  }, [dispatch, chats, activeCall?.peerId, incomingCall?.peerId]);
+
+  useEffect(() => {
+    if (!incomingCall) return;
+    const timer = setTimeout(() => {
+      const currentIncoming = store.getState().call.incomingCall;
+      if (!currentIncoming) return;
+      if (
+        currentIncoming.callId !== incomingCall.callId
+        || currentIncoming.peerId !== incomingCall.peerId
+      ) {
+        return;
+      }
+      void (async () => {
+        const result = await callService.rejectIncomingCall(
+          currentIncoming.peerId,
+          currentIncoming.callId,
+          'timeout',
+        );
+        if (!result.success) {
+          const message = result.error || 'Failed to timeout incoming call';
+          dispatch(setCallError(message));
+          toast.error(message);
+        }
+      })();
+    }, 30_000);
+
+    return () => clearTimeout(timer);
+  }, [dispatch, incomingCall?.callId, incomingCall?.peerId, toast]);
 
   useEffect(() => {
     const unsubKeyExchangeFailed = window.kiyeovoAPI.onKeyExchangeFailed((data) => {
@@ -342,6 +400,55 @@ export const Main = () => {
       }, msUntilExpire);
     });
 
+    const unsubCallIncoming = window.kiyeovoAPI.onCallIncoming((data) => {
+      const peerName = resolvePeerName(data.signal.fromPeerId);
+      dispatch(setIncomingCall({
+        callId: data.signal.callId,
+        peerId: data.signal.fromPeerId,
+        peerName,
+        offerSdp: data.signal.offerSdp,
+        receivedAt: data.receivedAt,
+      }));
+    });
+
+    const unsubCallSignalReceived = window.kiyeovoAPI.onCallSignalReceived((data) => {
+      void callService.handleSignal(data.signal);
+    });
+
+    const unsubCallStateChanged = window.kiyeovoAPI.onCallStateChanged((data) => {
+      const peerName = resolvePeerName(data.peerId);
+      dispatch(applyCoreCallState({
+        callId: data.callId,
+        peerId: data.peerId,
+        peerName,
+        direction: data.direction,
+        state: data.state,
+        reason: data.reason,
+        timestamp: data.timestamp,
+      }));
+      callService.syncWithCoreState(data);
+    });
+
+    const unsubCallError = window.kiyeovoAPI.onCallError((data) => {
+      dispatch(setCallError(data.error));
+      toast.error(data.error);
+    });
+
+    const unsubCallService = callService.subscribe((event) => {
+      if (event.type === 'error') {
+        dispatch(setCallError(event.message));
+        toast.error(event.message);
+        return;
+      }
+
+      dispatch(applyLocalCallState({
+        callId: event.callId,
+        peerId: event.peerId,
+        state: event.state,
+        reason: event.reason,
+      }));
+    });
+
     return () => {
       unsubKeyExchangeFailed();
       unsubMessageReceived();
@@ -352,6 +459,12 @@ export const Main = () => {
       unsubFileTransferComplete();
       unsubFileTransferFailed();
       unsubPendingFileReceived();
+      unsubCallIncoming();
+      unsubCallSignalReceived();
+      unsubCallStateChanged();
+      unsubCallError();
+      unsubCallService();
+      callService.dispose();
     };
   }, [])
 
@@ -555,6 +668,8 @@ export const Main = () => {
       <div className='flex-1'>
         <ChatWrapper />
       </div>
+      <IncomingCallCard />
+      <CallManagerCard />
     </div>
   )
 }

@@ -1,5 +1,37 @@
 import { peerIdFromString } from '@libp2p/peer-id';
-import type { ChatNode, StreamHandlerContext, AuthenticatedEncryptedMessage, OfflineMessage, OfflineSenderInfo, ConversationSession, EncryptedMessage, ContactMode, KeyExchangeEvent, ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent, MessageReceivedEvent, SendMessageResponse, StrippedMessage, MessageSentStatus, FileTransferProgressEvent, FileTransferCompleteEvent, FileTransferFailedEvent, PendingFileReceivedEvent, GroupChatActivatedEvent, GroupMembersUpdatedEvent, GroupOfflineGapWarning } from '../types.js';
+import type {
+  ChatNode,
+  StreamHandlerContext,
+  AuthenticatedEncryptedMessage,
+  OfflineMessage,
+  OfflineSenderInfo,
+  ConversationSession,
+  EncryptedMessage,
+  ContactMode,
+  KeyExchangeEvent,
+  ContactRequestEvent,
+  ChatCreatedEvent,
+  KeyExchangeFailedEvent,
+  MessageReceivedEvent,
+  SendMessageResponse,
+  StrippedMessage,
+  MessageSentStatus,
+  FileTransferProgressEvent,
+  FileTransferCompleteEvent,
+  FileTransferFailedEvent,
+  PendingFileReceivedEvent,
+  GroupChatActivatedEvent,
+  GroupMembersUpdatedEvent,
+  GroupOfflineGapWarning,
+  CallIncomingEvent,
+  CallSignalReceivedEvent,
+  CallStateChangedEvent,
+  CallErrorEvent,
+  CallSignalOutgoingInput,
+  CallSignalMessage,
+  CallSignalType,
+  UnsignedCallSignalMessage,
+} from '../types.js';
 import {
   CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES,
   MESSAGE_TIMEOUT,
@@ -40,6 +72,7 @@ import type { GroupOfflineCheckOptions } from './group/group-offline-manager.js'
 import { GroupAckRepublisher } from './group/group-ack-republisher.js';
 import { GroupInfoRepublisher } from './group/group-info-republisher.js';
 import { dialProtocolWithRelayFallback } from './protocol-dialer.js';
+import { EncryptedUserIdentity } from './encrypted-user-identity.js';
 
 type OfflineReadBucketInfo = ReturnType<ChatDatabase['getOfflineReadBucketInfo']>[number];
 type OfflineReadBucketInfoForChats = ReturnType<ChatDatabase['getOfflineReadBucketInfoForChats']>[number];
@@ -53,6 +86,13 @@ type BucketNudgePayload =
   | { kind: 'GROUP_REKEY_REFETCH'; groupId: string }
   | { kind: 'DIRECT_SESSION_RESET' };
 
+type ActiveCall = {
+  callId: string;
+  peerId: string;
+  direction: 'incoming' | 'outgoing';
+  state: 'ringing_out' | 'ringing_in' | 'connecting' | 'active';
+};
+
 /**
  * Main message handler that orchestrates all message handling components
  */
@@ -60,6 +100,10 @@ export class MessageHandler {
   private static readonly GROUP_CONTROL_MAX_RETRIES = 3;
   private static readonly GROUP_CONTROL_RETRY_TTL_MS = 10 * 60 * 1000;
   private static readonly GROUP_CONTROL_RETRY_CACHE_MAX_ENTRIES = 200;
+  private static readonly CALL_SIGNAL_TIMEOUT_MS = 5000;
+  private static readonly CALL_SIGNAL_MAX_AGE_MS = 5 * 60 * 1000;
+  private static readonly CALL_SIGNAL_MAX_FUTURE_SKEW_MS = 2 * 60 * 1000;
+  private static readonly CALL_OFFER_RETRY_DELAY_MS = 2000;
   private node: ChatNode;
   private usernameRegistry: UsernameRegistry;
   private sessionManager: SessionManager;
@@ -71,6 +115,10 @@ export class MessageHandler {
   private onGroupChatActivated: (data: GroupChatActivatedEvent) => void;
   private onGroupMembersUpdated: (data: GroupMembersUpdatedEvent) => void;
   private onOfflineMessagesFetchComplete: ((chatIds: number[]) => void) | undefined;
+  private onCallIncoming: (data: CallIncomingEvent) => void;
+  private onCallSignalReceived: (data: CallSignalReceivedEvent) => void;
+  private onCallStateChanged: (data: CallStateChangedEvent) => void;
+  private onCallError: (data: CallErrorEvent) => void;
   private nudgeCooldowns = new Map<string, number>();
   private nudgeTrailingTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private nudgeFetchTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -96,7 +144,9 @@ export class MessageHandler {
   private groupInfoRepublisher: GroupInfoRepublisher;
   private readonly bucketNudgeProtocol: string;
   private readonly chatProtocol: string;
+  private readonly callSignalProtocol: string;
   private readonly expectedOfflineBucketPrefix: string;
+  private activeCall: ActiveCall | null = null;
 
   private formatNudgeTarget(payload: BucketNudgePayload): string {
     if (payload.kind === 'GROUP_REKEY_REFETCH') {
@@ -144,6 +194,10 @@ export class MessageHandler {
     onGroupChatActivated: (data: GroupChatActivatedEvent) => void,
     onGroupMembersUpdated: (data: GroupMembersUpdatedEvent) => void,
     onOfflineMessagesFetchComplete?: (chatIds: number[]) => void,
+    onCallIncoming?: (data: CallIncomingEvent) => void,
+    onCallSignalReceived?: (data: CallSignalReceivedEvent) => void,
+    onCallStateChanged?: (data: CallStateChangedEvent) => void,
+    onCallError?: (data: CallErrorEvent) => void,
   ) {
     this.node = node;
     this.usernameRegistry = usernameRegistry;
@@ -153,6 +207,10 @@ export class MessageHandler {
     this.onGroupChatActivated = onGroupChatActivated;
     this.onGroupMembersUpdated = onGroupMembersUpdated;
     this.onOfflineMessagesFetchComplete = onOfflineMessagesFetchComplete;
+    this.onCallIncoming = onCallIncoming ?? (() => undefined);
+    this.onCallSignalReceived = onCallSignalReceived ?? (() => undefined);
+    this.onCallStateChanged = onCallStateChanged ?? (() => undefined);
+    this.onCallError = onCallError ?? (() => undefined);
     this.keyExchange = new KeyExchange(
       node,
       usernameRegistry,
@@ -169,6 +227,7 @@ export class MessageHandler {
     const modeConfig = getNetworkModeRuntime(sessionNetworkMode).config;
     this.bucketNudgeProtocol = modeConfig.bucketNudgeProtocol;
     this.chatProtocol = modeConfig.chatProtocol;
+    this.callSignalProtocol = modeConfig.callSignalProtocol;
     this.expectedOfflineBucketPrefix = `${modeConfig.dhtNamespaces.offline}/`;
     const userIdentity = this.usernameRegistry.getUserIdentity();
     if (!userIdentity) {
@@ -510,12 +569,560 @@ export class MessageHandler {
     }, {
       runOnLimitedConnection: true,
     });
+
+    void this.node.handle(this.callSignalProtocol, async (context: StreamHandlerContext) => {
+      const { remoteId, stream } = StreamHandler.getRemotePeerInfo(context);
+      try {
+        if (this.database.isBlocked(remoteId)) return;
+
+        const signal = await StreamHandler.readMessageFromStream<CallSignalMessage>(stream);
+        await this.handleIncomingCallSignal(remoteId, signal);
+      } catch (error: unknown) {
+        generalErrorHandler(error, `Error handling call signal from ${remoteId}`);
+      } finally {
+        try {
+          await stream.close();
+        } catch {
+          // Best-effort close.
+        }
+      }
+    }, {
+      runOnLimitedConnection: true,
+    });
   }
 
   private isKnownNudgeSender(remoteId: string): boolean {
     const hasDirectChat = this.database.getChatByPeerId(remoteId) !== null;
     const knownUser = this.database.getUserByPeerId(remoteId) !== null;
     return hasDirectChat || knownUser;
+  }
+
+  private emitCallError(error: string, details?: { peerId?: string; callId?: string; code?: string }): void {
+    const payload: CallErrorEvent = {
+      error,
+      timestamp: Date.now(),
+    };
+    if (details?.peerId) payload.peerId = details.peerId;
+    if (details?.callId) payload.callId = details.callId;
+    if (details?.code) payload.code = details.code;
+    this.onCallError(payload);
+  }
+
+  private setActiveCall(activeCall: ActiveCall): void {
+    this.activeCall = activeCall;
+    this.onCallStateChanged({
+      callId: activeCall.callId,
+      peerId: activeCall.peerId,
+      state: activeCall.state,
+      direction: activeCall.direction,
+      timestamp: Date.now(),
+    });
+  }
+
+  private clearActiveCall(reason: string): void {
+    if (!this.activeCall) return;
+    const previous = this.activeCall;
+    this.activeCall = null;
+    this.onCallStateChanged({
+      callId: previous.callId,
+      peerId: previous.peerId,
+      state: 'ended',
+      direction: previous.direction,
+      reason,
+      timestamp: Date.now(),
+    });
+  }
+
+  private hasActiveConnectionToPeer(peerId: string): boolean {
+    return this.node
+      .getConnections()
+      .some((conn) => conn.remotePeer.toString() === peerId && conn.status === 'open');
+  }
+
+  private isActiveCallMatch(peerId: string, callId: string): boolean {
+    return !!this.activeCall
+      && this.activeCall.peerId === peerId
+      && this.activeCall.callId === callId;
+  }
+
+  private ensureFastModeForCalls(): void {
+    const mode = this.database.getSessionNetworkMode();
+    if (mode !== 'fast') {
+      throw new Error('Calls are currently available only in Fast mode');
+    }
+  }
+
+  private ensureDirectCallContact(peerId: string): void {
+    if (this.database.isBlocked(peerId)) {
+      throw new Error('Peer is blocked');
+    }
+    const chat = this.database.getChatByPeerId(peerId);
+    if (!chat) {
+      throw new Error('Calls are available only for direct contacts');
+    }
+    const user = this.database.getUserByPeerId(peerId);
+    if (!user) {
+      throw new Error('Peer not found');
+    }
+  }
+
+  private isCallSignalType(value: unknown): value is CallSignalType {
+    return value === 'CALL_OFFER'
+      || value === 'CALL_ANSWER'
+      || value === 'CALL_ICE'
+      || value === 'CALL_REJECT'
+      || value === 'CALL_END'
+      || value === 'CALL_BUSY';
+  }
+
+  private isCallSignalMessage(value: unknown): value is CallSignalMessage {
+    if (!value || typeof value !== 'object') return false;
+    const signal = value as Record<string, unknown>;
+    if (!this.isCallSignalType(signal.type)) return false;
+    if (typeof signal.callId !== 'string' || !signal.callId) return false;
+    if (typeof signal.fromPeerId !== 'string' || !signal.fromPeerId) return false;
+    if (typeof signal.toPeerId !== 'string' || !signal.toPeerId) return false;
+    if (!Number.isFinite(signal.timestamp) || Number(signal.timestamp) <= 0) return false;
+    if (typeof signal.signature !== 'string' || !signal.signature) return false;
+
+    switch (signal.type) {
+      case 'CALL_OFFER':
+        return typeof signal.offerSdp === 'string' && signal.offerSdp.length > 0;
+      case 'CALL_ANSWER':
+        return typeof signal.answerSdp === 'string' && signal.answerSdp.length > 0;
+      case 'CALL_ICE':
+        return typeof signal.candidate === 'string'
+          && (signal.sdpMid === null || typeof signal.sdpMid === 'string')
+          && (signal.sdpMLineIndex === null || Number.isInteger(signal.sdpMLineIndex))
+          && (signal.usernameFragment === null || typeof signal.usernameFragment === 'string');
+      case 'CALL_REJECT':
+        return signal.reason === 'rejected'
+          || signal.reason === 'timeout'
+          || signal.reason === 'offline'
+          || signal.reason === 'policy';
+      case 'CALL_END':
+        return signal.reason === 'hangup'
+          || signal.reason === 'disconnect'
+          || signal.reason === 'failed';
+      case 'CALL_BUSY':
+        return signal.reason === 'busy';
+      default:
+        return false;
+    }
+  }
+
+  private toUnsignedCallSignalPayload(
+    signal: UnsignedCallSignalMessage
+  ): Record<string, unknown> {
+    const common = {
+      type: signal.type,
+      callId: signal.callId,
+      fromPeerId: signal.fromPeerId,
+      toPeerId: signal.toPeerId,
+      timestamp: signal.timestamp,
+    };
+
+    switch (signal.type) {
+      case 'CALL_OFFER':
+        return { ...common, offerSdp: signal.offerSdp };
+      case 'CALL_ANSWER':
+        return { ...common, answerSdp: signal.answerSdp };
+      case 'CALL_ICE':
+        return {
+          ...common,
+          candidate: signal.candidate,
+          sdpMid: signal.sdpMid,
+          sdpMLineIndex: signal.sdpMLineIndex,
+          usernameFragment: signal.usernameFragment,
+        };
+      case 'CALL_REJECT':
+      case 'CALL_END':
+      case 'CALL_BUSY':
+        return { ...common, reason: signal.reason };
+      default:
+        return common;
+    }
+  }
+
+  private buildSignedCallSignal(input: CallSignalOutgoingInput): CallSignalMessage {
+    this.ensureFastModeForCalls();
+    this.ensureDirectCallContact(input.toPeerId);
+
+    const userIdentity = this.usernameRegistry.getUserIdentity();
+    if (!userIdentity) {
+      throw new Error('User identity unavailable');
+    }
+    const fromPeerId = this.node.peerId.toString();
+    const timestamp = input.timestamp ?? Date.now();
+
+    let unsignedSignal: UnsignedCallSignalMessage;
+    switch (input.type) {
+      case 'CALL_OFFER':
+        unsignedSignal = {
+          type: 'CALL_OFFER',
+          callId: input.callId,
+          fromPeerId,
+          toPeerId: input.toPeerId,
+          timestamp,
+          offerSdp: input.offerSdp,
+        };
+        break;
+      case 'CALL_ANSWER':
+        unsignedSignal = {
+          type: 'CALL_ANSWER',
+          callId: input.callId,
+          fromPeerId,
+          toPeerId: input.toPeerId,
+          timestamp,
+          answerSdp: input.answerSdp,
+        };
+        break;
+      case 'CALL_ICE':
+        unsignedSignal = {
+          type: 'CALL_ICE',
+          callId: input.callId,
+          fromPeerId,
+          toPeerId: input.toPeerId,
+          timestamp,
+          candidate: input.candidate,
+          sdpMid: input.sdpMid,
+          sdpMLineIndex: input.sdpMLineIndex,
+          usernameFragment: input.usernameFragment,
+        };
+        break;
+      case 'CALL_REJECT':
+        unsignedSignal = {
+          type: 'CALL_REJECT',
+          callId: input.callId,
+          fromPeerId,
+          toPeerId: input.toPeerId,
+          timestamp,
+          reason: input.reason,
+        };
+        break;
+      case 'CALL_END':
+        unsignedSignal = {
+          type: 'CALL_END',
+          callId: input.callId,
+          fromPeerId,
+          toPeerId: input.toPeerId,
+          timestamp,
+          reason: input.reason,
+        };
+        break;
+      case 'CALL_BUSY':
+        unsignedSignal = {
+          type: 'CALL_BUSY',
+          callId: input.callId,
+          fromPeerId,
+          toPeerId: input.toPeerId,
+          timestamp,
+          reason: input.reason,
+        };
+        break;
+      default:
+        throw new Error('Unsupported call signal type');
+    }
+
+    const signatureBytes = userIdentity.sign(JSON.stringify(this.toUnsignedCallSignalPayload(unsignedSignal)));
+    const signature = Buffer.from(signatureBytes).toString('base64');
+    return { ...unsignedSignal, signature };
+  }
+
+  private withCallSignalTimeout<T>(operation: Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        reject(new Error('Call signal timeout'));
+      }, MessageHandler.CALL_SIGNAL_TIMEOUT_MS);
+
+      operation
+        .then((result) => {
+          clearTimeout(timeoutId);
+          resolve(result);
+        })
+        .catch((error) => {
+          clearTimeout(timeoutId);
+          reject(error);
+        });
+    });
+  }
+
+  private async openCallSignalStream(targetPeerId: string): Promise<Awaited<ReturnType<ChatNode['dialProtocol']>>> {
+    const connections = this.node
+      .getConnections()
+      .filter(conn => conn.remotePeer.toString() === targetPeerId && conn.status === 'open');
+
+    for (const conn of connections) {
+      try {
+        return await conn.newStream(this.callSignalProtocol, {
+          signal: AbortSignal.timeout(MessageHandler.CALL_SIGNAL_TIMEOUT_MS),
+          runOnLimitedConnection: true,
+        });
+      } catch {
+        // Try next connection, then fallback dial.
+      }
+    }
+
+    return dialProtocolWithRelayFallback({
+      node: this.node,
+      database: this.database,
+      targetPeerId: peerIdFromString(targetPeerId),
+      protocol: this.callSignalProtocol,
+      context: 'call_signal',
+    });
+  }
+
+  private async sendSignedCallSignal(signal: CallSignalMessage): Promise<void> {
+    const sendOnce = async () => {
+      const stream = await this.openCallSignalStream(signal.toPeerId);
+      const payloadBytes = new TextEncoder().encode(JSON.stringify(signal));
+      await stream.sink([payloadBytes]);
+      await stream.close();
+    };
+
+    if (signal.type !== 'CALL_OFFER') {
+      await this.withCallSignalTimeout(sendOnce());
+      return;
+    }
+
+    try {
+      await this.withCallSignalTimeout(sendOnce());
+    } catch {
+      await new Promise(resolve => setTimeout(resolve, MessageHandler.CALL_OFFER_RETRY_DELAY_MS));
+      await this.withCallSignalTimeout(sendOnce());
+    }
+  }
+
+  private verifyIncomingCallSignal(remoteId: string, signal: CallSignalMessage): { valid: boolean; error?: string } {
+    try {
+      this.ensureFastModeForCalls();
+      this.ensureDirectCallContact(remoteId);
+    } catch (error: unknown) {
+      return { valid: false, error: error instanceof Error ? error.message : String(error) };
+    }
+
+    if (signal.fromPeerId !== remoteId) {
+      return { valid: false, error: 'Sender peer mismatch' };
+    }
+
+    const myPeerId = this.node.peerId.toString();
+    if (signal.toPeerId !== myPeerId) {
+      return { valid: false, error: 'Call signal target mismatch' };
+    }
+
+    if (signal.timestamp > Date.now() + MessageHandler.CALL_SIGNAL_MAX_FUTURE_SKEW_MS) {
+      return { valid: false, error: 'Call signal is future-dated' };
+    }
+    if (Date.now() - signal.timestamp > MessageHandler.CALL_SIGNAL_MAX_AGE_MS) {
+      return { valid: false, error: 'Call signal is too old' };
+    }
+
+    const sender = this.database.getUserByPeerId(remoteId);
+    if (!sender?.signing_public_key) {
+      return { valid: false, error: 'Unknown sender for call signal' };
+    }
+
+    const { signature, ...unsignedSignal } = signal;
+    const signatureValid = EncryptedUserIdentity.verifyKeyExchangeSignature(
+      signature,
+      this.toUnsignedCallSignalPayload(unsignedSignal),
+      sender.signing_public_key,
+    );
+    if (!signatureValid) {
+      return { valid: false, error: 'Invalid call signal signature' };
+    }
+
+    return { valid: true };
+  }
+
+  private async handleIncomingCallSignal(remoteId: string, unknownSignal: unknown): Promise<void> {
+    if (!this.isCallSignalMessage(unknownSignal)) {
+      this.emitCallError('Malformed call signal payload', { peerId: remoteId, code: 'CALL_MALFORMED' });
+      return;
+    }
+    const signal = unknownSignal;
+    const validation = this.verifyIncomingCallSignal(remoteId, signal);
+    if (!validation.valid) {
+      console.warn(`[CALL] Dropping signal from ${remoteId.slice(-8)}: ${validation.error}`);
+      this.emitCallError(validation.error ?? 'Call signal validation failed', {
+        peerId: remoteId,
+        callId: signal.callId,
+        code: 'CALL_INVALID',
+      });
+      return;
+    }
+
+    if (signal.type === 'CALL_OFFER') {
+      if (this.isActiveCallMatch(remoteId, signal.callId)) {
+        // Offer retry/duplicate for the same ringing call.
+        return;
+      }
+
+      const hasDifferentActiveCall = this.activeCall
+        && (this.activeCall.callId !== signal.callId || this.activeCall.peerId !== remoteId);
+      if (hasDifferentActiveCall) {
+        try {
+          await this.sendCallSignal({
+            type: 'CALL_BUSY',
+            callId: signal.callId,
+            toPeerId: remoteId,
+            reason: 'busy',
+          });
+        } catch (error: unknown) {
+          generalErrorHandler(error, '[CALL] Failed to send busy response');
+        }
+        return;
+      }
+
+      this.setActiveCall({
+        callId: signal.callId,
+        peerId: remoteId,
+        direction: 'incoming',
+        state: 'ringing_in',
+      });
+      this.onCallIncoming({ signal, receivedAt: Date.now() });
+      return;
+    }
+
+    if (!this.isActiveCallMatch(remoteId, signal.callId)) {
+      console.log(
+        `[CALL] Dropping stale signal type=${signal.type} peer=${remoteId.slice(-8)} callId=${signal.callId.slice(0, 8)} reason=active_call_mismatch`,
+      );
+      return;
+    }
+
+    if (signal.type === 'CALL_ANSWER') {
+      if (!this.activeCall || this.activeCall.direction !== 'outgoing') {
+        console.log(
+          `[CALL] Dropping answer from ${remoteId.slice(-8)} callId=${signal.callId.slice(0, 8)} reason=unexpected_direction`,
+        );
+        return;
+      }
+      if (this.activeCall.state !== 'ringing_out' && this.activeCall.state !== 'connecting') {
+        console.log(
+          `[CALL] Dropping answer from ${remoteId.slice(-8)} callId=${signal.callId.slice(0, 8)} reason=invalid_state state=${this.activeCall.state}`,
+        );
+        return;
+      }
+
+      this.onCallSignalReceived({ signal, receivedAt: Date.now() });
+      this.setActiveCall({
+        callId: signal.callId,
+        peerId: remoteId,
+        direction: this.activeCall?.direction ?? 'outgoing',
+        state: 'connecting',
+      });
+      return;
+    }
+
+    this.onCallSignalReceived({ signal, receivedAt: Date.now() });
+
+    if (signal.type === 'CALL_REJECT' || signal.type === 'CALL_END' || signal.type === 'CALL_BUSY') {
+      this.clearActiveCall(signal.reason);
+    }
+  }
+
+  async sendCallSignal(input: CallSignalOutgoingInput): Promise<{ success: boolean; error: string | null }> {
+    try {
+      const signedSignal = this.buildSignedCallSignal(input);
+      await this.sendSignedCallSignal(signedSignal);
+      return { success: true, error: null };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.emitCallError(message, { peerId: input.toPeerId, callId: input.callId, code: 'CALL_SEND_FAILED' });
+      return { success: false, error: message };
+    }
+  }
+
+  async startCall(
+    peerId: string,
+    callId: string,
+    offerSdp: string,
+  ): Promise<{ success: boolean; error: string | null }> {
+    try {
+      this.ensureFastModeForCalls();
+      this.ensureDirectCallContact(peerId);
+    } catch (error: unknown) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+
+    if (this.activeCall && (this.activeCall.callId !== callId || this.activeCall.peerId !== peerId)) {
+      return { success: false, error: 'Another call is already in progress' };
+    }
+
+    if (!this.hasActiveConnectionToPeer(peerId)) {
+      return { success: false, error: 'Peer appears offline/unreachable right now' };
+    }
+
+    const sent = await this.sendCallSignal({
+      type: 'CALL_OFFER',
+      callId,
+      toPeerId: peerId,
+      offerSdp,
+    });
+    if (!sent.success) return sent;
+
+    this.setActiveCall({
+      callId,
+      peerId,
+      direction: 'outgoing',
+      state: 'ringing_out',
+    });
+    return { success: true, error: null };
+  }
+
+  async acceptCall(
+    peerId: string,
+    callId: string,
+    answerSdp: string,
+  ): Promise<{ success: boolean; error: string | null }> {
+    const sent = await this.sendCallSignal({
+      type: 'CALL_ANSWER',
+      callId,
+      toPeerId: peerId,
+      answerSdp,
+    });
+    if (!sent.success) return sent;
+
+    this.setActiveCall({
+      callId,
+      peerId,
+      direction: 'incoming',
+      state: 'connecting',
+    });
+    return { success: true, error: null };
+  }
+
+  async rejectCall(
+    peerId: string,
+    callId: string,
+    reason: 'rejected' | 'timeout' | 'offline' | 'policy' = 'rejected',
+  ): Promise<{ success: boolean; error: string | null }> {
+    const sent = await this.sendCallSignal({
+      type: 'CALL_REJECT',
+      callId,
+      toPeerId: peerId,
+      reason,
+    });
+    if (!sent.success) return sent;
+    this.clearActiveCall(reason);
+    return { success: true, error: null };
+  }
+
+  async hangupCall(
+    peerId: string,
+    callId: string,
+    reason: 'hangup' | 'disconnect' | 'failed' = 'hangup',
+  ): Promise<{ success: boolean; error: string | null }> {
+    const sent = await this.sendCallSignal({
+      type: 'CALL_END',
+      callId,
+      toPeerId: peerId,
+      reason,
+    });
+    if (!sent.success) return sent;
+    this.clearActiveCall(reason);
+    return { success: true, error: null };
   }
 
   private async routeBucketNudge(remoteId: string, nudgePayload: BucketNudgePayload | null): Promise<void> {
@@ -2058,6 +2665,7 @@ export class MessageHandler {
     this.peerActivityCheckCooldowns.clear();
     this.groupInfoSyncInFlight.clear();
     this.groupInfoSyncPending.clear();
+    this.activeCall = null;
 
     if (this.cleanupPeerEvents) {
       this.cleanupPeerEvents();

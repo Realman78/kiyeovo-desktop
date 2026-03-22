@@ -38,6 +38,7 @@ export type ModeNamespaceKind =
 export interface NetworkModeConfig {
   protocolName: string;
   chatProtocol: string;
+  callSignalProtocol: string;
   bootstrapProtocol: string;
   fileTransferProtocol: string;
   bucketNudgeProtocol: string;
@@ -59,6 +60,7 @@ function buildModeConfig(baseProtocol: string, namespacePrefix: string, topicPre
   return {
     protocolName: baseProtocol,
     chatProtocol: `${baseProtocol}/chat`,
+    callSignalProtocol: `${baseProtocol}/call-signal`,
     bootstrapProtocol: `${baseProtocol}/bootstrap`,
     fileTransferProtocol: `${baseProtocol}/file-transfer`,
     bucketNudgeProtocol: `${baseProtocol}/bucket-nudge`,

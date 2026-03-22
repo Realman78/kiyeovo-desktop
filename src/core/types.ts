@@ -516,6 +516,17 @@ export const IPC_CHANNELS = {
   // Message events
   MESSAGE_RECEIVED: 'message:received',
 
+  // Call signaling
+  CALL_START: 'call:start',
+  CALL_ACCEPT: 'call:accept',
+  CALL_REJECT: 'call:reject',
+  CALL_HANGUP: 'call:hangup',
+  CALL_SIGNAL_SEND: 'call:signalSend',
+  CALL_INCOMING: 'call:incoming',
+  CALL_SIGNAL_RECEIVED: 'call:signalReceived',
+  CALL_STATE_CHANGED: 'call:stateChanged',
+  CALL_ERROR: 'call:error',
+
   // Bootstrap nodes
   BOOTSTRAP_NODES: 'bootstrap:nodes',
   GET_BOOTSTRAP_NODES: 'bootstrap:getNodes',
@@ -769,4 +780,144 @@ export interface PendingFileReceivedEvent {
   senderId: string;
   senderUsername: string;
   expiresAt: number;
+}
+
+export type CallSignalType =
+  | 'CALL_OFFER'
+  | 'CALL_ANSWER'
+  | 'CALL_ICE'
+  | 'CALL_REJECT'
+  | 'CALL_END'
+  | 'CALL_BUSY';
+
+type BaseCallSignal = {
+  type: CallSignalType;
+  callId: string;
+  fromPeerId: string;
+  toPeerId: string;
+  timestamp: number;
+  signature: string;
+};
+
+export type CallOfferSignal = BaseCallSignal & {
+  type: 'CALL_OFFER';
+  offerSdp: string;
+};
+
+export type CallAnswerSignal = BaseCallSignal & {
+  type: 'CALL_ANSWER';
+  answerSdp: string;
+};
+
+export type CallIceSignal = BaseCallSignal & {
+  type: 'CALL_ICE';
+  candidate: string;
+  sdpMid: string | null;
+  sdpMLineIndex: number | null;
+  usernameFragment: string | null;
+};
+
+export type CallRejectSignal = BaseCallSignal & {
+  type: 'CALL_REJECT';
+  reason: 'rejected' | 'timeout' | 'offline' | 'policy';
+};
+
+export type CallEndSignal = BaseCallSignal & {
+  type: 'CALL_END';
+  reason: 'hangup' | 'disconnect' | 'failed';
+};
+
+export type CallBusySignal = BaseCallSignal & {
+  type: 'CALL_BUSY';
+  reason: 'busy';
+};
+
+export type CallSignalMessage =
+  | CallOfferSignal
+  | CallAnswerSignal
+  | CallIceSignal
+  | CallRejectSignal
+  | CallEndSignal
+  | CallBusySignal;
+
+export type UnsignedCallSignalMessage =
+  | Omit<CallOfferSignal, 'signature'>
+  | Omit<CallAnswerSignal, 'signature'>
+  | Omit<CallIceSignal, 'signature'>
+  | Omit<CallRejectSignal, 'signature'>
+  | Omit<CallEndSignal, 'signature'>
+  | Omit<CallBusySignal, 'signature'>;
+
+export type CallSignalOutgoingInput =
+  | {
+    type: 'CALL_OFFER';
+    callId: string;
+    toPeerId: string;
+    offerSdp: string;
+    timestamp?: number;
+  }
+  | {
+    type: 'CALL_ANSWER';
+    callId: string;
+    toPeerId: string;
+    answerSdp: string;
+    timestamp?: number;
+  }
+  | {
+    type: 'CALL_ICE';
+    callId: string;
+    toPeerId: string;
+    candidate: string;
+    sdpMid: string | null;
+    sdpMLineIndex: number | null;
+    usernameFragment: string | null;
+    timestamp?: number;
+  }
+  | {
+    type: 'CALL_REJECT';
+    callId: string;
+    toPeerId: string;
+    reason: 'rejected' | 'timeout' | 'offline' | 'policy';
+    timestamp?: number;
+  }
+  | {
+    type: 'CALL_END';
+    callId: string;
+    toPeerId: string;
+    reason: 'hangup' | 'disconnect' | 'failed';
+    timestamp?: number;
+  }
+  | {
+    type: 'CALL_BUSY';
+    callId: string;
+    toPeerId: string;
+    reason: 'busy';
+    timestamp?: number;
+  };
+
+export interface CallIncomingEvent {
+  signal: CallOfferSignal;
+  receivedAt: number;
+}
+
+export interface CallSignalReceivedEvent {
+  signal: Exclude<CallSignalMessage, CallOfferSignal>;
+  receivedAt: number;
+}
+
+export interface CallStateChangedEvent {
+  callId: string;
+  peerId: string;
+  state: 'idle' | 'ringing_out' | 'ringing_in' | 'connecting' | 'active' | 'ended';
+  direction: 'incoming' | 'outgoing';
+  reason?: string;
+  timestamp: number;
+}
+
+export interface CallErrorEvent {
+  error: string;
+  peerId?: string;
+  callId?: string;
+  code?: string;
+  timestamp: number;
 }

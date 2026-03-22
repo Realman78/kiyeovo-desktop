@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useSelector, useDispatch } from "react-redux";
 import type { RootState } from "../../../state/store";
 import { Button } from "../../ui/Button";
-import { Bell, BellOff, MoreVertical, Shield, UserPlus, Ban, UserCheck, Info, Trash2, AlertCircle, Users, Clock, RefreshCw, LogOut, Bug, UserMinus } from "lucide-react";
+import { Bell, BellOff, MoreVertical, Shield, UserPlus, Ban, UserCheck, Info, Trash2, AlertCircle, Users, Clock, RefreshCw, LogOut, Bug, UserMinus, Phone, PhoneOff } from "lucide-react";
 import { DropdownMenu, DropdownMenuItem } from "../../ui/DropdownMenu";
 import { updateChat, clearMessages, removeChat, setOfflineFetchStatus, markOfflineFetched, markOfflineFetchFailed } from "../../../state/slices/chatSlice";
 import { AboutUserModal } from "./AboutUserModal";
@@ -22,6 +22,7 @@ import { InviteUsersDialog, type GroupInviteDeliveryView } from "./InviteUsersDi
 import { INBOUND_INACTIVITY_WARNING_MS, MAX_GROUP_MEMBERS } from "../../../constants";
 import { getGroupStatusMessage, isGroupStatusWaiting } from "../../../utils/groupStatusMessages";
 import { getGroupCreatorLinkState } from "../../../utils/groupCreatorLinkHealth";
+import { callService } from "../../../lib/call/callService";
 
 type ChatHeaderProps = {
   username: string;
@@ -44,6 +45,7 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
   const activeChat = useSelector((state: RootState) => state.chat.activeChat);
   const chats = useSelector((state: RootState) => state.chat.chats);
   const myPeerId = useSelector((state: RootState) => state.user.peerId);
+  const activeCall = useSelector((state: RootState) => state.call.activeCall);
   const dispatch = useDispatch();
   const { toast } = useToast();
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -482,6 +484,33 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
     }
   };
 
+  const handleCallClick = async () => {
+    if (!peerId || !activeChat || activeChat.type !== 'direct') return;
+    if (isBlocked) {
+      toast.error('Cannot call a blocked user');
+      return;
+    }
+
+    const isSamePeerActiveCall = Boolean(
+      activeCall
+      && activeCall.peerId === peerId
+      && activeCall.callId
+    );
+
+    if (isSamePeerActiveCall && activeCall) {
+      const hangup = await callService.hangupCall(peerId, activeCall.callId, 'hangup');
+      if (!hangup.success) {
+        toast.error(hangup.error || 'Failed to end call');
+      }
+      return;
+    }
+
+    const start = await callService.startOutgoingCall(peerId);
+    if (!start.success) {
+      toast.error(start.error || 'Failed to start call');
+    }
+  };
+
   const confirmDeleteAllMessages = async () => {
     if (!activeChat) return;
 
@@ -643,6 +672,18 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
 
   const isGroup = chatType === 'group';
   const resolvedGroupStatus = groupStatus ?? activeChat?.groupStatus;
+  const hasActiveCallWithThisPeer = Boolean(
+    activeCall
+    && activeCall.peerId === peerId
+  );
+  const canStartDirectCall = !isGroup
+    && activeChat?.status === 'active'
+    && !isBlocked
+    && Boolean(peerId);
+  const callButtonDisabled = !canStartDirectCall || (Boolean(activeCall) && !hasActiveCallWithThisPeer);
+  const callButtonTitle = hasActiveCallWithThisPeer
+    ? 'Hang up'
+    : (callButtonDisabled ? 'User is offline or another call is active' : 'Start call');
   const groupCreatorLinkState = activeChat
     ? getGroupCreatorLinkState(activeChat, chats, myPeerId)
     : { broken: false };
@@ -757,6 +798,22 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
     </div>
 
     <div className="flex items-center gap-1">
+      {!isGroup && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="text-muted-foreground hover:text-foreground"
+          onClick={handleCallClick}
+          title={callButtonTitle}
+          disabled={callButtonDisabled}
+        >
+          {hasActiveCallWithThisPeer ? (
+            <PhoneOff className="w-4 h-4" />
+          ) : (
+            <Phone className="w-4 h-4" />
+          )}
+        </Button>
+      )}
       {isGroup && (
         <Button
           variant="ghost"

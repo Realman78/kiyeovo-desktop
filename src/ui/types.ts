@@ -11,3 +11,58 @@ export interface PasswordRequest {
   }
 
 export type MessageSentStatus = 'online' | 'offline' | null;
+
+export type CallDirection = 'incoming' | 'outgoing';
+export type CallLifecycleState = 'idle' | 'ringing_out' | 'ringing_in' | 'connecting' | 'active' | 'ended';
+
+export type IncomingCallSignal = {
+  type: 'CALL_OFFER';
+  callId: string;
+  fromPeerId: string;
+  toPeerId: string;
+  timestamp: number;
+  signature: string;
+  offerSdp: string;
+};
+
+export type CallSignal = {
+  type: 'CALL_ANSWER' | 'CALL_ICE' | 'CALL_REJECT' | 'CALL_END' | 'CALL_BUSY';
+  callId: string;
+  fromPeerId: string;
+  toPeerId: string;
+  timestamp: number;
+  signature: string;
+  answerSdp?: string;
+  candidate?: string;
+  sdpMid?: string | null;
+  sdpMLineIndex?: number | null;
+  usernameFragment?: string | null;
+  reason?: 'rejected' | 'timeout' | 'offline' | 'policy' | 'hangup' | 'disconnect' | 'failed' | 'busy';
+};
+
+export interface CallIncomingEvent {
+  signal: IncomingCallSignal;
+  receivedAt: number;
+}
+
+export interface CallSignalReceivedEvent {
+  signal: CallSignal;
+  receivedAt: number;
+}
+
+export interface CallStateChangedEvent {
+  callId: string;
+  peerId: string;
+  state: CallLifecycleState;
+  direction: CallDirection;
+  reason?: string;
+  timestamp: number;
+}
+
+export interface CallErrorEvent {
+  error: string;
+  peerId?: string;
+  callId?: string;
+  code?: string;
+  timestamp: number;
+}

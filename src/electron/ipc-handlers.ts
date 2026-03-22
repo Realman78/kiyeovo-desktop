@@ -1,6 +1,13 @@
 import type { IpcMain, BrowserWindow } from 'electron';
 import { app, dialog, Notification, shell } from 'electron';
-import { IPC_CHANNELS, PENDING_KEY_EXCHANGE_EXPIRATION, type P2PCore, type AppConfig, type NetworkMode } from '../core/index.js';
+import {
+  IPC_CHANNELS,
+  PENDING_KEY_EXCHANGE_EXPIRATION,
+  type P2PCore,
+  type AppConfig,
+  type NetworkMode,
+  type CallSignalOutgoingInput,
+} from '../core/index.js';
 import { CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES, DEFAULT_NETWORK_MODE, DOWNLOADS_DIR, FAST_RELAY_MULTIADDRS_SETTING_KEY, FILE_OFFER_RATE_LIMIT, KEY_EXCHANGE_RATE_LIMIT_DEFAULT, MAX_FILE_SIZE, MAX_PENDING_FILES_PER_PEER, MAX_PENDING_FILES_TOTAL, NETWORK_MODE_ONBOARDED_SETTING_KEY, OFFLINE_MESSAGE_LIMIT, SILENT_REJECTION_THRESHOLD_GLOBAL, SILENT_REJECTION_THRESHOLD_PER_PEER, NETWORK_MODES, getTorConfig, isNetworkMode } from '../core/constants.js';
 import { validateMessageLength, validateUsername } from '../core/utils/validators.js';
 import { peerIdFromString } from '@libp2p/peer-id';
@@ -70,6 +77,9 @@ export function setupIPCHandlers(
 
   // Messaging handlers
   setupMessagingHandlers(ipcMain, getP2PCore);
+
+  // Call signaling handlers
+  setupCallHandlers(ipcMain, getP2PCore);
 
   // Contact request handlers
   setupContactRequestHandlers(ipcMain, getP2PCore);
@@ -344,6 +354,67 @@ function setupMessagingHandlers(
     }
     }
   );
+}
+
+function setupCallHandlers(
+  ipcMain: IpcMain,
+  getP2PCore: () => P2PCore | null
+): void {
+  ipcMain.handle(IPC_CHANNELS.CALL_START, async (_event, peerId: string, callId: string, offerSdp: string) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) return { success: false, error: 'P2P core not initialized' };
+      return await p2pCore.messageHandler.startCall(peerId, callId, offerSdp);
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to start call' };
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.CALL_ACCEPT, async (_event, peerId: string, callId: string, answerSdp: string) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) return { success: false, error: 'P2P core not initialized' };
+      return await p2pCore.messageHandler.acceptCall(peerId, callId, answerSdp);
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to accept call' };
+    }
+  });
+
+  ipcMain.handle(
+    IPC_CHANNELS.CALL_REJECT,
+    async (_event, peerId: string, callId: string, reason?: 'rejected' | 'timeout' | 'offline' | 'policy') => {
+      try {
+        const p2pCore = getP2PCore();
+        if (!p2pCore) return { success: false, error: 'P2P core not initialized' };
+        return await p2pCore.messageHandler.rejectCall(peerId, callId, reason ?? 'rejected');
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : 'Failed to reject call' };
+      }
+    }
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.CALL_HANGUP,
+    async (_event, peerId: string, callId: string, reason?: 'hangup' | 'disconnect' | 'failed') => {
+      try {
+        const p2pCore = getP2PCore();
+        if (!p2pCore) return { success: false, error: 'P2P core not initialized' };
+        return await p2pCore.messageHandler.hangupCall(peerId, callId, reason ?? 'hangup');
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : 'Failed to hang up call' };
+      }
+    }
+  );
+
+  ipcMain.handle(IPC_CHANNELS.CALL_SIGNAL_SEND, async (_event, signal: CallSignalOutgoingInput) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) return { success: false, error: 'P2P core not initialized' };
+      return await p2pCore.messageHandler.sendCallSignal(signal);
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to send call signal' };
+    }
+  });
 }
 
 /**

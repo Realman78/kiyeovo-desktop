@@ -3,7 +3,29 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { isDev } from './util.js';
-import { initializeP2PCore, InitStatus, IPC_CHANNELS, KeyExchangeEvent, type P2PCore, type ContactRequestEvent, type ChatCreatedEvent, type KeyExchangeFailedEvent, type MessageReceivedEvent, type FileTransferProgressEvent, type FileTransferCompleteEvent, type FileTransferFailedEvent, type PendingFileReceivedEvent, type GroupChatActivatedEvent, type GroupMembersUpdatedEvent, type TorConfig, type PasswordRequest } from '../core/index.js';
+import {
+  initializeP2PCore,
+  InitStatus,
+  IPC_CHANNELS,
+  KeyExchangeEvent,
+  type P2PCore,
+  type ContactRequestEvent,
+  type ChatCreatedEvent,
+  type KeyExchangeFailedEvent,
+  type MessageReceivedEvent,
+  type FileTransferProgressEvent,
+  type FileTransferCompleteEvent,
+  type FileTransferFailedEvent,
+  type PendingFileReceivedEvent,
+  type GroupChatActivatedEvent,
+  type GroupMembersUpdatedEvent,
+  type TorConfig,
+  type PasswordRequest,
+  type CallIncomingEvent,
+  type CallSignalReceivedEvent,
+  type CallStateChangedEvent,
+  type CallErrorEvent,
+} from '../core/index.js';
 import { DEFAULT_NETWORK_MODE, NETWORK_MODE_ONBOARDED_SETTING_KEY } from '../core/constants.js';
 import { ensureAppDataDir } from '../core/utils/miscellaneous.js';
 import { requestPasswordFromUI } from './password-prompt.js';
@@ -311,6 +333,30 @@ function sendOfflineMessagesFetchComplete(chatIds: number[]) {
   }
 }
 
+function sendCallIncoming(data: CallIncomingEvent) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(IPC_CHANNELS.CALL_INCOMING, data);
+  }
+}
+
+function sendCallSignalReceived(data: CallSignalReceivedEvent) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(IPC_CHANNELS.CALL_SIGNAL_RECEIVED, data);
+  }
+}
+
+function sendCallStateChanged(data: CallStateChangedEvent) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(IPC_CHANNELS.CALL_STATE_CHANGED, data);
+  }
+}
+
+function sendCallError(data: CallErrorEvent) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(IPC_CHANNELS.CALL_ERROR, data);
+  }
+}
+
 function detectRequiresNetworkModeSelection(): boolean {
   try {
     const dbPath = path.join(ensureAppDataDir(), 'chat.db');
@@ -494,6 +540,18 @@ async function initializeP2PAfterWindow() {
       },
       onOfflineMessagesFetchComplete: (chatIds: number[]) => {
         sendOfflineMessagesFetchComplete(chatIds);
+      },
+      onCallIncoming: (data: CallIncomingEvent) => {
+        sendCallIncoming(data);
+      },
+      onCallSignalReceived: (data: CallSignalReceivedEvent) => {
+        sendCallSignalReceived(data);
+      },
+      onCallStateChanged: (data: CallStateChangedEvent) => {
+        sendCallStateChanged(data);
+      },
+      onCallError: (data: CallErrorEvent) => {
+        sendCallError(data);
       },
     };
     p2pCore = await initializeP2PCore(p2pCoreConfig);
