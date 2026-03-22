@@ -355,7 +355,7 @@ class CallService {
   }
 
   private async addRemoteIce(signal: CallSignal): Promise<void> {
-    if (!this.peerConnection || signal.type !== 'CALL_ICE' || !signal.candidate) return;
+    if (signal.type !== 'CALL_ICE' || !signal.candidate) return;
     const candidate: RTCIceCandidateInit = {
       candidate: signal.candidate,
       sdpMid: signal.sdpMid ?? null,
@@ -366,6 +366,11 @@ class CallService {
       this.currentCall,
       `[ICE][REMOTE_CANDIDATE] mid=${candidate.sdpMid ?? 'n/a'} mline=${candidate.sdpMLineIndex ?? 'n/a'} ${this.describeCandidateLine(signal.candidate)}`,
     );
+    if (!this.peerConnection) {
+      this.log(this.currentCall, '[ICE][REMOTE_CANDIDATE] queued (peer connection not created yet)');
+      this.pendingRemoteIce.push(candidate);
+      return;
+    }
     if (!this.peerConnection.remoteDescription) {
       this.log(this.currentCall, '[ICE][REMOTE_CANDIDATE] queued (remote description missing)');
       this.pendingRemoteIce.push(candidate);
@@ -390,7 +395,11 @@ class CallService {
   }
 
   private closePeerConnection(): void {
-    if (!this.peerConnection) return;
+    if (!this.peerConnection) {
+      this.pendingRemoteIce = [];
+      this.stopIceStatsMonitor();
+      return;
+    }
     this.stopIceStatsMonitor();
     try {
       this.peerConnection.close();
