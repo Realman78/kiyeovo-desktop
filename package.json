@@ -20,7 +20,7 @@
     "download:tor": "bash scripts/download-tor.sh",
     "download:tor:all": "bash scripts/download-tor.sh all",
     "setup": "npm install && npm run download:tor",
-    "postinstall": "electron-rebuild -f -w better-sqlite3 && patch-package"
+    "postinstall": "node scripts/postinstall.mjs"
   },
   "dependencies": {
     "@chainsafe/libp2p-gossipsub": "^14.1.2",
