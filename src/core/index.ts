@@ -531,7 +531,7 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
     cleanup: async () => {
       console.log('[P2P Core] Shutting down...');
       try {
-        messageHandler.cleanup();
+        await messageHandler.cleanup();
         clearInterval(cleanupInterval);
         clearInterval(dhtStatusInterval);
         database.close();

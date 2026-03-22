@@ -104,6 +104,10 @@ export class MessageHandler {
   private static readonly CALL_SIGNAL_MAX_AGE_MS = 5 * 60 * 1000;
   private static readonly CALL_SIGNAL_MAX_FUTURE_SKEW_MS = 2 * 60 * 1000;
   private static readonly CALL_OFFER_RETRY_DELAY_MS = 2000;
+  private static readonly CALL_SIGNAL_DEDUPE_TTL_MS = 10 * 60 * 1000;
+  private static readonly CALL_SIGNAL_DEDUPE_MAX_ENTRIES = 1500;
+  private static readonly CALL_CONTROL_STALE_TOLERANCE_MS = 2000;
+  private static readonly CALL_SHUTDOWN_HANGUP_MAX_WAIT_MS = 1500;
   private node: ChatNode;
   private usernameRegistry: UsernameRegistry;
   private sessionManager: SessionManager;
@@ -147,6 +151,8 @@ export class MessageHandler {
   private readonly callSignalProtocol: string;
   private readonly expectedOfflineBucketPrefix: string;
   private activeCall: ActiveCall | null = null;
+  private activeCallLastControlSignalTs: number | null = null;
+  private seenCallSignals = new Map<string, number>();
 
   private formatNudgeTarget(payload: BucketNudgePayload): string {
     if (payload.kind === 'GROUP_REKEY_REFETCH') {
@@ -609,6 +615,12 @@ export class MessageHandler {
   }
 
   private setActiveCall(activeCall: ActiveCall): void {
+    const isSameCall = this.activeCall
+      && this.activeCall.callId === activeCall.callId
+      && this.activeCall.peerId === activeCall.peerId;
+    if (!isSameCall) {
+      this.activeCallLastControlSignalTs = null;
+    }
     this.activeCall = activeCall;
     this.onCallStateChanged({
       callId: activeCall.callId,
@@ -623,6 +635,7 @@ export class MessageHandler {
     if (!this.activeCall) return;
     const previous = this.activeCall;
     this.activeCall = null;
+    this.activeCallLastControlSignalTs = null;
     this.onCallStateChanged({
       callId: previous.callId,
       peerId: previous.peerId,
@@ -643,6 +656,41 @@ export class MessageHandler {
     return !!this.activeCall
       && this.activeCall.peerId === peerId
       && this.activeCall.callId === callId;
+  }
+
+  private makeCallSignalDedupeKey(remoteId: string, signal: CallSignalMessage): string {
+    return `${remoteId}:${signal.callId}:${signal.type}:${signal.signature}`;
+  }
+
+  private pruneSeenCallSignals(now: number): void {
+    const cutoff = now - MessageHandler.CALL_SIGNAL_DEDUPE_TTL_MS;
+    for (const [key, seenAt] of this.seenCallSignals.entries()) {
+      if (seenAt < cutoff) {
+        this.seenCallSignals.delete(key);
+      }
+    }
+
+    if (this.seenCallSignals.size <= MessageHandler.CALL_SIGNAL_DEDUPE_MAX_ENTRIES) {
+      return;
+    }
+
+    const ordered = Array.from(this.seenCallSignals.entries()).sort((a, b) => a[1] - b[1]);
+    const toDrop = this.seenCallSignals.size - MessageHandler.CALL_SIGNAL_DEDUPE_MAX_ENTRIES;
+    for (let i = 0; i < toDrop; i += 1) {
+      const entry = ordered[i];
+      if (!entry) break;
+      this.seenCallSignals.delete(entry[0]);
+    }
+  }
+
+  private hasSeenCallSignal(remoteId: string, signal: CallSignalMessage, now: number): boolean {
+    this.pruneSeenCallSignals(now);
+    const key = this.makeCallSignalDedupeKey(remoteId, signal);
+    if (this.seenCallSignals.has(key)) {
+      return true;
+    }
+    this.seenCallSignals.set(key, now);
+    return false;
   }
 
   private ensureFastModeForCalls(): void {
@@ -910,10 +958,11 @@ export class MessageHandler {
       return { valid: false, error: 'Call signal target mismatch' };
     }
 
-    if (signal.timestamp > Date.now() + MessageHandler.CALL_SIGNAL_MAX_FUTURE_SKEW_MS) {
+    const now = Date.now();
+    if (signal.timestamp > now + MessageHandler.CALL_SIGNAL_MAX_FUTURE_SKEW_MS) {
       return { valid: false, error: 'Call signal is future-dated' };
     }
-    if (Date.now() - signal.timestamp > MessageHandler.CALL_SIGNAL_MAX_AGE_MS) {
+    if (now - signal.timestamp > MessageHandler.CALL_SIGNAL_MAX_AGE_MS) {
       return { valid: false, error: 'Call signal is too old' };
     }
 
@@ -949,6 +998,14 @@ export class MessageHandler {
         callId: signal.callId,
         code: 'CALL_INVALID',
       });
+      return;
+    }
+
+    const now = Date.now();
+    if (this.hasSeenCallSignal(remoteId, signal, now)) {
+      console.log(
+        `[CALL] Dropping duplicate signal type=${signal.type} peer=${remoteId.slice(-8)} callId=${signal.callId.slice(0, 8)} reason=duplicate_signature`,
+      );
       return;
     }
 
@@ -991,6 +1048,23 @@ export class MessageHandler {
       return;
     }
 
+    const isControlSignal = signal.type === 'CALL_ANSWER'
+      || signal.type === 'CALL_REJECT'
+      || signal.type === 'CALL_END'
+      || signal.type === 'CALL_BUSY';
+
+    if (
+      isControlSignal
+      && this.activeCallLastControlSignalTs !== null
+      && signal.timestamp + MessageHandler.CALL_CONTROL_STALE_TOLERANCE_MS < this.activeCallLastControlSignalTs
+    ) {
+      console.log(
+        `[CALL] Dropping stale signal type=${signal.type} peer=${remoteId.slice(-8)} callId=${signal.callId.slice(0, 8)} ` +
+        `reason=timestamp_regression ts=${signal.timestamp} lastTs=${this.activeCallLastControlSignalTs}`,
+      );
+      return;
+    }
+
     if (signal.type === 'CALL_ANSWER') {
       if (!this.activeCall || this.activeCall.direction !== 'outgoing') {
         console.log(
@@ -1005,6 +1079,7 @@ export class MessageHandler {
         return;
       }
 
+      this.activeCallLastControlSignalTs = Math.max(this.activeCallLastControlSignalTs ?? 0, signal.timestamp);
       this.onCallSignalReceived({ signal, receivedAt: Date.now() });
       this.setActiveCall({
         callId: signal.callId,
@@ -1018,6 +1093,7 @@ export class MessageHandler {
     this.onCallSignalReceived({ signal, receivedAt: Date.now() });
 
     if (signal.type === 'CALL_REJECT' || signal.type === 'CALL_END' || signal.type === 'CALL_BUSY') {
+      this.activeCallLastControlSignalTs = Math.max(this.activeCallLastControlSignalTs ?? 0, signal.timestamp);
       this.clearActiveCall(signal.reason);
     }
   }
@@ -2628,7 +2704,47 @@ export class MessageHandler {
     return chat.id;
   }
 
-  cleanup(): void {
+  private async endActiveCallForShutdown(): Promise<void> {
+    if (!this.activeCall) return;
+    const { peerId, callId } = this.activeCall;
+
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    try {
+      const timeoutPromise = new Promise<{ success: boolean; error: string | null }>((resolve) => {
+        timeoutId = setTimeout(() => {
+          resolve({ success: false, error: 'Shutdown hangup timeout' });
+        }, MessageHandler.CALL_SHUTDOWN_HANGUP_MAX_WAIT_MS);
+      });
+      const result = await Promise.race([
+        this.sendCallSignal({
+          type: 'CALL_END',
+          callId,
+          toPeerId: peerId,
+          reason: 'disconnect',
+        }),
+        timeoutPromise,
+      ]);
+      if (!result.success) {
+        console.warn(
+          `[CALL] Failed to send shutdown hangup peer=${peerId.slice(-8)} callId=${callId.slice(0, 8)}: ${result.error ?? 'unknown error'}`,
+        );
+      }
+    } catch (error: unknown) {
+      console.warn(
+        `[CALL] Unexpected error during shutdown hangup peer=${peerId.slice(-8)} callId=${callId.slice(0, 8)}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      this.clearActiveCall('disconnect');
+    }
+  }
+
+  async cleanup(): Promise<void> {
+    await this.endActiveCallForShutdown();
     this.fileHandler.cleanup();
     this.groupMessaging.cleanup();
 
@@ -2666,6 +2782,8 @@ export class MessageHandler {
     this.groupInfoSyncInFlight.clear();
     this.groupInfoSyncPending.clear();
     this.activeCall = null;
+    this.activeCallLastControlSignalTs = null;
+    this.seenCallSignals.clear();
 
     if (this.cleanupPeerEvents) {
       this.cleanupPeerEvents();
