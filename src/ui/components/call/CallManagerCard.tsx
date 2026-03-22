@@ -56,14 +56,11 @@ export const CallManagerCard = () => {
 
   if (isMinimized) {
     return (
-      <div className="fixed bottom-24 right-4 z-[109] w-[320px] rounded-lg border border-border bg-card/95 backdrop-blur px-3 py-2 shadow-xl">
+      <div className="fixed bottom-24 right-4 z-109 w-[320px] rounded-lg border border-border bg-card/95 backdrop-blur px-3 py-2 shadow-xl">
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
             <div className="text-[11px] font-semibold text-foreground uppercase tracking-wide">
-              {stateLabel(activeCall.state)}
-            </div>
-            <div className="text-[11px] text-muted-foreground truncate">
-              {activeCall.peerName} ({activeCall.peerId})
+              {activeCall.state === "active" ? activeCall.peerName : stateLabel(activeCall.state)}
             </div>
           </div>
           <div className="flex items-center gap-1">
@@ -110,11 +107,11 @@ export const CallManagerCard = () => {
   }
 
   return (
-    <div className="fixed bottom-24 right-4 z-[109] w-[320px] rounded-lg border border-border bg-card/95 backdrop-blur px-4 py-3 shadow-xl">
+    <div className="fixed bottom-24 right-4 z-109 w-[320px] rounded-lg border border-border bg-card/95 backdrop-blur px-4 py-3 shadow-xl">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <PhoneCall className="w-4 h-4 text-primary" />
-          <div className="text-sm font-semibold text-foreground">{stateLabel(activeCall.state)}</div>
+          <div className="text-sm font-semibold text-foreground">{activeCall.state === "active" ? activeCall.peerName : stateLabel(activeCall.state)}</div>
         </div>
         <Button
           variant="ghost"
@@ -126,17 +123,12 @@ export const CallManagerCard = () => {
           <Minimize2 className="w-4 h-4" />
         </Button>
       </div>
-      <div className="mt-1 text-xs text-muted-foreground truncate">
-        {activeCall.peerName} ({activeCall.peerId})
-      </div>
       <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
         <Button variant={isMuted ? 'secondary' : 'outline'} size="sm" onClick={handleToggleMute}>
           {isMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-          {isMuted ? 'Unmute' : 'Mute'}
         </Button>
         <Button variant={isDeafened ? 'secondary' : 'outline'} size="sm" onClick={handleToggleDeafen}>
           {isDeafened ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-          {isDeafened ? 'Undeafen' : 'Deafen'}
         </Button>
         <Button variant="destructive" size="sm" onClick={handleHangup}>
           <PhoneOff className="w-4 h-4" />

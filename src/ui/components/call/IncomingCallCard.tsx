@@ -54,12 +54,12 @@ export const IncomingCallCard = () => {
 
   if (isMinimized) {
     return (
-      <div className="fixed bottom-24 right-4 z-[110] w-[320px] rounded-lg border border-border bg-card/95 backdrop-blur px-3 py-2 shadow-xl">
+      <div className="fixed bottom-24 right-4 z-110 w-[320px] rounded-lg border border-border bg-card/95 backdrop-blur px-3 py-2 shadow-xl">
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
             <div className="text-[11px] font-semibold text-foreground uppercase tracking-wide">Incoming call</div>
             <div className="text-[11px] text-muted-foreground truncate">
-              {incomingCall.peerName} ({incomingCall.peerId})
+              {incomingCall.peerName}
             </div>
           </div>
           <div className="flex items-center gap-1">
@@ -100,9 +100,9 @@ export const IncomingCallCard = () => {
   }
 
   return (
-    <div className="fixed bottom-24 right-4 z-[110] w-[320px] rounded-lg border border-border bg-card/95 backdrop-blur px-4 py-3 shadow-xl">
+    <div className="fixed bottom-24 right-4 z-110 w-[320px] rounded-lg border border-border bg-card/95 backdrop-blur px-4 py-3 shadow-xl">
       <div className="flex items-center justify-between gap-2">
-        <div className="text-sm font-semibold text-foreground">Incoming Call</div>
+        <div className="text-sm font-semibold text-foreground">Incoming Call from {incomingCall.peerName}</div>
         <Button
           variant="ghost"
           size="icon"
@@ -113,9 +113,6 @@ export const IncomingCallCard = () => {
         >
           <Minimize2 className="w-4 h-4" />
         </Button>
-      </div>
-      <div className="mt-1 text-xs text-muted-foreground truncate">
-        {incomingCall.peerName} ({incomingCall.peerId})
       </div>
       <div className="mt-3 flex items-center justify-end gap-2">
         <Button
