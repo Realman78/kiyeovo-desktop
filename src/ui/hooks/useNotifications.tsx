@@ -1,8 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import type { RootState } from '../state/store';
-import type { MessageReceivedEvent } from '../../core/types';
-import type { ContactRequestEvent } from '../../core/types';
+import type { MessageReceivedEvent, ContactRequestEvent, CallIncomingEvent } from '../../core/types';
 import { setActiveChat } from '../state/slices/chatSlice';
 import { store } from '../state/store';
 
@@ -144,6 +143,34 @@ export const useNotifications = () => {
       }
     });
 
+    // Listen for incoming call events
+    const unsubscribeIncomingCalls = window.kiyeovoAPI.onCallIncoming(async (data: CallIncomingEvent) => {
+      if (!notificationsEnabledRef.current) {
+        return;
+      }
+
+      try {
+        const { focused } = await window.kiyeovoAPI.isWindowFocused();
+        if (focused) {
+          return;
+        }
+
+        const currentState = store.getState();
+        const directChat = currentState.chat.chats.find(
+          (chat) => chat.type === 'direct' && chat.peerId === data.signal.fromPeerId,
+        );
+        const callerName = directChat?.name || `user_${data.signal.fromPeerId.slice(-8)}`;
+
+        await window.kiyeovoAPI.showNotification({
+          title: `Incoming ${data.signal.mediaType} call`,
+          body: `${callerName} is calling you`,
+          chatId: directChat?.id,
+        });
+      } catch (error) {
+        console.error('Failed to show incoming call notification:', error);
+      }
+    });
+
     // Listen for notification clicks
     const unsubscribeNotificationClick = window.kiyeovoAPI.onNotificationClicked((chatId: number) => {
       // Navigate to the chat
@@ -154,6 +181,7 @@ export const useNotifications = () => {
       unsubscribeMessages();
       unsubscribePendingFiles();
       unsubscribeContactRequests();
+      unsubscribeIncomingCalls();
       unsubscribeNotificationClick();
       unsubscribeNotificationsSetting();
       if (audioRef.current) {

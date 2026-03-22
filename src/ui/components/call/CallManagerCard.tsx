@@ -1,10 +1,22 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { GripVertical, Maximize2, Mic, MicOff, Minimize2, PhoneCall, PhoneOff, Volume2, VolumeX } from 'lucide-react';
+import {
+  ArrowLeftRight,
+  GripVertical,
+  Maximize2,
+  Mic,
+  MicOff,
+  Minimize2,
+  PhoneCall,
+  PhoneOff,
+  Video,
+  Volume2,
+  VolumeX,
+} from 'lucide-react';
 import { Button } from '../ui/Button';
 import { useToast } from '../ui/use-toast';
 import { useAppSelector } from '../../state/hooks';
 import { callService } from '../../lib/call/callService';
-import { useCallCardAnchor } from './useCallCardAnchor';
+import { useCallCardAnchor, type CallCardAnchor } from './useCallCardAnchor';
 
 function stateLabel(state: string): string {
   switch (state) {
@@ -41,19 +53,45 @@ export const CallManagerCard = () => {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [isDraggingAnchor, setIsDraggingAnchor] = useState(false);
   const [isVideoExpanded, setIsVideoExpanded] = useState(false);
+  const [isVideoStreamsSwapped, setIsVideoStreamsSwapped] = useState(false);
   const [localVideoStream, setLocalVideoStream] = useState<MediaStream | null>(null);
   const [remoteVideoStream, setRemoteVideoStream] = useState<MediaStream | null>(null);
-  const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
-  const localVideoRef = useRef<HTMLVideoElement | null>(null);
-  const { positionClassName, snapToClosestCorner } = useCallCardAnchor();
+  const largeVideoRef = useRef<HTMLVideoElement | null>(null);
+  const smallVideoRef = useRef<HTMLVideoElement | null>(null);
+  const previousAnchorRef = useRef<CallCardAnchor | null>(null);
+  const { anchor, setAnchor, positionClassName, snapToClosestCorner } = useCallCardAnchor();
+
+  const restoreAnchorAfterFullscreen = () => {
+    if (!previousAnchorRef.current) return;
+    setAnchor(previousAnchorRef.current);
+    previousAnchorRef.current = null;
+  };
+
+  const enterVideoFullscreen = () => {
+    if (isVideoExpanded) return;
+    previousAnchorRef.current = anchor;
+    setAnchor('bottom-left');
+    setIsVideoExpanded(true);
+  };
+
+  const exitVideoFullscreen = () => {
+    if (!isVideoExpanded) return;
+    setIsVideoExpanded(false);
+    restoreAnchorAfterFullscreen();
+  };
 
   useEffect(() => {
     if (!activeCall) {
-      setIsVideoExpanded(false);
+      if (isVideoExpanded) {
+        setIsVideoExpanded(false);
+        restoreAnchorAfterFullscreen();
+      }
+      setIsVideoStreamsSwapped(false);
       setLocalVideoStream(null);
       setRemoteVideoStream(null);
       return;
     }
+
     const audioState = callService.getAudioControlState();
     setIsMuted(audioState.muted);
     setIsDeafened(audioState.deafened);
@@ -63,7 +101,11 @@ export const CallManagerCard = () => {
     setRemoteVideoStream(media.remoteStream);
 
     if (activeCall.mediaType !== 'video') {
-      setIsVideoExpanded(false);
+      if (isVideoExpanded) {
+        setIsVideoExpanded(false);
+        restoreAnchorAfterFullscreen();
+      }
+      setIsVideoStreamsSwapped(false);
     }
   }, [activeCall?.callId, activeCall?.mediaType]);
 
@@ -93,43 +135,62 @@ export const CallManagerCard = () => {
     return unsubscribe;
   }, [activeCall?.callId, activeCall?.peerId]);
 
-  useEffect(() => {
-    const remoteVideo = remoteVideoRef.current;
-    if (!remoteVideo) return;
-    if (remoteVideo.srcObject !== remoteVideoStream) {
-      remoteVideo.srcObject = remoteVideoStream;
-    }
-    if (remoteVideoStream) {
-      void remoteVideo.play().catch(() => {
-        // Playback can fail before user gesture.
-      });
-    }
-  }, [remoteVideoStream, isVideoExpanded]);
+  const isVideoCall = activeCall?.mediaType === 'video';
+  const largeVideoStream = isVideoCall
+    ? (isVideoStreamsSwapped ? localVideoStream : remoteVideoStream)
+    : null;
+  const smallVideoStream = isVideoCall
+    ? (isVideoStreamsSwapped ? remoteVideoStream : localVideoStream)
+    : null;
+  const isLargeLocal = isVideoStreamsSwapped;
+  const isSmallLocal = !isVideoStreamsSwapped;
 
   useEffect(() => {
-    const localVideo = localVideoRef.current;
-    if (!localVideo) return;
-    if (localVideo.srcObject !== localVideoStream) {
-      localVideo.srcObject = localVideoStream;
+    const largeVideo = largeVideoRef.current;
+    if (!largeVideo) return;
+
+    if (largeVideo.srcObject !== largeVideoStream) {
+      largeVideo.srcObject = largeVideoStream;
     }
-    localVideo.muted = true;
-    if (localVideoStream) {
-      void localVideo.play().catch(() => {
+
+    largeVideo.muted = true;
+    if (largeVideoStream) {
+      void largeVideo.play().catch(() => {
         // Playback can fail before user gesture.
       });
     }
-  }, [localVideoStream, isVideoExpanded]);
+  }, [largeVideoStream, isVideoExpanded]);
+
+  useEffect(() => {
+    const smallVideo = smallVideoRef.current;
+    if (!smallVideo) return;
+
+    if (smallVideo.srcObject !== smallVideoStream) {
+      smallVideo.srcObject = smallVideoStream;
+    }
+
+    smallVideo.muted = true;
+    if (smallVideoStream) {
+      void smallVideo.play().catch(() => {
+        // Playback can fail before user gesture.
+      });
+    }
+  }, [smallVideoStream, isVideoExpanded]);
 
   if (!activeCall) return null;
   if (activeCall.state === 'ringing_in' && incomingCall) return null;
 
   const showTimer = activeCall.state === 'active';
   const timerText = showTimer ? formatCallDuration(elapsedSeconds) : null;
-  const isVideoCall = activeCall.mediaType === 'video';
-  const remoteHasVideo = Boolean(remoteVideoStream && remoteVideoStream.getVideoTracks().length > 0);
-  const localHasVideo = Boolean(localVideoStream && localVideoStream.getVideoTracks().length > 0);
+  const largeHasVideo = Boolean(largeVideoStream && largeVideoStream.getVideoTracks().length > 0);
+  const smallHasVideo = Boolean(smallVideoStream && smallVideoStream.getVideoTracks().length > 0);
 
   const handleHangup = async () => {
+    if (isVideoExpanded) {
+      setIsVideoExpanded(false);
+      restoreAnchorAfterFullscreen();
+    }
+
     const result = await callService.hangupCall(activeCall.peerId, activeCall.callId, 'hangup');
     if (!result.success) {
       toast.error(result.error || 'Failed to hang up');
@@ -145,6 +206,7 @@ export const CallManagerCard = () => {
   };
 
   const handleAnchorPointerDown = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (isVideoExpanded) return;
     if (event.button !== 0) return;
     event.preventDefault();
     const handle = event.currentTarget;
@@ -185,23 +247,27 @@ export const CallManagerCard = () => {
     <>
       {isVideoCall && isVideoExpanded && (
         <div className="fixed inset-0 z-108 bg-black/95">
-          {remoteHasVideo ? (
+          {largeHasVideo ? (
             <video
-              ref={remoteVideoRef}
+              ref={largeVideoRef}
               autoPlay
               playsInline
               className="h-full w-full object-contain"
             />
           ) : (
             <div className="flex h-full w-full items-center justify-center text-sm text-white/80">
-              Waiting for remote video...
+              {isLargeLocal ? 'Camera unavailable' : 'Waiting for remote video...'}
             </div>
           )}
 
+          <div className="absolute top-4 left-4 rounded-md bg-black/40 px-2 py-1 text-xs text-white/80">
+            {isLargeLocal ? 'You' : activeCall.peerName}
+          </div>
+
           <div className="absolute bottom-4 right-4 h-32 w-48 overflow-hidden rounded-lg border border-white/20 bg-black/70 shadow-xl">
-            {localHasVideo ? (
+            {smallHasVideo ? (
               <video
-                ref={localVideoRef}
+                ref={smallVideoRef}
                 autoPlay
                 muted
                 playsInline
@@ -209,17 +275,29 @@ export const CallManagerCard = () => {
               />
             ) : (
               <div className="flex h-full w-full items-center justify-center text-xs text-white/70">
-                Camera unavailable
+                {isSmallLocal ? 'Camera unavailable' : 'No remote video'}
               </div>
             )}
+            <div className="absolute top-1 left-1 rounded bg-black/55 px-1.5 py-0.5 text-[10px] text-white/80">
+              {isSmallLocal ? 'You' : activeCall.peerName}
+            </div>
           </div>
 
-          <div className="absolute top-4 right-4">
+          <div className="absolute top-4 right-4 flex items-center gap-2">
             <Button
               variant="outline"
               size="sm"
               className="border-white/20 bg-black/40 text-white hover:bg-black/55"
-              onClick={() => setIsVideoExpanded(false)}
+              onClick={() => setIsVideoStreamsSwapped((prev) => !prev)}
+              title="Swap videos"
+            >
+              <ArrowLeftRight className="w-4 h-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-white/20 bg-black/40 text-white hover:bg-black/55"
+              onClick={exitVideoFullscreen}
               title="Exit fullscreen"
             >
               <Minimize2 className="w-4 h-4" />
@@ -231,9 +309,9 @@ export const CallManagerCard = () => {
       <div className={`fixed ${positionClassName} z-109 w-fit rounded-lg border border-border bg-card/95 backdrop-blur px-4 py-3 shadow-xl`}>
         <button
           type="button"
-          className={`absolute top-1 left-1 z-10 h-5 w-5 rounded text-muted-foreground transition hover:bg-accent/70 hover:text-foreground cursor-move ${isDraggingAnchor ? 'bg-accent/80 text-foreground' : ''}`}
-          title="Drag to snap card position"
-          aria-label="Drag to snap card position"
+          className={`absolute top-1 left-1 z-10 h-5 w-5 rounded text-muted-foreground transition hover:bg-accent/70 hover:text-foreground ${isVideoExpanded ? 'cursor-not-allowed opacity-50' : 'cursor-move'} ${isDraggingAnchor ? 'bg-accent/80 text-foreground' : ''}`}
+          title={isVideoExpanded ? 'Card position locked while fullscreen' : 'Drag to snap card position'}
+          aria-label={isVideoExpanded ? 'Card position locked while fullscreen' : 'Drag to snap card position'}
           onPointerDown={handleAnchorPointerDown}
         >
           <GripVertical className="mx-auto h-3.5 w-3.5" />
@@ -242,10 +320,16 @@ export const CallManagerCard = () => {
           <div className="flex items-center gap-2">
             <PhoneCall className="w-4 h-4 text-primary" />
             <div className="text-sm font-semibold text-foreground">
-              {activeCall.state === "active"
+              {activeCall.state === 'active'
                 ? `${activeCall.peerName}${timerText ? ` • ${timerText}` : ''}`
                 : stateLabel(activeCall.state)}
             </div>
+            {isVideoCall && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[10px] uppercase tracking-wide text-primary">
+                <Video className="h-3 w-3" />
+                Video
+              </span>
+            )}
           </div>
         </div>
         <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
@@ -253,7 +337,7 @@ export const CallManagerCard = () => {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setIsVideoExpanded((prev) => !prev)}
+              onClick={isVideoExpanded ? exitVideoFullscreen : enterVideoFullscreen}
               title={isVideoExpanded ? 'Exit fullscreen' : 'Fullscreen video'}
             >
               {isVideoExpanded ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
