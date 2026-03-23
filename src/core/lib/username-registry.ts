@@ -5,6 +5,7 @@ import { EncryptedUserIdentity } from './encrypted-user-identity.js';
 import { generalErrorHandler } from '../utils/general-error.js';
 import { hashUsingSha256 } from '../utils/crypto.js';
 import { QueryEvent } from '@libp2p/kad-dht';
+import type { RoutingOptions } from '@libp2p/interface';
 import {
   isUsernameRegistrationRecord,
   signUsernameRegistrationPayload,
@@ -25,6 +26,8 @@ export class UsernameRegistry {
     'query timed out',
     'DHT is not started',
   ];
+  private static readonly REGISTER_DHT_ROUTING_OPTIONS =
+    ({ runOnLimitedConnection: true } as unknown as RoutingOptions);
 
   private node: ChatNode;
   private currentUsername: string | null = null;
@@ -127,7 +130,10 @@ export class UsernameRegistry {
     let precheckEventCount = 0;
     let precheckValueCount = 0;
     try {
-      for await (const event of this.node.services.dht.get(usernameKey) as AsyncIterable<QueryEvent>) {
+      for await (const event of this.node.services.dht.get(
+        usernameKey,
+        UsernameRegistry.REGISTER_DHT_ROUTING_OPTIONS,
+      ) as AsyncIterable<QueryEvent>) {
         precheckEventCount++;
         if (event.name === 'VALUE' && event.value) {
           precheckValueCount++;
@@ -187,7 +193,11 @@ export class UsernameRegistry {
 
     // Store username -> user data record (for username lookups)
     const usernamePublishStartedAt = Date.now();
-    const usernamePublish = await this.publishRecord(usernameKey, valueBytes);
+    const usernamePublish = await this.publishRecord(
+      usernameKey,
+      valueBytes,
+      UsernameRegistry.REGISTER_DHT_ROUTING_OPTIONS,
+    );
     console.log('[USERNAME][REGISTER][PUBLISH_USERNAME_DONE] ts=' + new Date().toISOString() + ' username=' + username + ' accepted=' + String(usernamePublish.acceptedCount) + ' rejected=' + String(usernamePublish.rejectedCount) + ' queryErrors=' + String(usernamePublish.errorCount) + ' tookMs=' + String(Date.now() - usernamePublishStartedAt));
     if (usernamePublish.acceptedCount === 0 && usernamePublish.rejectedCount > 0) {
       if (oldUsername) {
@@ -218,7 +228,11 @@ export class UsernameRegistry {
 
     // Store peerID -> user data record (contains all info)
     const peerPublishStartedAt = Date.now();
-    const peerPublish = await this.publishRecord(peerIdKey, valueBytes);
+    const peerPublish = await this.publishRecord(
+      peerIdKey,
+      valueBytes,
+      UsernameRegistry.REGISTER_DHT_ROUTING_OPTIONS,
+    );
     console.log('[USERNAME][REGISTER][PUBLISH_PEER_DONE] ts=' + new Date().toISOString() + ' username=' + username + ' accepted=' + String(peerPublish.acceptedCount) + ' rejected=' + String(peerPublish.rejectedCount) + ' queryErrors=' + String(peerPublish.errorCount) + ' tookMs=' + String(Date.now() - peerPublishStartedAt));
     if (peerPublish.acceptedCount === 0 && peerPublish.rejectedCount > 0) {
       await rollbackUsernameOnPeerWriteFailure();
@@ -626,6 +640,7 @@ export class UsernameRegistry {
   private async publishRecord(
     key: Uint8Array,
     valueBytes: Uint8Array,
+    options?: RoutingOptions,
   ): Promise<{ errorCount: number; acceptedCount: number; rejectedCount: number }> {
     const startedAt = Date.now();
     const keyStr = UsernameRegistry.TEXT_DECODER.decode(key);
@@ -658,7 +673,11 @@ export class UsernameRegistry {
     };
 
     const consumePut = async (): Promise<void> => {
-      for await (const event of this.node.services.dht.put(key, valueBytes) as AsyncIterable<QueryEvent>) {
+      for await (const event of this.node.services.dht.put(
+        key,
+        valueBytes,
+        options,
+      ) as AsyncIterable<QueryEvent>) {
         eventCount++;
         if (event.name === 'QUERY_ERROR') {
           const now = Date.now();
