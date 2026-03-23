@@ -1,5 +1,5 @@
 diff --git a/node_modules/@libp2p/kad-dht/dist/src/content-fetching/index.js b/node_modules/@libp2p/kad-dht/dist/src/content-fetching/index.js
-index ed65ccc..fbf265b 100644
+index ed65ccc..09f6ac8 100644
 --- a/node_modules/@libp2p/kad-dht/dist/src/content-fetching/index.js
 +++ b/node_modules/@libp2p/kad-dht/dist/src/content-fetching/index.js
 @@ -56,7 +56,13 @@ export class ContentFetching {
@@ -97,7 +97,7 @@ index 79b18c0..d8bcc42 100644
              metricsPrefix,
              datastorePrefix,
 diff --git a/node_modules/@libp2p/kad-dht/dist/src/network.js b/node_modules/@libp2p/kad-dht/dist/src/network.js
-index 559b220..5897253 100644
+index 559b220..dddb6c0 100644
 --- a/node_modules/@libp2p/kad-dht/dist/src/network.js
 +++ b/node_modules/@libp2p/kad-dht/dist/src/network.js
 @@ -3,7 +3,7 @@ import { Libp2pRecord } from '@libp2p/record';
@@ -109,23 +109,26 @@ index 559b220..5897253 100644
  import { fromPbPeerInfo } from './message/utils.js';
  import { sendQueryEvent, peerResponseEvent, queryErrorEvent, dialPeerEvent } from './query/events.js';
  /**
-@@ -196,6 +196,16 @@ export class Network extends TypedEventEmitter {
-         catch (err) {
-             this.metrics.errors?.increment({ [type]: true });
-             stream?.abort(err);
-+            let keyStr = '';
-+            try {
-+                keyStr = msg.key != null ? new TextDecoder().decode(msg.key) : '';
-+            }
-+            catch { }
-+            if (type === MessageType.PUT_VALUE && keyStr.startsWith('/kiyeovo-username/')) {
-+                const errText = err instanceof Error ? err.message : String(err);
-+                const elapsedMs = Date.now() - signal.start;
-+                console.error(`[USERNAME-CORRECTION][SEND_REQUEST_ERROR] to=${to.toString()} key=${keyStr} path=${options.path.index}/${options.path.total} timeoutMs=${signal.timeout} elapsedMs=${elapsedMs} aborted=${signal.aborted} err=${errText}`);
-+            }
-             yield queryErrorEvent({ from: to, error: err, path: options.path }, options);
-         }
-         finally {
+@@ -121,7 +121,8 @@ export class Network extends TypedEventEmitter {
+         const signal = this.timeout.getTimeoutSignal(options);
+         options = {
+             ...options,
+-            signal
++            signal,
++            runOnLimitedConnection: true
+         };
+         try {
+             this.metrics.operations?.increment({ [type]: true });
+@@ -175,7 +176,8 @@ export class Network extends TypedEventEmitter {
+         const signal = this.timeout.getTimeoutSignal(options);
+         options = {
+             ...options,
+-            signal
++            signal,
++            runOnLimitedConnection: true
+         };
+         try {
+             this.metrics.operations?.increment({ [type]: true });
 diff --git a/node_modules/@libp2p/kad-dht/dist/src/rpc/handlers/put-value.d.ts b/node_modules/@libp2p/kad-dht/dist/src/rpc/handlers/put-value.d.ts
 index c75bc4e..2add8e2 100644
 --- a/node_modules/@libp2p/kad-dht/dist/src/rpc/handlers/put-value.d.ts
@@ -231,6 +234,30 @@ index 6d9aded..4bf2b17 100644
        logPrefix,
        metricsPrefix,
        datastorePrefix,
+diff --git a/node_modules/@libp2p/kad-dht/src/network.ts b/node_modules/@libp2p/kad-dht/src/network.ts
+index 888ac53..17dda97 100644
+--- a/node_modules/@libp2p/kad-dht/src/network.ts
++++ b/node_modules/@libp2p/kad-dht/src/network.ts
+@@ -169,7 +169,8 @@ export class Network extends TypedEventEmitter<NetworkEvents> implements Startab
+ 
+     options = {
+       ...options,
+-      signal
++      signal,
++      runOnLimitedConnection: true
+     }
+ 
+     try {
+@@ -236,7 +237,8 @@ export class Network extends TypedEventEmitter<NetworkEvents> implements Startab
+ 
+     options = {
+       ...options,
+-      signal
++      signal,
++      runOnLimitedConnection: true
+     }
+ 
+     try {
 diff --git a/node_modules/@libp2p/kad-dht/src/rpc/handlers/put-value.ts b/node_modules/@libp2p/kad-dht/src/rpc/handlers/put-value.ts
 index 156e65d..ad0473b 100644
 --- a/node_modules/@libp2p/kad-dht/src/rpc/handlers/put-value.ts
