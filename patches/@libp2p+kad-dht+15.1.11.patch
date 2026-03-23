@@ -1,54 +1,25 @@
 diff --git a/node_modules/@libp2p/kad-dht/dist/src/content-fetching/index.js b/node_modules/@libp2p/kad-dht/dist/src/content-fetching/index.js
-index ed65ccc..09f6ac8 100644
+index ed65ccc..fcbdfa5 100644
 --- a/node_modules/@libp2p/kad-dht/dist/src/content-fetching/index.js
 +++ b/node_modules/@libp2p/kad-dht/dist/src/content-fetching/index.js
-@@ -56,7 +56,13 @@ export class ContentFetching {
-      */
+@@ -57,6 +57,7 @@ export class ContentFetching {
      async *sendCorrectionRecord(key, vals, best, options) {
          this.log('sendCorrection for %b', key);
-+        const keyStr = new TextDecoder().decode(key);
-+        const isUsernameKey = keyStr.startsWith('/kiyeovo-username/');
          const fixupRec = createPutRecord(key, best);
 +        const fixupRecordValue = Libp2pRecord.deserialize(fixupRec).value;
-+        if (isUsernameKey) {
-+            console.warn(`[USERNAME-CORRECTION][START] key=${keyStr} candidateValues=${vals.length}`);
-+        }
          for (const { value, from } of vals) {
              // no need to do anything
              if (uint8ArrayEquals(value, best)) {
-@@ -77,21 +83,48 @@ export class ContentFetching {
-             }
-             // send correction
-             let sentCorrection = false;
-+            let queryErrorCount = 0;
-+            let peerResponseCount = 0;
-+            let mismatchedResponseCount = 0;
-             const request = {
-                 type: MessageType.PUT_VALUE,
-                 key,
+@@ -83,15 +84,19 @@ export class ContentFetching {
                  record: fixupRec
              };
              for await (const event of this.network.sendRequest(from, request, options)) {
 -                if (event.name === 'PEER_RESPONSE' && (event.record != null) && uint8ArrayEquals(event.record.value, Libp2pRecord.deserialize(fixupRec).value)) {
 -                    sentCorrection = true;
-+                if (event.name === 'QUERY_ERROR') {
-+                    queryErrorCount++;
-+                    if (isUsernameKey) {
-+                        const errText = event.error instanceof Error ? event.error.message : String(event.error);
-+                        console.warn(`[USERNAME-CORRECTION][QUERY_ERROR] key=${keyStr} target=${from.toString()} path=${event.path.index}/${event.path.total} err=${errText}`);
-+                    }
-+                }
 +                if (event.name === 'PEER_RESPONSE') {
-+                    peerResponseCount++;
 +                    const matches = event.record != null && uint8ArrayEquals(event.record.value, fixupRecordValue);
 +                    if (matches) {
 +                        sentCorrection = true;
-+                    }
-+                    else {
-+                        mismatchedResponseCount++;
-+                    }
-+                    if (isUsernameKey) {
-+                        console.warn(`[USERNAME-CORRECTION][PEER_RESPONSE] key=${keyStr} target=${from.toString()} path=${event.path.index}/${event.path.total} hasRecord=${event.record != null} matchesFixup=${matches}`);
 +                    }
                  }
                  yield event;
@@ -57,13 +28,7 @@ index ed65ccc..09f6ac8 100644
 -                throw new QueryError('Could not send correction');
 +                // Do not fail read path if correction cannot be sent; the best value is still usable.
 +                this.log.error('Failed error correcting entry');
-+                if (isUsernameKey) {
-+                    console.error(`[USERNAME-CORRECTION][FAILED] key=${keyStr} target=${from.toString()} peerResponses=${peerResponseCount} mismatchedResponses=${mismatchedResponseCount} queryErrors=${queryErrorCount}`);
-+                }
 +                continue;
-+            }
-+            if (isUsernameKey) {
-+                console.warn(`[USERNAME-CORRECTION][OK] key=${keyStr} target=${from.toString()} peerResponses=${peerResponseCount} queryErrors=${queryErrorCount}`);
              }
 -            this.log.error('Failed error correcting entry');
          }
@@ -96,39 +61,6 @@ index 79b18c0..d8bcc42 100644
              logPrefix,
              metricsPrefix,
              datastorePrefix,
-diff --git a/node_modules/@libp2p/kad-dht/dist/src/network.js b/node_modules/@libp2p/kad-dht/dist/src/network.js
-index 559b220..dddb6c0 100644
---- a/node_modules/@libp2p/kad-dht/dist/src/network.js
-+++ b/node_modules/@libp2p/kad-dht/dist/src/network.js
-@@ -3,7 +3,7 @@ import { Libp2pRecord } from '@libp2p/record';
- import { AdaptiveTimeout } from '@libp2p/utils/adaptive-timeout';
- import { pbStream } from 'it-protobuf-stream';
- import { TypedEventEmitter } from 'main-event';
--import { Message } from './message/dht.js';
-+import { Message, MessageType } from './message/dht.js';
- import { fromPbPeerInfo } from './message/utils.js';
- import { sendQueryEvent, peerResponseEvent, queryErrorEvent, dialPeerEvent } from './query/events.js';
- /**
-@@ -121,7 +121,8 @@ export class Network extends TypedEventEmitter {
-         const signal = this.timeout.getTimeoutSignal(options);
-         options = {
-             ...options,
--            signal
-+            signal,
-+            runOnLimitedConnection: true
-         };
-         try {
-             this.metrics.operations?.increment({ [type]: true });
-@@ -175,7 +176,8 @@ export class Network extends TypedEventEmitter {
-         const signal = this.timeout.getTimeoutSignal(options);
-         options = {
-             ...options,
--            signal
-+            signal,
-+            runOnLimitedConnection: true
-         };
-         try {
-             this.metrics.operations?.increment({ [type]: true });
 diff --git a/node_modules/@libp2p/kad-dht/dist/src/rpc/handlers/put-value.d.ts b/node_modules/@libp2p/kad-dht/dist/src/rpc/handlers/put-value.d.ts
 index c75bc4e..2add8e2 100644
 --- a/node_modules/@libp2p/kad-dht/dist/src/rpc/handlers/put-value.d.ts
@@ -234,30 +166,6 @@ index 6d9aded..4bf2b17 100644
        logPrefix,
        metricsPrefix,
        datastorePrefix,
-diff --git a/node_modules/@libp2p/kad-dht/src/network.ts b/node_modules/@libp2p/kad-dht/src/network.ts
-index 888ac53..17dda97 100644
---- a/node_modules/@libp2p/kad-dht/src/network.ts
-+++ b/node_modules/@libp2p/kad-dht/src/network.ts
-@@ -169,7 +169,8 @@ export class Network extends TypedEventEmitter<NetworkEvents> implements Startab
- 
-     options = {
-       ...options,
--      signal
-+      signal,
-+      runOnLimitedConnection: true
-     }
- 
-     try {
-@@ -236,7 +237,8 @@ export class Network extends TypedEventEmitter<NetworkEvents> implements Startab
- 
-     options = {
-       ...options,
--      signal
-+      signal,
-+      runOnLimitedConnection: true
-     }
- 
-     try {
 diff --git a/node_modules/@libp2p/kad-dht/src/rpc/handlers/put-value.ts b/node_modules/@libp2p/kad-dht/src/rpc/handlers/put-value.ts
 index 156e65d..ad0473b 100644
 --- a/node_modules/@libp2p/kad-dht/src/rpc/handlers/put-value.ts

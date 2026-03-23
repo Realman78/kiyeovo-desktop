@@ -5,7 +5,6 @@ import { EncryptedUserIdentity } from './encrypted-user-identity.js';
 import { generalErrorHandler } from '../utils/general-error.js';
 import { hashUsingSha256 } from '../utils/crypto.js';
 import { QueryEvent } from '@libp2p/kad-dht';
-import type { RoutingOptions } from '@libp2p/interface';
 import {
   isUsernameRegistrationRecord,
   signUsernameRegistrationPayload,
@@ -26,8 +25,6 @@ export class UsernameRegistry {
     'query timed out',
     'DHT is not started',
   ];
-  private static readonly REGISTER_DHT_ROUTING_OPTIONS =
-    ({ runOnLimitedConnection: true } as unknown as RoutingOptions);
 
   private node: ChatNode;
   private currentUsername: string | null = null;
@@ -70,23 +67,13 @@ export class UsernameRegistry {
 
   async register(username: string, isRenewal: boolean = false, rememberMe: boolean = false): Promise<boolean> {
     if (this.registerInFlight) {
-      console.log('[USERNAME][REGISTER][JOIN] ts=' + new Date().toISOString() + ' username=' + username + ' renewal=' + String(isRenewal));
       return this.registerInFlight;
     }
-
-    const startedAt = Date.now();
-    console.log('[USERNAME][REGISTER][START] ts=' + new Date(startedAt).toISOString() + ' username=' + username + ' renewal=' + String(isRenewal) + ' rememberMe=' + String(rememberMe));
 
     const registerPromise = this.registerInternal(username, isRenewal, rememberMe);
     this.registerInFlight = registerPromise;
     try {
-      const result = await registerPromise;
-      console.log('[USERNAME][REGISTER][DONE] ts=' + new Date().toISOString() + ' username=' + username + ' success=' + String(result) + ' tookMs=' + String(Date.now() - startedAt));
-      return result;
-    } catch (error: unknown) {
-      const errText = error instanceof Error ? error.message : String(error);
-      console.error('[USERNAME][REGISTER][FAIL] ts=' + new Date().toISOString() + ' username=' + username + ' tookMs=' + String(Date.now() - startedAt) + ' err=' + errText);
-      throw error;
+      return await registerPromise;
     } finally {
       if (this.registerInFlight === registerPromise) {
         this.registerInFlight = null;
@@ -96,7 +83,6 @@ export class UsernameRegistry {
 
   private async registerInternal(username: string, isRenewal: boolean = false, rememberMe: boolean = false): Promise<boolean> {
     console.log(`Registering username: ${username} with rememberMe: ${rememberMe}`);
-    const startedAt = Date.now();
     if (!this.userIdentity) {
       throw new Error('User identity not initialized');
     }
@@ -126,17 +112,9 @@ export class UsernameRegistry {
     const valueBytes = UsernameRegistry.TEXT_ENCODER.encode(userRegistrationJson);
 
     // Check if username is already taken by someone else
-    const precheckStartedAt = Date.now();
-    let precheckEventCount = 0;
-    let precheckValueCount = 0;
     try {
-      for await (const event of this.node.services.dht.get(
-        usernameKey,
-        UsernameRegistry.REGISTER_DHT_ROUTING_OPTIONS,
-      ) as AsyncIterable<QueryEvent>) {
-        precheckEventCount++;
+      for await (const event of this.node.services.dht.get(usernameKey) as AsyncIterable<QueryEvent>) {
         if (event.name === 'VALUE' && event.value) {
-          precheckValueCount++;
           const rawData = UsernameRegistry.TEXT_DECODER.decode(event.value).trim();
           
           // If data is empty or invalid, skip it (username is available)
@@ -182,7 +160,6 @@ export class UsernameRegistry {
       }
     }
 
-    console.log('[USERNAME][REGISTER][PRECHECK_DONE] ts=' + new Date().toISOString() + ' username=' + username + ' events=' + String(precheckEventCount) + ' valueEvents=' + String(precheckValueCount) + ' tookMs=' + String(Date.now() - precheckStartedAt));
 
     // If changing username, stop re-registration first to prevent race conditions
     const oldUsername = this.currentUsername;
@@ -192,13 +169,7 @@ export class UsernameRegistry {
     }
 
     // Store username -> user data record (for username lookups)
-    const usernamePublishStartedAt = Date.now();
-    const usernamePublish = await this.publishRecord(
-      usernameKey,
-      valueBytes,
-      UsernameRegistry.REGISTER_DHT_ROUTING_OPTIONS,
-    );
-    console.log('[USERNAME][REGISTER][PUBLISH_USERNAME_DONE] ts=' + new Date().toISOString() + ' username=' + username + ' accepted=' + String(usernamePublish.acceptedCount) + ' rejected=' + String(usernamePublish.rejectedCount) + ' queryErrors=' + String(usernamePublish.errorCount) + ' tookMs=' + String(Date.now() - usernamePublishStartedAt));
+    const usernamePublish = await this.publishRecord(usernameKey, valueBytes);
     if (usernamePublish.acceptedCount === 0 && usernamePublish.rejectedCount > 0) {
       if (oldUsername) {
         this.currentUsername = oldUsername;
@@ -227,13 +198,7 @@ export class UsernameRegistry {
     };
 
     // Store peerID -> user data record (contains all info)
-    const peerPublishStartedAt = Date.now();
-    const peerPublish = await this.publishRecord(
-      peerIdKey,
-      valueBytes,
-      UsernameRegistry.REGISTER_DHT_ROUTING_OPTIONS,
-    );
-    console.log('[USERNAME][REGISTER][PUBLISH_PEER_DONE] ts=' + new Date().toISOString() + ' username=' + username + ' accepted=' + String(peerPublish.acceptedCount) + ' rejected=' + String(peerPublish.rejectedCount) + ' queryErrors=' + String(peerPublish.errorCount) + ' tookMs=' + String(Date.now() - peerPublishStartedAt));
+    const peerPublish = await this.publishRecord(peerIdKey, valueBytes);
     if (peerPublish.acceptedCount === 0 && peerPublish.rejectedCount > 0) {
       await rollbackUsernameOnPeerWriteFailure();
       if (oldUsername) {
@@ -298,7 +263,6 @@ export class UsernameRegistry {
     // Start re-registration with new username
     this.startReregistration();
 
-    console.log('[USERNAME][REGISTER][INTERNAL_DONE] ts=' + new Date().toISOString() + ' username=' + username + ' tookMs=' + String(Date.now() - startedAt));
     return true;
   }
 
@@ -640,78 +604,20 @@ export class UsernameRegistry {
   private async publishRecord(
     key: Uint8Array,
     valueBytes: Uint8Array,
-    options?: RoutingOptions,
   ): Promise<{ errorCount: number; acceptedCount: number; rejectedCount: number }> {
     const startedAt = Date.now();
-    const keyStr = UsernameRegistry.TEXT_DECODER.decode(key);
     let errorCount = 0;
     let acceptedCount = 0;
     let rejectedCount = 0;
-    let eventCount = 0;
-    let firstPeerResponseAt: number | null = null;
-    let firstQueryErrorAt: number | null = null;
-    const queryErrorDetails: string[] = [];
-
-    const summarize = (phase: 'FINAL' | 'EARLY'): void => {
-      const endedAt = Date.now();
-      const firstPeerMs = firstPeerResponseAt === null ? -1 : firstPeerResponseAt - startedAt;
-      const firstQueryErrorMs = firstQueryErrorAt === null ? -1 : firstQueryErrorAt - startedAt;
-      const tailAfterFirstPeerMs = firstPeerResponseAt === null ? -1 : endedAt - firstPeerResponseAt;
-      console.log(
-        '[USERNAME][PUBLISH][TIMING][' + phase + '] key=' + keyStr
-        + ' events=' + String(eventCount)
-        + ' peerResponses=' + String(acceptedCount + rejectedCount)
-        + ' accepted=' + String(acceptedCount)
-        + ' rejected=' + String(rejectedCount)
-        + ' queryErrors=' + String(errorCount)
-        + ' firstPeerMs=' + String(firstPeerMs)
-        + ' firstQueryErrorMs=' + String(firstQueryErrorMs)
-        + ' tailAfterFirstPeerMs=' + String(tailAfterFirstPeerMs)
-        + ' totalMs=' + String(endedAt - startedAt)
-        + ' queryErrorSample=' + (queryErrorDetails.length > 0 ? queryErrorDetails.join(' || ') : 'none'),
-      );
-    };
 
     const consumePut = async (): Promise<void> => {
-      for await (const event of this.node.services.dht.put(
-        key,
-        valueBytes,
-        options,
-      ) as AsyncIterable<QueryEvent>) {
-        eventCount++;
+      for await (const event of this.node.services.dht.put(key, valueBytes) as AsyncIterable<QueryEvent>) {
         if (event.name === 'QUERY_ERROR') {
-          const now = Date.now();
-          const queryErrorEvent = event as QueryEvent & {
-            from?: { toString: () => string };
-            error?: unknown;
-          };
-          const from = queryErrorEvent.from?.toString?.() ?? 'unknown';
-          const rawError = queryErrorEvent.error;
-          const errorText = rawError instanceof Error
-            ? (rawError.stack ?? rawError.message)
-            : String(rawError ?? 'unknown');
-
           errorCount++;
-          if (firstQueryErrorAt === null) {
-            firstQueryErrorAt = now;
-          }
+          continue;
+        }
 
-          queryErrorDetails.push(
-            'ms=' + String(now - startedAt)
-            + ',peer=' + from
-            + ',err=' + errorText,
-          );
-
-          console.warn(
-            '[USERNAME][PUBLISH][QUERY_ERROR] key=' + keyStr
-            + ' ms=' + String(now - startedAt)
-            + ' peer=' + from
-            + ' err=' + errorText,
-          );
-        } else if (event.name === 'PEER_RESPONSE') {
-          if (firstPeerResponseAt === null) {
-            firstPeerResponseAt = Date.now();
-          }
+        if (event.name === 'PEER_RESPONSE') {
           const accepted = event.record != null
             && Buffer.from(event.record.value).equals(Buffer.from(valueBytes));
           if (accepted) acceptedCount++;
@@ -725,19 +631,15 @@ export class UsernameRegistry {
     const consumePromise = consumePut()
       .catch((error: unknown) => {
         consumeError = error;
-        const errText = error instanceof Error ? (error.stack ?? error.message) : String(error);
-        console.warn('[USERNAME][PUBLISH][ITERATOR_ERROR] key=' + keyStr + ' err=' + errText);
       })
       .finally(() => {
         finished = true;
-        summarize('FINAL');
       });
 
     if (this.isFastMode) {
       const deadline = startedAt + UsernameRegistry.FAST_PUBLISH_EARLY_RETURN_MS;
       while (!finished) {
         if (Date.now() >= deadline && acceptedCount >= 1) {
-          summarize('EARLY');
           void consumePromise;
           return { errorCount, acceptedCount, rejectedCount };
         }
