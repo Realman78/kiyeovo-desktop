@@ -623,19 +623,50 @@ export class UsernameRegistry {
     key: Uint8Array,
     valueBytes: Uint8Array,
   ): Promise<{ errorCount: number; acceptedCount: number; rejectedCount: number }> {
+    const startedAt = Date.now();
+    const keyStr = UsernameRegistry.TEXT_DECODER.decode(key);
     let errorCount = 0;
     let acceptedCount = 0;
     let rejectedCount = 0;
+    let eventCount = 0;
+    let firstPeerResponseAt: number | null = null;
+    let firstQueryErrorAt: number | null = null;
+
     for await (const event of this.node.services.dht.put(key, valueBytes) as AsyncIterable<QueryEvent>) {
+      eventCount++;
       if (event.name === 'QUERY_ERROR') {
         errorCount++;
+        if (firstQueryErrorAt === null) {
+          firstQueryErrorAt = Date.now();
+        }
       } else if (event.name === 'PEER_RESPONSE') {
+        if (firstPeerResponseAt === null) {
+          firstPeerResponseAt = Date.now();
+        }
         const accepted = event.record != null
           && Buffer.from(event.record.value).equals(Buffer.from(valueBytes));
         if (accepted) acceptedCount++;
         else rejectedCount++;
       }
     }
+
+    const endedAt = Date.now();
+    const firstPeerMs = firstPeerResponseAt === null ? -1 : firstPeerResponseAt - startedAt;
+    const firstQueryErrorMs = firstQueryErrorAt === null ? -1 : firstQueryErrorAt - startedAt;
+    const tailAfterFirstPeerMs = firstPeerResponseAt === null ? -1 : endedAt - firstPeerResponseAt;
+
+    console.log(
+      '[USERNAME][PUBLISH][TIMING] key=' + keyStr
+      + ' events=' + String(eventCount)
+      + ' peerResponses=' + String(acceptedCount + rejectedCount)
+      + ' accepted=' + String(acceptedCount)
+      + ' rejected=' + String(rejectedCount)
+      + ' queryErrors=' + String(errorCount)
+      + ' firstPeerMs=' + String(firstPeerMs)
+      + ' firstQueryErrorMs=' + String(firstQueryErrorMs)
+      + ' tailAfterFirstPeerMs=' + String(tailAfterFirstPeerMs)
+      + ' totalMs=' + String(endedAt - startedAt),
+    );
 
     return { errorCount, acceptedCount, rejectedCount };
   }
