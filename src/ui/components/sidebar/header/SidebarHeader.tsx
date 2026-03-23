@@ -40,6 +40,8 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
     // Ref to track latest newConversationDialogOpen value without recreating listeners
     const newConversationDialogOpenRef = useRef(newConversationDialogOpen);
     const attemptedAutoRegisterRef = useRef(false);
+    const isRegisteredRef = useRef(isRegistered);
+    const registrationInProgressRef = useRef(registrationInProgress);
     const chatsRef = useRef(chats);
     const pendingKeyExchangesRef = useRef(pendingKeyExchanges);
 
@@ -51,6 +53,14 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
     useEffect(() => {
         chatsRef.current = chats;
     }, [chats]);
+
+    useEffect(() => {
+        isRegisteredRef.current = isRegistered;
+    }, [isRegistered]);
+
+    useEffect(() => {
+        registrationInProgressRef.current = registrationInProgress;
+    }, [registrationInProgress]);
 
     useEffect(() => {
         pendingKeyExchangesRef.current = pendingKeyExchanges;
@@ -79,7 +89,11 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
         console.log('[DHT-STATUS][UI][SUBSCRIBE] SidebarHeader subscribing to DHT status events');
         let isDisposed = false;
         const triggerAutoRegisterIfNeeded = () => {
-            if (attemptedAutoRegisterRef.current || isRegistered || registrationInProgress) {
+            if (
+                attemptedAutoRegisterRef.current
+                || isRegisteredRef.current
+                || registrationInProgressRef.current
+            ) {
                 return;
             }
 
@@ -105,9 +119,7 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
                         dispatch(setRegistered(true));
                     }
                 } finally {
-                    if (!isDisposed) {
-                        dispatch(setRegistrationInProgress({ inProgress: false, pendingUsername: '' }));
-                    }
+                    dispatch(setRegistrationInProgress({ inProgress: false, pendingUsername: '' }));
                 }
             })();
         };
@@ -169,7 +181,7 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
             unsubStatus();
             unsubSent();
         };
-    }, [dispatch, isRegistered, registrationInProgress]);
+    }, [dispatch]);
 
     useEffect(() => {
         console.log(`[DHT-STATUS][UI][REDUX] user.connected changed -> ${String(isConnected)}`);
