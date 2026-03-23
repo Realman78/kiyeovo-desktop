@@ -42,6 +42,7 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
     const attemptedAutoRegisterRef = useRef(false);
     const isRegisteredRef = useRef(isRegistered);
     const registrationInProgressRef = useRef(registrationInProgress);
+    const autoRegisterEnabledRef = useRef<boolean | null>(null);
     const chatsRef = useRef(chats);
     const pendingKeyExchangesRef = useRef(pendingKeyExchanges);
 
@@ -88,6 +89,22 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
     useEffect(() => {
         console.log('[DHT-STATUS][UI][SUBSCRIBE] SidebarHeader subscribing to DHT status events');
         let isDisposed = false;
+        const ensureAutoRegisterEnabled = async (): Promise<boolean> => {
+            if (autoRegisterEnabledRef.current !== null) {
+                return autoRegisterEnabledRef.current;
+            }
+
+            try {
+                const result = await window.kiyeovoAPI.getAutoRegister();
+                autoRegisterEnabledRef.current = !!result.autoRegister;
+            } catch (error) {
+                console.error('[UI] Failed to read auto-register setting:', error);
+                autoRegisterEnabledRef.current = false;
+            }
+
+            return autoRegisterEnabledRef.current;
+        };
+
         const triggerAutoRegisterIfNeeded = () => {
             if (
                 attemptedAutoRegisterRef.current
@@ -98,19 +115,25 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
             }
 
             attemptedAutoRegisterRef.current = true;
-            dispatch(setRegistrationInProgress({ inProgress: true, pendingUsername: '' }));
-
-            const lastUsernamePromise = window.kiyeovoAPI.getLastUsername()
-                .then((last) => {
-                    if (!isDisposed && last.username) {
-                        dispatch(setRegistrationInProgress({ inProgress: true, pendingUsername: last.username }));
-                    }
-                })
-                .catch(() => {
-                    // Best effort; pending username can remain empty.
-                });
 
             void (async () => {
+                const autoRegisterEnabled = await ensureAutoRegisterEnabled();
+                if (!autoRegisterEnabled) {
+                    return;
+                }
+
+                dispatch(setRegistrationInProgress({ inProgress: true, pendingUsername: '' }));
+
+                const lastUsernamePromise = window.kiyeovoAPI.getLastUsername()
+                    .then((last) => {
+                        if (!isDisposed && last.username) {
+                            dispatch(setRegistrationInProgress({ inProgress: true, pendingUsername: last.username }));
+                        }
+                    })
+                    .catch(() => {
+                        // Best effort; pending username can remain empty.
+                    });
+
                 try {
                     await lastUsernamePromise;
                     const result = await window.kiyeovoAPI.attemptAutoRegister();
@@ -148,6 +171,7 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
             dispatch(setConnected(status.connected));
             if (!status.connected) {
                 attemptedAutoRegisterRef.current = false;
+                autoRegisterEnabledRef.current = null;
                 dispatch(setRegistrationInProgress({ inProgress: false, pendingUsername: '' }));
                 return;
             }
