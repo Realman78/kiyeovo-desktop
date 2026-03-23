@@ -62,13 +62,24 @@ export async function usernameRegistrationValidator(
   key: Uint8Array,
   value: Uint8Array,
 ): Promise<void> {
-  console.log("username validator")
-  const { kind, hash } = parseUsernameKey(key);
-  const registration = parseRegistration(value);
-  if (!verifyKeyBinding(kind, hash, registration)) {
-    throw new Error('Username registration key binding mismatch');
+  const startedAt = Date.now();
+  const keyStr = new TextDecoder().decode(key);
+  console.log('[USERNAME-VALIDATOR][CHECK][START] ts=' + new Date(startedAt).toISOString() + ' key=' + keyStr + ' valueBytes=' + String(value.length));
+
+  try {
+    const { kind, hash } = parseUsernameKey(key);
+    const registration = parseRegistration(value);
+    if (!verifyKeyBinding(kind, hash, registration)) {
+      throw new Error('Username registration key binding mismatch');
+    }
+
+    const skewMs = Date.now() - registration.timestamp;
+    console.log('[USERNAME-VALIDATOR][CHECK][PASS] ts=' + new Date().toISOString() + ' key=' + keyStr + ' peer=' + registration.peerID + ' username=' + registration.username + ' skewMs=' + String(skewMs) + ' tookMs=' + String(Date.now() - startedAt));
+  } catch (error: unknown) {
+    const errText = error instanceof Error ? error.message : String(error);
+    console.warn('[USERNAME-VALIDATOR][CHECK][REJECT] ts=' + new Date().toISOString() + ' key=' + keyStr + ' tookMs=' + String(Date.now() - startedAt) + ' err=' + errText);
+    throw error;
   }
-  console.log("validator passed")
 }
 
 export function usernameRegistrationSelector(
@@ -110,8 +121,14 @@ export async function usernameRegistrationValidateUpdate(
   existing: Uint8Array,
   incoming: Uint8Array,
 ): Promise<void> {
-  console.log("Started")
+  const startedAt = Date.now();
   const keyStr = new TextDecoder().decode(key);
+  console.log(
+    '[USERNAME-VALIDATOR][UPDATE][START] ts=' + new Date(startedAt).toISOString()
+    + ' key=' + keyStr
+    + ' existingBytes=' + String(existing.length)
+    + ' incomingBytes=' + String(incoming.length),
+  );
   const { kind, hash } = parseUsernameKey(key);
   let existingRegistration: UserRegistration;
   try {
@@ -173,5 +190,5 @@ export async function usernameRegistrationValidateUpdate(
       throw new Error('stale record rejected');
     }
   }
-  console.log(`DHT validator: accepted write to ${keyStr}`);
+  console.log('[USERNAME-VALIDATOR][UPDATE][ACCEPT] ts=' + new Date().toISOString() + ' key=' + keyStr + ' existingTs=' + String(existingRegistration.timestamp) + ' incomingTs=' + String(incomingRegistration.timestamp) + ' tookMs=' + String(Date.now() - startedAt));
 }

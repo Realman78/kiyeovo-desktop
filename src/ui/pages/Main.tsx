@@ -553,9 +553,17 @@ export const Main = () => {
 
         const topDirectChatIds = Array.from(topDirectChatIdSet);
 
+        const startupSyncStartedAt = Date.now();
+        console.log('[UI][STARTUP-SYNC][START] ts=' + new Date(startupSyncStartedAt).toISOString() + ' directChats=' + String(topDirectChatIds.length) + ' groupChats=' + String(topGroupChatIds.length));
+
         const groupCheckTask = async () => {
-          if (topGroupChatIds.length === 0 || !isConnected) return;
-          console.log(`[UI] Checking missed group messages for chats: ${topGroupChatIds.join(', ')}`);
+          if (topGroupChatIds.length === 0 || !isConnected) {
+            console.log('[UI][STARTUP-SYNC][GROUP][SKIP] ts=' + new Date().toISOString() + ' isConnected=' + String(isConnected) + ' chatCount=' + String(topGroupChatIds.length));
+            return;
+          }
+
+          const startedAt = Date.now();
+          console.log('[UI][STARTUP-SYNC][GROUP][START] ts=' + new Date(startedAt).toISOString() + ' chatIds=' + topGroupChatIds.join(','));
           topGroupChatIds.forEach((chatId) => {
             dispatch(setOfflineFetchStatus({ chatId, isFetching: true }));
           });
@@ -591,13 +599,20 @@ export const Main = () => {
           } catch (error) {
             dispatch(markOfflineFetchFailed(topGroupChatIds));
             console.error('[UI] Failed to check group offline messages:', error);
+          } finally {
+            console.log('[UI][STARTUP-SYNC][GROUP][DONE] ts=' + new Date().toISOString() + ' tookMs=' + String(Date.now() - startedAt));
           }
         };
 
         const directCheckTask = async () => {
-          if (topDirectChatIds.length === 0 || !isConnected) return;
+          if (topDirectChatIds.length === 0 || !isConnected) {
+            console.log('[UI][STARTUP-SYNC][DIRECT][SKIP] ts=' + new Date().toISOString() + ' isConnected=' + String(isConnected) + ' chatCount=' + String(topDirectChatIds.length));
+            return;
+          }
 
-          console.log(`[UI] Checking offline messages for ${topDirectChatIds.length} recent direct chats (IDs: ${topDirectChatIds.join(', ')})...`);
+          const startedAt = Date.now();
+          console.log('[UI][STARTUP-SYNC][DIRECT][START] ts=' + new Date(startedAt).toISOString() + ' chatIds=' + topDirectChatIds.join(','));
+
           topDirectChatIds.forEach((chatId) => {
             dispatch(setOfflineFetchStatus({ chatId, isFetching: true }));
           });
@@ -655,11 +670,14 @@ export const Main = () => {
           } catch (error) {
             console.error('[UI] Failed to check offline messages:', error);
             dispatch(markOfflineFetchFailed(topDirectChatIds));
+          } finally {
+            console.log('[UI][STARTUP-SYNC][DIRECT][DONE] ts=' + new Date().toISOString() + ' tookMs=' + String(Date.now() - startedAt));
           }
         };
 
         await directCheckTask();
         await groupCheckTask();
+        console.log('[UI][STARTUP-SYNC][DONE] ts=' + new Date().toISOString() + ' tookMs=' + String(Date.now() - startupSyncStartedAt));
       } catch (error) {
         console.error('[UI] Error fetching chats:', error);
       }

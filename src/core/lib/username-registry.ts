@@ -63,14 +63,23 @@ export class UsernameRegistry {
 
   async register(username: string, isRenewal: boolean = false, rememberMe: boolean = false): Promise<boolean> {
     if (this.registerInFlight) {
-      console.log('[USERNAME] Register already in progress, joining in-flight request');
+      console.log('[USERNAME][REGISTER][JOIN] ts=' + new Date().toISOString() + ' username=' + username + ' renewal=' + String(isRenewal));
       return this.registerInFlight;
     }
+
+    const startedAt = Date.now();
+    console.log('[USERNAME][REGISTER][START] ts=' + new Date(startedAt).toISOString() + ' username=' + username + ' renewal=' + String(isRenewal) + ' rememberMe=' + String(rememberMe));
 
     const registerPromise = this.registerInternal(username, isRenewal, rememberMe);
     this.registerInFlight = registerPromise;
     try {
-      return await registerPromise;
+      const result = await registerPromise;
+      console.log('[USERNAME][REGISTER][DONE] ts=' + new Date().toISOString() + ' username=' + username + ' success=' + String(result) + ' tookMs=' + String(Date.now() - startedAt));
+      return result;
+    } catch (error: unknown) {
+      const errText = error instanceof Error ? error.message : String(error);
+      console.error('[USERNAME][REGISTER][FAIL] ts=' + new Date().toISOString() + ' username=' + username + ' tookMs=' + String(Date.now() - startedAt) + ' err=' + errText);
+      throw error;
     } finally {
       if (this.registerInFlight === registerPromise) {
         this.registerInFlight = null;
@@ -80,6 +89,7 @@ export class UsernameRegistry {
 
   private async registerInternal(username: string, isRenewal: boolean = false, rememberMe: boolean = false): Promise<boolean> {
     console.log(`Registering username: ${username} with rememberMe: ${rememberMe}`);
+    const startedAt = Date.now();
     if (!this.userIdentity) {
       throw new Error('User identity not initialized');
     }
@@ -109,9 +119,14 @@ export class UsernameRegistry {
     const valueBytes = UsernameRegistry.TEXT_ENCODER.encode(userRegistrationJson);
 
     // Check if username is already taken by someone else
+    const precheckStartedAt = Date.now();
+    let precheckEventCount = 0;
+    let precheckValueCount = 0;
     try {
       for await (const event of this.node.services.dht.get(usernameKey) as AsyncIterable<QueryEvent>) {
+        precheckEventCount++;
         if (event.name === 'VALUE' && event.value) {
+          precheckValueCount++;
           const rawData = UsernameRegistry.TEXT_DECODER.decode(event.value).trim();
           
           // If data is empty or invalid, skip it (username is available)
@@ -157,6 +172,8 @@ export class UsernameRegistry {
       }
     }
 
+    console.log('[USERNAME][REGISTER][PRECHECK_DONE] ts=' + new Date().toISOString() + ' username=' + username + ' events=' + String(precheckEventCount) + ' valueEvents=' + String(precheckValueCount) + ' tookMs=' + String(Date.now() - precheckStartedAt));
+
     // If changing username, stop re-registration first to prevent race conditions
     const oldUsername = this.currentUsername;
     if (oldUsername) {
@@ -165,7 +182,9 @@ export class UsernameRegistry {
     }
 
     // Store username -> user data record (for username lookups)
+    const usernamePublishStartedAt = Date.now();
     const usernamePublish = await this.publishRecord(usernameKey, valueBytes);
+    console.log('[USERNAME][REGISTER][PUBLISH_USERNAME_DONE] ts=' + new Date().toISOString() + ' username=' + username + ' accepted=' + String(usernamePublish.acceptedCount) + ' rejected=' + String(usernamePublish.rejectedCount) + ' queryErrors=' + String(usernamePublish.errorCount) + ' tookMs=' + String(Date.now() - usernamePublishStartedAt));
     if (usernamePublish.acceptedCount === 0 && usernamePublish.rejectedCount > 0) {
       if (oldUsername) {
         this.currentUsername = oldUsername;
@@ -194,7 +213,9 @@ export class UsernameRegistry {
     };
 
     // Store peerID -> user data record (contains all info)
+    const peerPublishStartedAt = Date.now();
     const peerPublish = await this.publishRecord(peerIdKey, valueBytes);
+    console.log('[USERNAME][REGISTER][PUBLISH_PEER_DONE] ts=' + new Date().toISOString() + ' username=' + username + ' accepted=' + String(peerPublish.acceptedCount) + ' rejected=' + String(peerPublish.rejectedCount) + ' queryErrors=' + String(peerPublish.errorCount) + ' tookMs=' + String(Date.now() - peerPublishStartedAt));
     if (peerPublish.acceptedCount === 0 && peerPublish.rejectedCount > 0) {
       await rollbackUsernameOnPeerWriteFailure();
       if (oldUsername) {
@@ -259,6 +280,7 @@ export class UsernameRegistry {
     // Start re-registration with new username
     this.startReregistration();
 
+    console.log('[USERNAME][REGISTER][INTERNAL_DONE] ts=' + new Date().toISOString() + ' username=' + username + ' tookMs=' + String(Date.now() - startedAt));
     return true;
   }
 
