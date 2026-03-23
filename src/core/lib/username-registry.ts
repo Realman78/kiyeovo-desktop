@@ -31,6 +31,7 @@ export class UsernameRegistry {
   private database: ChatDatabase;
   private readonly usernameDhtPrefix: string;
   private readonly autoRegisterSettingKey: string;
+  private registerInFlight: Promise<boolean> | null = null;
 
   constructor(node: ChatNode, database: ChatDatabase) {
     this.node = node;
@@ -61,6 +62,23 @@ export class UsernameRegistry {
   }
 
   async register(username: string, isRenewal: boolean = false, rememberMe: boolean = false): Promise<boolean> {
+    if (this.registerInFlight) {
+      console.log('[USERNAME] Register already in progress, joining in-flight request');
+      return this.registerInFlight;
+    }
+
+    const registerPromise = this.registerInternal(username, isRenewal, rememberMe);
+    this.registerInFlight = registerPromise;
+    try {
+      return await registerPromise;
+    } finally {
+      if (this.registerInFlight === registerPromise) {
+        this.registerInFlight = null;
+      }
+    }
+  }
+
+  private async registerInternal(username: string, isRenewal: boolean = false, rememberMe: boolean = false): Promise<boolean> {
     console.log(`Registering username: ${username} with rememberMe: ${rememberMe}`);
     if (!this.userIdentity) {
       throw new Error('User identity not initialized');

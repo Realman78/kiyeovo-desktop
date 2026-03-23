@@ -30,6 +30,7 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
     const [isTorEnabled, setIsTorEnabled] = useState<boolean>(false);
     const isConnected = useSelector((state: RootState) => state.user.connected);
     const isRegistered = useSelector((state: RootState) => state.user.registered);
+    const registrationInProgress = useSelector((state: RootState) => state.user.registrationInProgress);
     const chats = useSelector((state: RootState) => state.chat.chats);
     const pendingKeyExchanges = useSelector((state: RootState) => state.chat.pendingKeyExchanges);
 
@@ -78,7 +79,7 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
         console.log('[DHT-STATUS][UI][SUBSCRIBE] SidebarHeader subscribing to DHT status events');
         let isDisposed = false;
         const triggerAutoRegisterIfNeeded = () => {
-            if (attemptedAutoRegisterRef.current || isRegistered) {
+            if (attemptedAutoRegisterRef.current || isRegistered || registrationInProgress) {
                 return;
             }
 
@@ -168,7 +169,7 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
             unsubStatus();
             unsubSent();
         };
-    }, [dispatch, isRegistered]);
+    }, [dispatch, isRegistered, registrationInProgress]);
 
     useEffect(() => {
         console.log(`[DHT-STATUS][UI][REDUX] user.connected changed -> ${String(isConnected)}`);
@@ -206,6 +207,12 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
     }
 
     const handleShowNewConversationDialog = () => {
+        if (!isRegistered || registrationInProgress) {
+            toast.error('Register before starting a new conversation.');
+            setDropdownOpen(false);
+            return;
+        }
+
         setError(undefined);
         setNewConversationDialogOpen(true);
         setDropdownOpen(false);

@@ -28,3 +28,4 @@ dist-electron
 
 .env
 bootstrap-peer-id.bin
+bootstrap-datastore

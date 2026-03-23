@@ -2,14 +2,13 @@
 
 1. [NUDGE][SEND_FAIL] peer=fz9zYUjU group=32398e08 reason=Remote closed connection during opening -> do libp2p je jednostavno. probal san fixat i zasad nemoren replicirat. zbrisat cu ovo ako se kad desi opet
 
-2. Does changing the username of a user (locally) affect negatively on any other aspects?
-
 4. DHT put error for /kiyeovo-fast-group-info-v/71e3f6bb-c60e-4dc7-b9cf-f16ad07b42a3/F9ntCrDHH8x8pdhLMgUsrJsjXyF-hCUE0M1TPylpiEo/29:
   from: PeerId(12D3KooWBEmK9VyRzDPpkhVdfH1LhpMTz4DH8NhA6e7pdi6AXstV),
   error: LimitedConnectionError: Cannot open protocol stream on limited connection
 
   - ovo gori se dogada jer se DHT stream po defaultu ne runna na limited connectionima. to bi trebalo u libp2p patchat
   - ovo necu zasad ali ako se desi da je previse konekcija limited i da se replikacija ne dogada, moralo bi se osposobit.
+  - submittaj change request na github za ovo
   
 6. nekakav rate limit na DHT zapise (na validatorima)
 
