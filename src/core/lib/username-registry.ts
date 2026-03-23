@@ -631,14 +631,39 @@ export class UsernameRegistry {
     let eventCount = 0;
     let firstPeerResponseAt: number | null = null;
     let firstQueryErrorAt: number | null = null;
+    const queryErrorDetails: string[] = [];
 
     for await (const event of this.node.services.dht.put(key, valueBytes) as AsyncIterable<QueryEvent>) {
       eventCount++;
       if (event.name === 'QUERY_ERROR') {
+        const now = Date.now();
+        const queryErrorEvent = event as QueryEvent & {
+          from?: { toString: () => string };
+          error?: unknown;
+        };
+        const from = queryErrorEvent.from?.toString?.() ?? 'unknown';
+        const rawError = queryErrorEvent.error;
+        const errorText = rawError instanceof Error
+          ? (rawError.stack ?? rawError.message)
+          : String(rawError ?? 'unknown');
+
         errorCount++;
         if (firstQueryErrorAt === null) {
-          firstQueryErrorAt = Date.now();
+          firstQueryErrorAt = now;
         }
+
+        queryErrorDetails.push(
+          'ms=' + String(now - startedAt)
+          + ',peer=' + from
+          + ',err=' + errorText,
+        );
+
+        console.warn(
+          '[USERNAME][PUBLISH][QUERY_ERROR] key=' + keyStr
+          + ' ms=' + String(now - startedAt)
+          + ' peer=' + from
+          + ' err=' + errorText,
+        );
       } else if (event.name === 'PEER_RESPONSE') {
         if (firstPeerResponseAt === null) {
           firstPeerResponseAt = Date.now();
@@ -665,7 +690,8 @@ export class UsernameRegistry {
       + ' firstPeerMs=' + String(firstPeerMs)
       + ' firstQueryErrorMs=' + String(firstQueryErrorMs)
       + ' tailAfterFirstPeerMs=' + String(tailAfterFirstPeerMs)
-      + ' totalMs=' + String(endedAt - startedAt),
+      + ' totalMs=' + String(endedAt - startedAt)
+      + ' queryErrorSample=' + (queryErrorDetails.length > 0 ? queryErrorDetails.join(' || ') : 'none'),
     );
 
     return { errorCount, acceptedCount, rejectedCount };
