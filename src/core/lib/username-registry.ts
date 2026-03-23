@@ -1,6 +1,6 @@
 import { ChatDatabase, User } from './db/database.js';
 import type { ChatNode, UserRegistration } from '../types.js';
-import { ERRORS, REREGISTRATION_INTERVAL, getNetworkModeRuntime } from '../constants.js';
+import { ERRORS, NETWORK_MODES, REREGISTRATION_INTERVAL, getNetworkModeRuntime } from '../constants.js';
 import { EncryptedUserIdentity } from './encrypted-user-identity.js';
 import { generalErrorHandler } from '../utils/general-error.js';
 import { hashUsingSha256 } from '../utils/crypto.js';
@@ -16,6 +16,8 @@ export class UsernameRegistry {
   private static readonly TEXT_ENCODER = new TextEncoder();
   private static readonly TEXT_DECODER = new TextDecoder();
   private static readonly MAX_REGISTRATION_AGE = REREGISTRATION_INTERVAL * 2;
+  private static readonly FAST_PUBLISH_EARLY_RETURN_MS = 10_000;
+  private static readonly FAST_PUBLISH_POLL_MS = 1000;
   private static readonly LOOKUP_RETRYABLE_ERRORS = [
     'Could not send correction',
     'No peers found',
@@ -31,6 +33,7 @@ export class UsernameRegistry {
   private database: ChatDatabase;
   private readonly usernameDhtPrefix: string;
   private readonly autoRegisterSettingKey: string;
+  private readonly isFastMode: boolean;
   private registerInFlight: Promise<boolean> | null = null;
 
   constructor(node: ChatNode, database: ChatDatabase) {
@@ -39,6 +42,7 @@ export class UsernameRegistry {
     const mode = database.getSessionNetworkMode();
     this.usernameDhtPrefix = getNetworkModeRuntime(mode).config.dhtNamespaces.username;
     this.autoRegisterSettingKey = `auto_register_${mode}`;
+    this.isFastMode = mode === NETWORK_MODES.FAST;
   }
 
   async initialize(userIdentity: EncryptedUserIdentity, onRestoreUsername: (username: string) => void): Promise<void> {
@@ -633,66 +637,102 @@ export class UsernameRegistry {
     let firstQueryErrorAt: number | null = null;
     const queryErrorDetails: string[] = [];
 
-    for await (const event of this.node.services.dht.put(key, valueBytes) as AsyncIterable<QueryEvent>) {
-      eventCount++;
-      if (event.name === 'QUERY_ERROR') {
-        const now = Date.now();
-        const queryErrorEvent = event as QueryEvent & {
-          from?: { toString: () => string };
-          error?: unknown;
-        };
-        const from = queryErrorEvent.from?.toString?.() ?? 'unknown';
-        const rawError = queryErrorEvent.error;
-        const errorText = rawError instanceof Error
-          ? (rawError.stack ?? rawError.message)
-          : String(rawError ?? 'unknown');
+    const summarize = (phase: 'FINAL' | 'EARLY'): void => {
+      const endedAt = Date.now();
+      const firstPeerMs = firstPeerResponseAt === null ? -1 : firstPeerResponseAt - startedAt;
+      const firstQueryErrorMs = firstQueryErrorAt === null ? -1 : firstQueryErrorAt - startedAt;
+      const tailAfterFirstPeerMs = firstPeerResponseAt === null ? -1 : endedAt - firstPeerResponseAt;
+      console.log(
+        '[USERNAME][PUBLISH][TIMING][' + phase + '] key=' + keyStr
+        + ' events=' + String(eventCount)
+        + ' peerResponses=' + String(acceptedCount + rejectedCount)
+        + ' accepted=' + String(acceptedCount)
+        + ' rejected=' + String(rejectedCount)
+        + ' queryErrors=' + String(errorCount)
+        + ' firstPeerMs=' + String(firstPeerMs)
+        + ' firstQueryErrorMs=' + String(firstQueryErrorMs)
+        + ' tailAfterFirstPeerMs=' + String(tailAfterFirstPeerMs)
+        + ' totalMs=' + String(endedAt - startedAt)
+        + ' queryErrorSample=' + (queryErrorDetails.length > 0 ? queryErrorDetails.join(' || ') : 'none'),
+      );
+    };
 
-        errorCount++;
-        if (firstQueryErrorAt === null) {
-          firstQueryErrorAt = now;
+    const consumePut = async (): Promise<void> => {
+      for await (const event of this.node.services.dht.put(key, valueBytes) as AsyncIterable<QueryEvent>) {
+        eventCount++;
+        if (event.name === 'QUERY_ERROR') {
+          const now = Date.now();
+          const queryErrorEvent = event as QueryEvent & {
+            from?: { toString: () => string };
+            error?: unknown;
+          };
+          const from = queryErrorEvent.from?.toString?.() ?? 'unknown';
+          const rawError = queryErrorEvent.error;
+          const errorText = rawError instanceof Error
+            ? (rawError.stack ?? rawError.message)
+            : String(rawError ?? 'unknown');
+
+          errorCount++;
+          if (firstQueryErrorAt === null) {
+            firstQueryErrorAt = now;
+          }
+
+          queryErrorDetails.push(
+            'ms=' + String(now - startedAt)
+            + ',peer=' + from
+            + ',err=' + errorText,
+          );
+
+          console.warn(
+            '[USERNAME][PUBLISH][QUERY_ERROR] key=' + keyStr
+            + ' ms=' + String(now - startedAt)
+            + ' peer=' + from
+            + ' err=' + errorText,
+          );
+        } else if (event.name === 'PEER_RESPONSE') {
+          if (firstPeerResponseAt === null) {
+            firstPeerResponseAt = Date.now();
+          }
+          const accepted = event.record != null
+            && Buffer.from(event.record.value).equals(Buffer.from(valueBytes));
+          if (accepted) acceptedCount++;
+          else rejectedCount++;
         }
+      }
+    };
 
-        queryErrorDetails.push(
-          'ms=' + String(now - startedAt)
-          + ',peer=' + from
-          + ',err=' + errorText,
-        );
+    let finished = false;
+    let consumeError: unknown = null;
+    const consumePromise = consumePut()
+      .catch((error: unknown) => {
+        consumeError = error;
+        const errText = error instanceof Error ? (error.stack ?? error.message) : String(error);
+        console.warn('[USERNAME][PUBLISH][ITERATOR_ERROR] key=' + keyStr + ' err=' + errText);
+      })
+      .finally(() => {
+        finished = true;
+        summarize('FINAL');
+      });
 
-        console.warn(
-          '[USERNAME][PUBLISH][QUERY_ERROR] key=' + keyStr
-          + ' ms=' + String(now - startedAt)
-          + ' peer=' + from
-          + ' err=' + errorText,
-        );
-      } else if (event.name === 'PEER_RESPONSE') {
-        if (firstPeerResponseAt === null) {
-          firstPeerResponseAt = Date.now();
+    if (this.isFastMode) {
+      const deadline = startedAt + UsernameRegistry.FAST_PUBLISH_EARLY_RETURN_MS;
+      while (!finished) {
+        if (Date.now() >= deadline && acceptedCount >= 1) {
+          summarize('EARLY');
+          void consumePromise;
+          return { errorCount, acceptedCount, rejectedCount };
         }
-        const accepted = event.record != null
-          && Buffer.from(event.record.value).equals(Buffer.from(valueBytes));
-        if (accepted) acceptedCount++;
-        else rejectedCount++;
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, UsernameRegistry.FAST_PUBLISH_POLL_MS);
+        });
       }
     }
 
-    const endedAt = Date.now();
-    const firstPeerMs = firstPeerResponseAt === null ? -1 : firstPeerResponseAt - startedAt;
-    const firstQueryErrorMs = firstQueryErrorAt === null ? -1 : firstQueryErrorAt - startedAt;
-    const tailAfterFirstPeerMs = firstPeerResponseAt === null ? -1 : endedAt - firstPeerResponseAt;
-
-    console.log(
-      '[USERNAME][PUBLISH][TIMING] key=' + keyStr
-      + ' events=' + String(eventCount)
-      + ' peerResponses=' + String(acceptedCount + rejectedCount)
-      + ' accepted=' + String(acceptedCount)
-      + ' rejected=' + String(rejectedCount)
-      + ' queryErrors=' + String(errorCount)
-      + ' firstPeerMs=' + String(firstPeerMs)
-      + ' firstQueryErrorMs=' + String(firstQueryErrorMs)
-      + ' tailAfterFirstPeerMs=' + String(tailAfterFirstPeerMs)
-      + ' totalMs=' + String(endedAt - startedAt)
-      + ' queryErrorSample=' + (queryErrorDetails.length > 0 ? queryErrorDetails.join(' || ') : 'none'),
-    );
+    await consumePromise;
+    if (consumeError) {
+      throw consumeError;
+    }
 
     return { errorCount, acceptedCount, rejectedCount };
   }
