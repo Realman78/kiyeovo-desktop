@@ -110,6 +110,7 @@ export class MessageHandler {
   private static readonly CALL_SIGNAL_DEDUPE_MAX_ENTRIES = 1500;
   private static readonly CALL_CONTROL_STALE_TOLERANCE_MS = 2000;
   private static readonly CALL_SHUTDOWN_HANGUP_MAX_WAIT_MS = 1500;
+  private static readonly CALL_RING_STALE_TIMEOUT_MS = 35_000;
   private node: ChatNode;
   private usernameRegistry: UsernameRegistry;
   private sessionManager: SessionManager;
@@ -155,6 +156,7 @@ export class MessageHandler {
   private activeCall: ActiveCall | null = null;
   private activeCallLastControlSignalTs: number | null = null;
   private seenCallSignals = new Map<string, number>();
+  private activeCallRingWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
 
   private formatNudgeTarget(payload: BucketNudgePayload): string {
     if (payload.kind === 'GROUP_REKEY_REFETCH') {
@@ -624,6 +626,7 @@ export class MessageHandler {
       this.activeCallLastControlSignalTs = null;
     }
     this.activeCall = activeCall;
+    this.scheduleCallRingWatchdog(activeCall);
     this.onCallStateChanged({
       callId: activeCall.callId,
       peerId: activeCall.peerId,
@@ -639,6 +642,7 @@ export class MessageHandler {
     const previous = this.activeCall;
     this.activeCall = null;
     this.activeCallLastControlSignalTs = null;
+    this.clearCallRingWatchdog();
     this.onCallStateChanged({
       callId: previous.callId,
       peerId: previous.peerId,
@@ -649,6 +653,38 @@ export class MessageHandler {
       timestamp: Date.now(),
     });
   }
+
+  private clearCallRingWatchdog(): void {
+    if (!this.activeCallRingWatchdogTimer) return;
+    clearTimeout(this.activeCallRingWatchdogTimer);
+    this.activeCallRingWatchdogTimer = null;
+  }
+
+  private scheduleCallRingWatchdog(activeCall: ActiveCall): void {
+    this.clearCallRingWatchdog();
+
+    if (activeCall.state !== 'ringing_out' && activeCall.state !== 'ringing_in') {
+      return;
+    }
+
+    const expectedCallId = activeCall.callId;
+    const expectedPeerId = activeCall.peerId;
+    this.activeCallRingWatchdogTimer = setTimeout(() => {
+      this.activeCallRingWatchdogTimer = null;
+      const current = this.activeCall;
+      if (!current) return;
+      if (current.callId !== expectedCallId || current.peerId !== expectedPeerId) return;
+      if (current.state !== 'ringing_out' && current.state !== 'ringing_in') return;
+
+      console.warn(
+        '[CALL] Clearing stale ringing call peer=' + expectedPeerId.slice(-8)
+        + ' callId=' + expectedCallId.slice(0, 8)
+        + ' state=' + current.state,
+      );
+      this.clearActiveCall('timeout');
+    }, MessageHandler.CALL_RING_STALE_TIMEOUT_MS);
+  }
+
 
   private hasActiveConnectionToPeer(peerId: string): boolean {
     return this.node
@@ -1187,15 +1223,15 @@ export class MessageHandler {
     callId: string,
     reason: 'rejected' | 'timeout' | 'offline' | 'policy' = 'rejected',
   ): Promise<{ success: boolean; error: string | null }> {
+    if (this.isActiveCallMatch(peerId, callId)) {
+      this.clearActiveCall(reason);
+    }
     const sent = await this.sendCallSignal({
       type: 'CALL_REJECT',
       callId,
       toPeerId: peerId,
       reason,
     });
-    if (this.isActiveCallMatch(peerId, callId)) {
-      this.clearActiveCall(reason);
-    }
     if (!sent.success) return sent;
     return { success: true, error: null };
   }
@@ -1205,15 +1241,15 @@ export class MessageHandler {
     callId: string,
     reason: 'hangup' | 'disconnect' | 'failed' = 'hangup',
   ): Promise<{ success: boolean; error: string | null }> {
+    if (this.isActiveCallMatch(peerId, callId)) {
+      this.clearActiveCall(reason);
+    }
     const sent = await this.sendCallSignal({
       type: 'CALL_END',
       callId,
       toPeerId: peerId,
       reason,
     });
-    if (this.isActiveCallMatch(peerId, callId)) {
-      this.clearActiveCall(reason);
-    }
     if (!sent.success) return sent;
     return { success: true, error: null };
   }
@@ -2798,6 +2834,7 @@ export class MessageHandler {
     this.peerActivityCheckCooldowns.clear();
     this.groupInfoSyncInFlight.clear();
     this.groupInfoSyncPending.clear();
+    this.clearCallRingWatchdog();
     this.activeCall = null;
     this.activeCallLastControlSignalTs = null;
     this.seenCallSignals.clear();

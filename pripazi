@@ -38,3 +38,5 @@
 
 12. V2: // In-memory only for V1: if app restarts before retry, user must resend/ignore warning.
   // TODO: persist failed offline backup retries in DB if we need restart-safe retries.
+
+13. if both users are online but it says that peer is unreachable, just send a message to each other so you connect. or maybe I should do that automatically? hm
