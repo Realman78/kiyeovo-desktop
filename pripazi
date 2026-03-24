@@ -39,4 +39,7 @@
 12. V2: // In-memory only for V1: if app restarts before retry, user must resend/ignore warning.
   // TODO: persist failed offline backup retries in DB if we need restart-safe retries.
 
-13. if both users are online but it says that peer is unreachable, just send a message to each other so you connect. or maybe I should do that automatically? hm
+13. if both users are online but it says that peer is unreachable, just send a message to each other so you connect. or maybe I should do that automatically? 
+
+14. izgleda da se dugi register i fetch dese kada je jedan peer dostupan unutar connections-a, ali nedostupan za kontakt. pretpostavljan da je zbog toga ca je DHT promet preko limited connection-a zabranjen. obavezno cu probat overrideat taj parametar u libp2p kako bi dokazal hipotezu
+  - I was wrong... ali neznan ca se onda dogada. ovo je crna kutija a nesmi bit... morat cu jos dublje istrazit kasnije

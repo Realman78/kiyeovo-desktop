@@ -141,13 +141,30 @@ download_tor() {
             chmod +x "$target_dir/tor"
             echo -e "${GREEN}Copied tor to $target_dir${NC}"
 
-            # Also copy required libraries for macOS
+            # Also copy required libraries for macOS and sign copied artifacts.
             if [[ "$platform" == darwin-* ]]; then
                 local tor_dir=$(dirname "$tor_binary")
                 # Copy any dylib files
                 find "$tor_dir" -name "*.dylib" -exec cp {} "$target_dir/" \; 2>/dev/null || true
                 if ls "$target_dir"/*.dylib 1> /dev/null 2>&1; then
                     echo -e "${GREEN}Copied required libraries${NC}"
+                fi
+
+                if command -v xattr &> /dev/null; then
+                    xattr -dr com.apple.quarantine "$target_dir" 2>/dev/null || true
+                fi
+
+                if command -v codesign &> /dev/null; then
+                    if ls "$target_dir"/*.dylib 1> /dev/null 2>&1; then
+                        while IFS= read -r dylib; do
+                            codesign --force --sign - --timestamp=none "$dylib"
+                        done < <(find "$target_dir" -maxdepth 1 -name "*.dylib" -type f)
+                    fi
+                    codesign --force --sign - --timestamp=none "$target_dir/tor"
+                    codesign --verify --verbose=1 "$target_dir/tor" >/dev/null 2>&1 || true
+                    echo -e "${GREEN}Applied ad-hoc signature to Tor binary and bundled libraries${NC}"
+                else
+                    echo -e "${YELLOW}codesign not found; skipping ad-hoc signing${NC}"
                 fi
             fi
         fi
