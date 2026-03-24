@@ -1,5 +1,6 @@
 import * as path from 'path';
-import { createChatNode, connectToBootstrap, dialConfiguredFastRelays } from './lib/node-setup.js';
+import { multiaddr } from '@multiformats/multiaddr';
+import { createChatNode, connectToBootstrap, dialConfiguredFastRelays, getBootstrapAddressesForCurrentMode } from './lib/node-setup.js';
 import { UsernameRegistry } from './lib/username-registry.js';
 import { MessageHandler } from './lib/message-handler.js';
 import { EncryptedUserIdentity } from './lib/encrypted-user-identity.js';
@@ -512,17 +513,52 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
         console.log('[P2P Core] Reconnect already in progress, ignoring manual retry');
         return;
       }
+      const RETRY_BOOTSTRAP_TIMEOUT_MS = 20_000;
       console.log('[P2P Core] Retrying bootstrap connection...');
-      // Close all existing connections first — stale ones (after sleep) stay in the pool
-      // and connectToBootstrap would skip already-connected peers, returning instantly.
+
+      const bootstrapAddresses = getBootstrapAddressesForCurrentMode(database, node.peerId.toString());
+      const bootstrapPeerIds = new Set(
+        bootstrapAddresses
+          .map((address) => {
+            try {
+              return multiaddr(address).getPeerId() ?? '';
+            } catch {
+              return '';
+            }
+          })
+          .filter((peerId) => peerId.length > 0),
+      );
+
       const existing = node.getConnections();
-      if (existing.length > 0) {
-        console.log(`[P2P Core] Closing ${existing.length} potentially stale connection(s) before reconnect...`);
-        await Promise.allSettled(existing.map(c => c.close()));
+      const staleBootstrapConnections = existing.filter(
+        (connection) => bootstrapPeerIds.has(connection.remotePeer.toString()),
+      );
+      const now = Date.now();
+
+      if (staleBootstrapConnections.length > 0) {
+        console.log(
+          `[P2P Core] Closing ${staleBootstrapConnections.length} bootstrap connection(s) before reconnect...`,
+        );
+        await Promise.allSettled(staleBootstrapConnections.map((connection) => connection.close()));
       }
-      await connectToBootstrap(node, database);
-      // Verify the new connection is actually alive
-      await checkDHTStatus('post_retry_verify');
+
+      console.log("marinparin", Date.now() - now)
+
+      const retryAbortController = new AbortController();
+      const timeoutId = setTimeout(() => retryAbortController.abort(), RETRY_BOOTSTRAP_TIMEOUT_MS);
+      try {
+        await connectToBootstrap(node, database, { signal: retryAbortController.signal });
+      } catch (error) {
+        if (retryAbortController.signal.aborted) {
+          throw new Error('Bootstrap retry timed out after 20 seconds');
+        }
+        throw error;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      // Run verification in background so manual retry UI is not blocked by probe latency.
+      void checkDHTStatus('post_retry_verify');
     },
     retryRelays: async () => {
       const result = await dialConfiguredFastRelays(node, database);

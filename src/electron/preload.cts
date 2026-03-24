@@ -528,6 +528,9 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     rejectFile: async (fileId: string): Promise<{ success: boolean; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.REJECT_FILE, fileId);
     },
+    cancelFileDownload: async (fileId: string): Promise<{ success: boolean; error: string | null }> => {
+        return ipcRenderer.invoke(IPC_CHANNELS.CANCEL_FILE_DOWNLOAD, fileId);
+    },
     getPendingFiles: async (): Promise<{ success: boolean; files: Array<{ fileId: string; filename: string; size: number; senderId: string; senderUsername: string }>; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.GET_PENDING_FILES);
     },

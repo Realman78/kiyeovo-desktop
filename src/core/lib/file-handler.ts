@@ -131,6 +131,13 @@ export class FileHandler {
     console.log(`[FILE][TRACE][${scope}] peer=*${peerSuffix} file=${fileLabel} event=${event}${details}`);
   }
 
+
+  private isUserCanceledTransferError(error: unknown): boolean {
+    if (!(error instanceof Error)) return false;
+    const message = error.message.toLowerCase();
+    return message.includes('download canceled by user') || message.includes('download cancelled by user');
+  }
+
   private tryBeginPeerTransfer(peerId: string, fileId: string, direction: 'send' | 'receive'): boolean {
     const active = this.activeTransfersByPeer.get(peerId);
     if (active) {
@@ -267,6 +274,32 @@ export class FileHandler {
     }
   }
 
+  cancelIncomingFileDownload(fileId: string): boolean {
+    const stream = this.activeTransferStreams.get(fileId);
+    if (!stream) {
+      return false;
+    }
+
+    const transferEntry = Array.from(this.activeTransfersByPeer.values()).find((entry) => entry.fileId === fileId);
+    if (!transferEntry || transferEntry.direction !== 'receive') {
+      return false;
+    }
+
+    this.database.updateMessageTransfer(fileId, {
+      transfer_status: 'failed',
+      transfer_error: 'Download canceled by user',
+    });
+
+    try {
+      stream.abort(new Error('Download canceled by user'));
+      this.trace('RECV', '', fileId, 'CANCEL_REQUESTED_BY_USER');
+      return true;
+    } catch (error: unknown) {
+      this.trace('RECV', '', fileId, 'CANCEL_ABORT_FAILED', 'err=' + (error instanceof Error ? error.message : 'unknown'));
+      return false;
+    }
+  }
+
   #setupProtocolHandler(): void {
     void this.node.handle(this.fileTransferProtocol, async (context: StreamHandlerContext) => {
       const { remoteId, stream } = StreamHandler.getRemotePeerInfo(context);
@@ -278,6 +311,10 @@ export class FileHandler {
       try {
         await this.#handleIncomingFile(remoteId, stream);
       } catch (error: unknown) {
+        if (this.isUserCanceledTransferError(error)) {
+          this.trace('RECV', remoteId, null, 'CANCELED_BY_USER');
+          return;
+        }
         generalErrorHandler(error, `Failed to handle incoming file`);
       }
     }, {runOnLimitedConnection: true});

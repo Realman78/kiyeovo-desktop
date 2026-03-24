@@ -23,6 +23,7 @@ import { INBOUND_INACTIVITY_WARNING_MS, MAX_GROUP_MEMBERS } from "../../../const
 import { getGroupStatusMessage, isGroupStatusWaiting } from "../../../utils/groupStatusMessages";
 import { getGroupCreatorLinkState } from "../../../utils/groupCreatorLinkHealth";
 import { callService } from "../../../lib/call/callService";
+import type { NetworkMode } from "../../../../core/types";
 
 type ChatHeaderProps = {
   username: string;
@@ -67,7 +68,8 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
   const [groupInfoLoading, setGroupInfoLoading] = useState(false);
   const [groupInfoDetails, setGroupInfoDetails] = useState<GroupInfoDetails | null>(null);
   const [editUsernameModalOpen, setEditUsernameModalOpen] = useState(false);
-  const [newUsername, setNewUsername] = useState(username);
+  const [newUsername, setNewUsername] = useState('');
+  const [networkMode, setNetworkMode] = useState<NetworkMode | null>(null);
   const [validationError, setValidationError] = useState("");
   const [groupMembers, setGroupMembers] = useState<Array<{ peerId: string; username: string; status: 'pending' | 'accepted' | 'confirmed' }>>([]);
   const creatorPermissionRequestRef = useRef(0);
@@ -87,6 +89,30 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
   useEffect(() => {
     fetchGroupMembers();
   }, [chatType, chatId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadNetworkMode = async () => {
+      try {
+        const result = await window.kiyeovoAPI.getNetworkMode();
+        if (!cancelled && result.success) {
+          setNetworkMode(result.mode);
+        }
+      } catch (error) {
+        console.error('Failed to fetch network mode for call controls:', error);
+      }
+    };
+
+    void loadNetworkMode();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    setNewUsername('');
+    setValidationError('');
+  }, [peerId, username]);
 
   const loadGroupInfo = async () => {
     if (chatType !== 'group' || !chatId) return;
@@ -278,6 +304,8 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
   };
 
   const handleEditUsername = () => {
+    setNewUsername('');
+    setValidationError('');
     setEditUsernameModalOpen(true);
     setDropdownOpen(false);
   };
@@ -683,6 +711,7 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
     activeCall
     && activeCall.peerId === peerId
   );
+  const canShowCallButtons = !isGroup && networkMode === 'fast';
   const canStartDirectCall = !isGroup
     && activeChat?.status === 'active'
     && !isBlocked
@@ -809,7 +838,7 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
     </div>
 
     <div className="flex items-center gap-1">
-      {!isGroup && (
+      {canShowCallButtons && (
         hasActiveCallWithThisPeer ? (
           <Button
             variant="ghost"
@@ -1283,7 +1312,13 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
             </DialogFooter>
           </DialogContent>
         </Dialog>
-        <Dialog open={editUsernameModalOpen} onOpenChange={setEditUsernameModalOpen}>
+        <Dialog open={editUsernameModalOpen} onOpenChange={(open) => {
+          setEditUsernameModalOpen(open);
+          if (!open) {
+            setNewUsername('');
+            setValidationError('');
+          }
+        }}>
           <DialogContent>
             <form onSubmit={(e) => {
               e.preventDefault();
@@ -1302,7 +1337,7 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
                 <Input
                   value={newUsername}
                   onChange={(e) => setNewUsername(e.target.value)}
-                  placeholder="Enter new username"
+                  placeholder={username}
                 />
                 {validationError && (
                   <div className="flex items-center gap-2 mt-2 text-destructive text-sm">
@@ -1315,7 +1350,11 @@ export const ChatHeader = ({ username, peerId, chatType, groupStatus, chatId }: 
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={() => setEditUsernameModalOpen(false)}
+                  onClick={() => {
+                    setEditUsernameModalOpen(false);
+                    setNewUsername('');
+                    setValidationError('');
+                  }}
                 >
                   Cancel
                 </Button>

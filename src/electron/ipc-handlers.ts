@@ -613,10 +613,32 @@ function setupBootstrapHandlers(
         p2pCore.node.getConnections().map((connection) => connection.remotePeer.toString()),
       );
 
+      const reservedRelayPeerIds = new Set(
+        p2pCore.node
+          .getMultiaddrs()
+          .map((addr) => addr.toString())
+          .filter((addr) => addr.includes('/p2p-circuit'))
+          .map((addr) => {
+            const beforeCircuit = addr.split('/p2p-circuit')[0] ?? '';
+            if (!beforeCircuit) return null;
+            try {
+              return multiaddr(beforeCircuit).getPeerId() ?? null;
+            } catch {
+              return null;
+            }
+          })
+          .filter((peerId): peerId is string => peerId !== null),
+      );
+
       const nodes = relayAddresses.map((address) => {
-        const peerIdMatch = address.match(/\/p2p\/([^/]+)$/);
-        const peerId = peerIdMatch?.[1] ?? null;
-        const connected = peerId !== null && connectedPeerIds.has(peerId);
+        let peerId: string | null = null;
+        try {
+          peerId = multiaddr(address).getPeerId() ?? null;
+        } catch {
+          peerId = null;
+        }
+        const connected = peerId !== null
+          && (connectedPeerIds.has(peerId) || reservedRelayPeerIds.has(peerId));
         return { address, connected };
       });
 
@@ -2413,6 +2435,26 @@ function setupFileTransferHandlers(
     } catch (error) {
       console.error('[IPC] Failed to reject file:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to reject file' };
+    }
+  });
+
+  // Cancel active download
+  ipcMain.handle(IPC_CHANNELS.CANCEL_FILE_DOWNLOAD, async (_event, fileId: string) => {
+    try {
+      const p2pCore = getP2PCore();
+      if (!p2pCore) {
+        return { success: false, error: "P2P core not initialized" };
+      }
+
+      const canceled = p2pCore.messageHandler.getFileHandler().cancelIncomingFileDownload(fileId);
+      if (!canceled) {
+        return { success: false, error: "No active incoming download found" };
+      }
+
+      return { success: true, error: null };
+    } catch (error) {
+      console.error("[IPC] Failed to cancel file download:", error);
+      return { success: false, error: error instanceof Error ? error.message : "Failed to cancel file download" };
     }
   });
 

@@ -348,12 +348,19 @@ export const Main = () => {
     });
 
     const unsubFileTransferFailed = window.kiyeovoAPI.onFileTransferFailed((data) => {
-      console.log(`[UI] File transfer failed for message ${data.messageId}: ${data.error}`);
+      const errorText = data.error || 'Unknown error';
+      console.log('[UI] File transfer failed for message ' + data.messageId + ': ' + errorText);
       dispatch(updateFileTransferError({
         messageId: data.messageId,
-        error: data.error
+        error: errorText
       }));
-      toast.error(`File transfer failed: ${data.error}`);
+
+      if (errorText.toLowerCase().includes('download canceled by user')) {
+        toast.info('File transfer canceled');
+        return;
+      }
+
+      toast.error('File transfer failed: ' + errorText);
     });
 
     const unsubPendingFileReceived = window.kiyeovoAPI.onPendingFileReceived((data) => {

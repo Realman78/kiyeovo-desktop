@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Button } from '../../ui/Button';
-import { FolderOpen } from 'lucide-react';
+import { FolderOpen, X } from 'lucide-react';
 import { useDispatch, useSelector } from 'react-redux';
 import type { RootState } from '../../../state/store';
 import { setPendingFileStatus, updateFileTransferStatus } from '../../../state/slices/chatSlice';
@@ -38,6 +38,7 @@ export const FileMessage: React.FC<FileMessageProps> = ({
     }
     return 0;
   });
+  const [isCancelling, setIsCancelling] = useState(false);
 
   useEffect(() => {
     if (transferStatus !== 'pending' || !transferExpiresAt) {
@@ -62,6 +63,7 @@ export const FileMessage: React.FC<FileMessageProps> = ({
     const intervalId = setInterval(tick, 1000);
     return () => clearInterval(intervalId);
   }, [transferStatus, transferExpiresAt, isFromCurrentUser, fileId, chatId, messages, dispatch]);
+
   const formatFileSize = (bytes: number): string => {
     if (bytes === 0) return '0 B';
     const k = 1024;
@@ -114,6 +116,29 @@ export const FileMessage: React.FC<FileMessageProps> = ({
     }
   };
 
+  const handleCancelDownload = async () => {
+    if (isCancelling) return;
+
+    setIsCancelling(true);
+    try {
+      const result = await window.kiyeovoAPI.cancelFileDownload(fileId);
+      if (!result.success) {
+        console.error('Failed to cancel file download:', result.error);
+        return;
+      }
+
+      dispatch(updateFileTransferStatus({
+        messageId: fileId,
+        status: 'failed',
+        transferError: 'Download canceled by user'
+      }));
+    } catch (error) {
+      console.error('Error canceling file download:', error);
+    } finally {
+      setIsCancelling(false);
+    }
+  };
+
   const handleOpenFile = async () => {
     if (filePath && transferStatus === 'completed') {
       const result = await window.kiyeovoAPI.openFileLocation(filePath);
@@ -148,7 +173,6 @@ export const FileMessage: React.FC<FileMessageProps> = ({
   const getIcon = () => {
     const extension = fileName.split('.').pop()?.toLowerCase();
 
-    // File type icons
     const iconMap: Record<string, string> = {
       pdf: '📄',
       doc: '📝',
@@ -169,7 +193,10 @@ export const FileMessage: React.FC<FileMessageProps> = ({
 
   const specificErrorText = () => {
     if (transferError?.includes('dial request has no valid addresses')) {
-      return "User offline or not reachable"
+      return 'User offline or not reachable';
+    }
+    if (transferError?.toLowerCase().includes('download canceled by user')) {
+      return 'Download canceled';
     }
     return transferError;
   };
@@ -183,23 +210,38 @@ export const FileMessage: React.FC<FileMessageProps> = ({
           <p className="text-xs opacity-70">{formatFileSize(fileSize)}</p>
         </div>
         {transferStatus === 'completed' && !!filePath ? (
-        <Button
-          onClick={handleOpenFile}
-          variant="outline"
-          size="icon"
-        >
-          <FolderOpen className="w-4 h-4" />
-        </Button>
-      ) : <div></div>}
+          <Button
+            onClick={handleOpenFile}
+            variant="outline"
+            size="icon"
+          >
+            <FolderOpen className="w-4 h-4" />
+          </Button>
+        ) : <div />}
       </div>
 
       {transferStatus === 'in_progress' && (
         <div className="w-full">
-          <div className="w-full bg-background/20 rounded-full h-1.5 overflow-hidden">
-            <div
-              className="bg-primary h-full transition-all duration-300"
-              style={{ width: `${transferProgress}%` }}
-            />
+          <div className="flex items-center gap-2">
+            <div className="flex-1 bg-background/20 rounded-full h-1.5 overflow-hidden">
+              <div
+                className="bg-primary h-full transition-all duration-300"
+                style={{ width: `${transferProgress}%` }}
+              />
+            </div>
+            {!isFromCurrentUser && (
+              <Button
+                onClick={handleCancelDownload}
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 p-0 shrink-0"
+                title="Cancel download"
+                aria-label="Cancel download"
+                disabled={isCancelling}
+              >
+                <X className="w-3.5 h-3.5" />
+              </Button>
+            )}
           </div>
           <p className="text-xs opacity-70 mt-1">{getStatusText()}</p>
         </div>

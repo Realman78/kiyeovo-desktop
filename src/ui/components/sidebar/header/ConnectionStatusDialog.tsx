@@ -71,6 +71,27 @@ const ConnectionStatusDialog = ({
     setRelayNodes(relayResult.nodes);
   };
 
+  const refreshConnectionSnapshot = async (modeOverride?: NetworkMode) => {
+    const modeToUse = modeOverride ?? networkMode;
+    await refreshBootstrapNodes();
+    if (modeToUse === 'fast') {
+      await refreshRelayNodes();
+    } else {
+      setRelayNodes([]);
+    }
+  };
+
+  const refreshConnectionSnapshotAfterRetry = async (modeOverride?: NetworkMode) => {
+    const modeToUse = modeOverride ?? networkMode;
+    await refreshConnectionSnapshot(modeToUse);
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    try {
+      await refreshConnectionSnapshot(modeToUse);
+    } catch (error) {
+      console.warn('[ConnectionStatusDialog] Delayed connectivity refresh failed:', error);
+    }
+  };
+
   useEffect(() => {
     if (!open) return;
 
@@ -87,12 +108,7 @@ const ConnectionStatusDialog = ({
         }
         setNetworkMode(modeResult.mode);
 
-        await refreshBootstrapNodes();
-        if (modeResult.mode === 'fast') {
-          await refreshRelayNodes();
-        } else {
-          setRelayNodes([]);
-        }
+        await refreshConnectionSnapshot(modeResult.mode);
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unexpected error occurred';
         setBootstrapError(message);
@@ -104,7 +120,25 @@ const ConnectionStatusDialog = ({
     };
 
     void fetchDialogData();
-  }, [open, isConnected]);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const timerId = setInterval(() => {
+      if (isRetryingBootstrap || isRetryingRelays) return;
+      void (async () => {
+        try {
+          await refreshConnectionSnapshot();
+        } catch (error) {
+          console.warn('[ConnectionStatusDialog] Poll refresh failed:', error);
+        }
+      })();
+    }, 3000);
+
+    return () => {
+      clearInterval(timerId);
+    };
+  }, [open, networkMode, isRetryingBootstrap, isRetryingRelays]);
 
   useEffect(() => {
     if (networkMode !== 'fast' && activeTab === 'relays') {
@@ -125,10 +159,7 @@ const ConnectionStatusDialog = ({
         return;
       }
 
-      await refreshBootstrapNodes();
-      if (networkMode === 'fast') {
-        await refreshRelayNodes();
-      }
+      await refreshConnectionSnapshotAfterRetry(networkMode);
       toast.success('Bootstrap retry complete');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unexpected error occurred';
@@ -152,7 +183,7 @@ const ConnectionStatusDialog = ({
         return;
       }
 
-      await refreshRelayNodes();
+      await refreshConnectionSnapshotAfterRetry(networkMode);
       toast.success(`Relay retry complete (${result.connected}/${result.attempted})`);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unexpected error occurred';
@@ -313,35 +344,38 @@ const ConnectionStatusDialog = ({
     }, 2000);
   };
 
-  const showLiveNodeConnectivity = isConnected === true;
-  const bootstrapConnectedCount = bootstrapNodes.filter((node) => showLiveNodeConnectivity && node.connected).length;
-  const relayConnectedCount = relayNodes.filter((node) => showLiveNodeConnectivity && node.connected).length;
+  const bootstrapConnectedCount = bootstrapNodes.filter((node) => node.connected).length;
+  const relayConnectedCount = relayNodes.filter((node) => node.connected).length;
   const bootstrapEntries = bootstrapNodes.map((node) => ({
     key: node.id,
     address: node.address,
-    connected: showLiveNodeConnectivity && node.connected,
+    connected: node.connected,
   }));
   const relayEntries = relayNodes.map((node) => ({
     key: node.address,
     address: node.address,
-    connected: showLiveNodeConnectivity && node.connected,
+    connected: node.connected,
   }));
   const isFastMode = networkMode === 'fast';
   const isRelayTab = activeTab === 'relays' && isFastMode;
-  const headerDescription = isConnected === null
-    ? "Connecting to the DHT network..."
-    : isConnected
-      ? (isRelayTab
-          ? `Connected to ${relayConnectedCount} relay node${relayConnectedCount !== 1 ? 's' : ''}`
-          : `Connected to ${bootstrapConnectedCount} bootstrap node${bootstrapConnectedCount !== 1 ? 's' : ''}`)
-      : "Not connected to the DHT network";
+  const isRetryingAny = isRetryingBootstrap || isRetryingRelays;
+
+  const headerDescription = isRetryingAny
+    ? (isRelayTab ? 'Retrying relay reservations...' : 'Retrying bootstrap connection...')
+    : isConnected === null
+      ? 'Connecting to the DHT network...'
+      : isConnected
+        ? 'Connected to the DHT network'
+        : 'Not connected to the DHT network';
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl!">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            {isConnected === null ? (
+            {isRetryingAny ? (
+              <Loader2 className="w-5 h-5 text-muted-foreground animate-spin" />
+            ) : isConnected === null ? (
               <Loader2 className="w-5 h-5 text-muted-foreground animate-spin" />
             ) : isConnected ? (
               <Wifi className="w-5 h-5 text-success" />
@@ -436,8 +470,8 @@ const ConnectionStatusDialog = ({
           <div className="pt-2 border-t border-border">
             <div className="flex items-center justify-between text-xs font-mono">
               <span className="text-muted-foreground">Network Status</span>
-              <span className={isConnected ? "text-success" : "text-destructive"}>
-                {isConnected ? "ONLINE" : "OFFLINE"}
+              <span className={isRetryingAny ? "text-muted-foreground" : isConnected ? "text-success" : "text-destructive"}>
+                {isRetryingAny ? "RETRYING" : isConnected ? "ONLINE" : "OFFLINE"}
               </span>
             </div>
             <div className="flex items-center justify-between text-xs font-mono mt-1">

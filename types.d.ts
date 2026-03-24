@@ -284,6 +284,7 @@ declare global {
             sendFile: (peerId: string, filePath: string, fileId?: string) => Promise<{ success: boolean; error: string | null }>;
             acceptFile: (fileId: string) => Promise<{ success: boolean; error: string | null }>;
             rejectFile: (fileId: string) => Promise<{ success: boolean; error: string | null }>;
+            cancelFileDownload: (fileId: string) => Promise<{ success: boolean; error: string | null }>;
             getPendingFiles: () => Promise<{
                 success: boolean;
                 files: Array<{

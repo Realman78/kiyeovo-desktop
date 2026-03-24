@@ -459,9 +459,11 @@ export async function createChatNode(port: number, userIdentity: EncryptedUserId
   }
 }
 
-export async function connectToBootstrap(node: ChatNode, database: ChatDatabase): Promise<void> {
-  database.clearAllBootstrapNodeStatus();
+export type BootstrapConnectOptions = {
+  signal?: AbortSignal;
+};
 
+export function getBootstrapAddressesForCurrentMode(database: ChatDatabase, localPeerId?: string): string[] {
   const networkMode = database.getSessionNetworkMode();
   const bootstrapEnvKey = NETWORK_MODE_BOOTSTRAP_ENV_KEYS[networkMode];
   const filterByMode = (values: string[]) => {
@@ -479,9 +481,9 @@ export async function connectToBootstrap(node: ChatNode, database: ChatDatabase)
 
   const dbAddresses = database.getBootstrapNodes()
     .map(bootstrapNode => bootstrapNode.address)
-    .filter(addr => addr !== node.peerId.toString());
+    .filter(addr => addr !== localPeerId);
   const envAddresses = parseCommaSeparatedEnv(bootstrapEnvKey)
-    .filter(addr => addr !== node.peerId.toString());
+    .filter(addr => addr !== localPeerId);
 
   let addressesToTry = filterByMode(dedupe([
     ...dbAddresses,
@@ -493,8 +495,29 @@ export async function connectToBootstrap(node: ChatNode, database: ChatDatabase)
     addressesToTry = filterByMode(envAddresses);
   }
 
+  return addressesToTry;
+}
+
+export async function connectToBootstrap(
+  node: ChatNode,
+  database: ChatDatabase,
+  options: BootstrapConnectOptions = {},
+): Promise<void> {
+  database.clearAllBootstrapNodeStatus();
+
+  const networkMode = database.getSessionNetworkMode();
+  const bootstrapEnvKey = NETWORK_MODE_BOOTSTRAP_ENV_KEYS[networkMode];
+  const addressesToTry = getBootstrapAddressesForCurrentMode(database, node.peerId.toString());
+
+  const throwIfAborted = () => {
+    if (options.signal?.aborted) {
+      throw new Error('bootstrap_connection_aborted');
+    }
+  };
+
   if (addressesToTry.length === 0) {
     console.log(`[STACK] No bootstrap addresses configured for mode=${networkMode}.`);
+    throwIfAborted();
     await dialConfiguredFastRelays(node, database);
     // Status will be sent by periodic peer count checker
     return;
@@ -524,24 +547,36 @@ export async function connectToBootstrap(node: ChatNode, database: ChatDatabase)
 
   for (const addr of addressesToTry) {
     try {
+      throwIfAborted();
+      const now = Date.now()
       console.log(`Trying bootstrap: ${addr}`);
       const ma = multiaddr(addr);
       // eslint-disable-next-line no-await-in-loop
-      const connection = await node.dial(ma);
-      console.log(`Connected to bootstrap peer: ${addr}`);
+      const connection = options.signal
+        ? await node.dial(ma, { signal: options.signal } as { signal: AbortSignal })
+        : await node.dial(ma);
+      const now2 = Date.now()
+      console.log(`Connected to bootstrap peer: ${addr}`, now2-now);
       database.updateBootstrapNodeStatus(addr, true);
       await probeDhtAdmission(connection?.remotePeer);
+      const now3 = Date.now()
+      console.log("marin1", now3-now2)
+      throwIfAborted();
       await dialConfiguredFastRelays(node, database);
+      console.log("marin2", Date.now() - now3)
 
       return;
-
     } catch (err: unknown) {
+      if (options.signal?.aborted) {
+        throw new Error('bootstrap_connection_aborted');
+      }
       generalErrorHandler(err);
       database.updateBootstrapNodeStatus(addr, false);
     }
   }
 
   console.log('No hardcoded bootstrap nodes available.');
+  throwIfAborted();
   await dialConfiguredFastRelays(node, database);
   // Status will be sent by periodic peer count checker
 }
