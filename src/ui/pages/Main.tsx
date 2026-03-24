@@ -282,6 +282,10 @@ export const Main = () => {
       const sourcePendingExchange = currentState.chat.pendingKeyExchanges.find((pending) => pending.peerId === data.peerId);
       const initialMessage = sourceContactAttempt?.messageBody || sourceContactAttempt?.message || sourcePendingExchange?.messageContent || '';
       const now = Date.now();
+      const currentPeerId = currentState.user.peerId;
+      const currentUsername = currentState.user.username;
+      const seededSenderPeerId = sourceContactAttempt ? data.peerId : (currentPeerId || data.peerId);
+      const seededSenderUsername = sourceContactAttempt ? data.username : (currentUsername || 'You');
 
       const newChat: Chat = {
         id: data.chatId,
@@ -303,12 +307,11 @@ export const Main = () => {
 
       dispatch(addChat(newChat));
       if (initialMessage) {
-        const currentPeerId = store.getState().user.peerId;
         dispatch(addMessage({
           id: `contact-attempt-${data.chatId}-${now}`,
           chatId: data.chatId,
-          senderPeerId: data.peerId,
-          senderUsername: data.username,
+          senderPeerId: seededSenderPeerId,
+          senderUsername: seededSenderUsername,
           content: initialMessage,
           timestamp: now,
           messageType: 'text',
