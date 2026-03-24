@@ -167,6 +167,7 @@ export interface GroupKeyHistory {
     group_id: string
     key_version: number
     encrypted_key: string
+    group_info_metadata_key: string
     state_hash: string | null
     used_until: number | null
     created_at: string
@@ -536,6 +537,7 @@ export class ChatDatabase {
                 group_id TEXT NOT NULL,
                 key_version INTEGER NOT NULL,
                 encrypted_key TEXT NOT NULL,
+                group_info_metadata_key TEXT NOT NULL,
                 state_hash TEXT,
                 used_until INTEGER,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -720,6 +722,7 @@ export class ChatDatabase {
         this.ensureColumnExists('group_invite_delivery_acks', 'network_mode', `TEXT NOT NULL DEFAULT '${DEFAULT_NETWORK_MODE}'`);
         this.ensureColumnExists('encrypted_user_identities', 'network_mode', `TEXT NOT NULL DEFAULT '${DEFAULT_NETWORK_MODE}'`);
         this.ensureColumnExists('encrypted_user_identities', 'identity_kind', `TEXT NOT NULL DEFAULT 'primary'`);
+        this.ensureColumnExists('group_key_history', 'group_info_metadata_key', "TEXT NOT NULL DEFAULT ''");
         this.ensureColumnExists('contact_attempts', 'network_mode', `TEXT NOT NULL DEFAULT '${DEFAULT_NETWORK_MODE}'`);
         this.ensureColumnExists('blocked_peers', 'network_mode', `TEXT NOT NULL DEFAULT '${DEFAULT_NETWORK_MODE}'`);
         this.ensureColumnExists('failed_key_exchanges', 'network_mode', `TEXT NOT NULL DEFAULT '${DEFAULT_NETWORK_MODE}'`);
@@ -2362,18 +2365,32 @@ export class ChatDatabase {
 
     // --- Group key history ---
 
-    insertGroupKeyHistory(groupId: string, keyVersion: number, encryptedKey: string): void {
+    insertGroupKeyHistory(
+        groupId: string,
+        keyVersion: number,
+        encryptedKey: string,
+        groupInfoMetadataKey: string,
+    ): void {
         const stmt = this.db.prepare(`
-            INSERT OR REPLACE INTO group_key_history (group_id, key_version, encrypted_key)
-            VALUES (?, ?, ?)
+            INSERT OR REPLACE INTO group_key_history (group_id, key_version, encrypted_key, group_info_metadata_key)
+            VALUES (?, ?, ?, ?)
         `);
-        stmt.run(groupId, keyVersion, encryptedKey);
+        if (!groupInfoMetadataKey) {
+            throw new Error('groupInfoMetadataKey is required');
+        }
+        stmt.run(groupId, keyVersion, encryptedKey, groupInfoMetadataKey);
     }
 
     getGroupKeyForEpoch(groupId: string, keyVersion: number): string | null {
         const stmt = this.db.prepare('SELECT encrypted_key FROM group_key_history WHERE group_id = ? AND key_version = ?');
         const row = stmt.get(groupId, keyVersion) as { encrypted_key: string } | undefined;
         return row?.encrypted_key ?? null;
+    }
+
+    getGroupInfoMetadataKeyForEpoch(groupId: string, keyVersion: number): string | null {
+        const stmt = this.db.prepare('SELECT group_info_metadata_key FROM group_key_history WHERE group_id = ? AND key_version = ?');
+        const row = stmt.get(groupId, keyVersion) as { group_info_metadata_key: string } | undefined;
+        return row?.group_info_metadata_key ?? null;
     }
 
     getGroupKeyHistory(groupId: string): GroupKeyHistory[] {

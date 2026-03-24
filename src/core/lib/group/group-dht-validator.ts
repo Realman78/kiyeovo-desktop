@@ -13,6 +13,7 @@ import type {
   GroupContentMessage,
   GroupOfflineStore,
 } from './types.js';
+import { decodeBase64Strict } from '../../utils/validators.js';
 
 // --- Group offline bucket validator ---
 // Key format: /<mode-group-offline-prefix>/<groupId>/<keyVersion>/<senderPubKeyBase64url>
@@ -432,6 +433,19 @@ export async function groupInfoVersionedValidator(
     }
     if (typeof record.prevVersionHash !== 'string') {
       throw new Error('Invalid prevVersionHash');
+    }
+    if (typeof record.encryptedMetadata !== "string" || record.encryptedMetadata.length === 0) {
+      throw new Error("Invalid encryptedMetadata");
+    }
+    if (!decodeBase64Strict(record.encryptedMetadata)) {
+      throw new Error("Invalid encryptedMetadata: expected base64");
+    }
+    if (typeof record.encryptedMetadataNonce !== "string" || record.encryptedMetadataNonce.length === 0) {
+      throw new Error("Invalid encryptedMetadataNonce");
+    }
+    const nonceBytes = decodeBase64Strict(record.encryptedMetadataNonce);
+    if (!nonceBytes || nonceBytes.length !== 24) {
+      throw new Error("Invalid encryptedMetadataNonce: expected base64 24-byte nonce");
     }
     if (typeof record.stateHash !== 'string' || record.stateHash.length === 0) {
       throw new Error('Invalid stateHash');

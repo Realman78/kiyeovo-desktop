@@ -1,7 +1,8 @@
-import { randomUUID, publicEncrypt } from 'crypto';
+import { randomBytes, randomUUID, publicEncrypt } from 'crypto';
 import { gunzipSync } from 'zlib';
 import { ed25519 } from '@noble/curves/ed25519';
 import { sha256 } from '@noble/hashes/sha2';
+import { xchacha20poly1305 } from '@noble/ciphers/chacha';
 import type { ChatNode, GroupMembersUpdatedEvent, MessageReceivedEvent } from '../../types.js';
 import type { ChatDatabase } from '../db/database.js';
 import type { EncryptedUserIdentity } from '../encrypted-user-identity.js';
@@ -34,6 +35,7 @@ import {
   type GroupRosterEntry,
   type GroupInfoLatest,
   type GroupInfoVersioned,
+  type GroupInfoVersionedMetadata,
   type GroupOfflineStore,
   type GroupStatus,
   type AckMessageType,
@@ -554,7 +556,7 @@ export class GroupCreator {
         ? await this.snapshotPrevEpochBoundaries(request.groupId, prevVersion, preRotationParticipants)
         : {};
 
-      const { groupKey, keyVersion } = this.rotateGroupKey(request.groupId, request.peerId, 'leave');
+      const { groupKey, keyVersion, groupInfoMetadataKey } = this.rotateGroupKey(request.groupId, request.peerId, 'leave');
       rotationCommitted = true;
       if (prevVersion >= 1) {
         this.deps.onRegisterPrevEpochGrace?.(request.groupId, prevVersion);
@@ -567,6 +569,7 @@ export class GroupCreator {
         request.groupId,
         keyVersion,
         groupKey,
+        groupInfoMetadataKey,
         roster,
         'leave',
         request.peerId,
@@ -592,7 +595,7 @@ export class GroupCreator {
         groupId: request.groupId,
         memberPeerId: request.peerId,
       });
-      void this.publishGroupInfoRecords(request.groupId, keyVersion, roster, prevEpochBoundaries)
+      void this.publishGroupInfoRecords(request.groupId, keyVersion, roster, groupInfoMetadataKey, prevEpochBoundaries)
         .catch((error: unknown) => {
           const reason = error instanceof Error ? error.message : String(error);
           console.warn(
@@ -801,7 +804,7 @@ export class GroupCreator {
         ? await this.snapshotPrevEpochBoundaries(groupId, prevVersion, preRotationParticipants)
         : {};
 
-      const { groupKey, keyVersion } = this.rotateGroupKey(groupId, targetPeerId, 'kick');
+      const { groupKey, keyVersion, groupInfoMetadataKey } = this.rotateGroupKey(groupId, targetPeerId, 'kick');
       rotationCommitted = true;
       if (prevVersion >= 1) {
         this.deps.onRegisterPrevEpochGrace?.(groupId, prevVersion);
@@ -819,6 +822,7 @@ export class GroupCreator {
         groupId,
         keyVersion,
         groupKey,
+        groupInfoMetadataKey,
         roster,
         'kick',
         targetPeerId,
@@ -856,7 +860,7 @@ export class GroupCreator {
         memberPeerId: targetPeerId,
       });
 
-      void this.publishGroupInfoRecords(groupId, keyVersion, roster, prevEpochBoundaries)
+      void this.publishGroupInfoRecords(groupId, keyVersion, roster, groupInfoMetadataKey, prevEpochBoundaries)
         .catch((error: unknown) => {
           const reason = error instanceof Error ? error.message : String(error);
           console.warn(
@@ -1115,7 +1119,7 @@ export class GroupCreator {
       console.log("MARINPARIN prevEpochBoundaries", prevEpochBoundaries);
 
       // Rotate key (join always triggers rotation)
-      const { groupKey, keyVersion } = this.rotateGroupKey(groupId, acceptedPeerId, 'join');
+      const { groupKey, keyVersion, groupInfoMetadataKey } = this.rotateGroupKey(groupId, acceptedPeerId, 'join');
       rotationCommitted = true;
       if (prevVersion >= 1) {
         this.deps.onRegisterPrevEpochGrace?.(groupId, prevVersion);
@@ -1131,6 +1135,12 @@ export class GroupCreator {
         recipientPubKeyPem,
         Buffer.from(groupKey, 'base64'),
       ).toString('base64');
+      const encryptedGroupInfoMetadataKey = publicEncrypt(
+        recipientPubKeyPem,
+        Buffer.from(groupInfoMetadataKey, 'base64'),
+      ).toString('base64');
+
+      console.log('[GROUP-INFO][META][DISTRIBUTE][WELCOME] group=' + groupId + ' to=' + acceptedPeerId.slice(-8) + ' keyVersion=' + String(keyVersion) + ' encryptedMetadataKeyBytes=' + String(Buffer.from(encryptedGroupInfoMetadataKey, 'base64').length));
 
       // Construct GroupWelcome
       const creatorPubKeyBase64url = toBase64Url(userIdentity.signingPublicKey);
@@ -1142,6 +1152,7 @@ export class GroupCreator {
         groupName: chat.name,
         keyVersion,
         encryptedGroupKey,
+        encryptedGroupInfoMetadataKey,
         roster,
         groupInfoLatestDhtKey,
         messageId: randomUUID(),
@@ -1175,6 +1186,7 @@ export class GroupCreator {
         groupId,
         keyVersion,
         groupKey,
+        groupInfoMetadataKey,
         roster,
         'join',
         acceptedPeerId,
@@ -1201,7 +1213,7 @@ export class GroupCreator {
         memberPeerId: acceptedPeerId,
       });
       // Publish group-info DHT records in background (best effort). Do not block activation.
-      void this.publishGroupInfoRecords(groupId, keyVersion, roster, prevEpochBoundaries)
+      void this.publishGroupInfoRecords(groupId, keyVersion, roster, groupInfoMetadataKey, prevEpochBoundaries)
         .catch((error: unknown) => {
           const reason = error instanceof Error ? error.message : String(error);
           console.warn(
@@ -1229,7 +1241,7 @@ export class GroupCreator {
     groupId: string,
     targetPeerId: string,
     event: 'join' | 'leave' | 'kick',
-  ): { groupKey: string; keyVersion: number } {
+  ): { groupKey: string; keyVersion: number; groupInfoMetadataKey: string } {
     const { database, myPeerId } = this.deps;
 
     const chat = database.getChatByGroupId(groupId);
@@ -1239,6 +1251,9 @@ export class GroupCreator {
     const keyBytes = new Uint8Array(32);
     globalThis.crypto.getRandomValues(keyBytes);
     const groupKey = Buffer.from(keyBytes).toString('base64');
+    const metadataKeyBytes = new Uint8Array(32);
+    globalThis.crypto.getRandomValues(metadataKeyBytes);
+    const groupInfoMetadataKey = Buffer.from(metadataKeyBytes).toString('base64');
 
     const keyVersion = (chat.key_version ?? 0) + 1;
 
@@ -1260,9 +1275,11 @@ export class GroupCreator {
     database.updateChatKeyVersion(chat.id, keyVersion);
 
     // Store key in history
-    database.insertGroupKeyHistory(groupId, keyVersion, groupKey);
+    database.insertGroupKeyHistory(groupId, keyVersion, groupKey, groupInfoMetadataKey);
 
-    return { groupKey, keyVersion };
+    console.log('[GROUP-INFO][META][ROTATE] group=' + groupId + ' event=' + event + ' keyVersion=' + String(keyVersion) + ' metadataKeyBytes=' + String(metadataKeyBytes.length));
+
+    return { groupKey, keyVersion, groupInfoMetadataKey };
   }
 
   async republishPendingControl(targetPeerId: string, payloadJson: string): Promise<void> {
@@ -1317,6 +1334,16 @@ export class GroupCreator {
       recipientPubKeyPem,
       Buffer.from(groupKey, 'base64'),
     ).toString('base64');
+    const groupInfoMetadataKey = database.getGroupInfoMetadataKeyForEpoch(groupId, keyVersion);
+    if (!groupInfoMetadataKey) {
+      throw new Error(`Missing group info metadata key for ${groupId} v${keyVersion}`);
+    }
+    const encryptedGroupInfoMetadataKey = publicEncrypt(
+      recipientPubKeyPem,
+      Buffer.from(groupInfoMetadataKey, 'base64'),
+    ).toString('base64');
+
+    console.log('[GROUP-INFO][META][DISTRIBUTE][RESYNC] group=' + groupId + ' to=' + targetPeerId.slice(-8) + ' keyVersion=' + String(keyVersion) + ' encryptedMetadataKeyBytes=' + String(Buffer.from(encryptedGroupInfoMetadataKey, 'base64').length));
 
     const update: Omit<GroupStateUpdate, 'signature'> = {
       type: GroupMessageType.GROUP_STATE_UPDATE,
@@ -1324,6 +1351,7 @@ export class GroupCreator {
       keyVersion,
       timestamp: Date.now(),
       encryptedGroupKey,
+      encryptedGroupInfoMetadataKey,
       roster,
       // Event is intentionally informational when isResync=true; responder skips membership system text.
       event: 'join',
@@ -1361,6 +1389,7 @@ export class GroupCreator {
     groupId: string,
     keyVersion: number,
     groupKey: string,
+    groupInfoMetadataKey: string,
     roster: GroupRosterEntry[],
     event: 'join' | 'leave' | 'kick',
     targetPeerId: string,
@@ -1398,6 +1427,12 @@ export class GroupCreator {
           recipientPubKeyPem,
           Buffer.from(groupKey, 'base64'),
         ).toString('base64');
+        const encryptedGroupInfoMetadataKey = publicEncrypt(
+          recipientPubKeyPem,
+          Buffer.from(groupInfoMetadataKey, 'base64'),
+        ).toString('base64');
+
+        console.log('[GROUP-INFO][META][DISTRIBUTE][STATE_UPDATE] group=' + groupId + ' event=' + event + ' to=' + participant.peer_id.slice(-8) + ' keyVersion=' + String(keyVersion) + ' encryptedMetadataKeyBytes=' + String(Buffer.from(encryptedGroupInfoMetadataKey, 'base64').length));
 
         const update: Omit<GroupStateUpdate, 'signature'> = {
           type: GroupMessageType.GROUP_STATE_UPDATE,
@@ -1405,6 +1440,7 @@ export class GroupCreator {
           keyVersion,
           timestamp: eventTimestamp,
           encryptedGroupKey,
+          encryptedGroupInfoMetadataKey,
           roster,
           event,
           targetPeerId,
@@ -1502,18 +1538,14 @@ export class GroupCreator {
     groupId: string,
     keyVersion: number,
     roster: GroupRosterEntry[],
-    prevEpochBoundaries: Record<string, number>,
+    groupInfoMetadataKey: string,
+    prevEpochBoundaries: Record<string, number>
   ): Promise<void> {
     const { database, userIdentity } = this.deps;
     const creatorPubKeyBase64url = toBase64Url(userIdentity.signingPublicKey);
 
     // Build versioned record
     const members = roster.map(r => r.peerId);
-    const memberSigningPubKeys: Record<string, string> = {};
-    for (const r of roster) {
-      memberSigningPubKeys[r.peerId] = r.signingPubKey;
-    }
-
     // Get previous version's stateHash for hash chain
     const prevVersion = keyVersion - 1;
     let prevVersionHash = '';
@@ -1542,14 +1574,21 @@ export class GroupCreator {
       database.upsertGroupEpochBoundaries(groupId, prevVersion, senderSeqBoundaries, 'creator_rotation');
     }
 
+    const encryptedMetadata = this.encryptGroupInfoVersionedMetadata(
+      {
+        members,
+        senderSeqBoundaries,
+      },
+      groupInfoMetadataKey,
+    );
+    console.log('[GROUP-INFO][META][PUBLISH_PREP] group=' + groupId + ' keyVersion=' + String(keyVersion) + ' metadataCipherBytes=' + String(Buffer.from(encryptedMetadata.ciphertext, 'base64').length) + ' metadataNonceBytes=' + String(Buffer.from(encryptedMetadata.nonce, 'base64').length));
     const versionedPayload: Omit<GroupInfoVersioned, 'creatorSignature' | 'stateHash'> = {
       groupId,
       version: keyVersion,
       prevVersionHash,
-      members,
-      memberSigningPubKeys,
+      encryptedMetadata: encryptedMetadata.ciphertext,
+      encryptedMetadataNonce: encryptedMetadata.nonce,
       activatedAt: Date.now(),
-      senderSeqBoundaries,
     };
 
     const stateHash = Buffer.from(
@@ -1637,6 +1676,24 @@ export class GroupCreator {
     console.log(
       `[GROUP-INFO][PUBLISH][DONE] group=${groupId} keyVersion=${keyVersion} took=${Date.now() - startedAt}ms`
     );
+  }
+
+  private encryptGroupInfoVersionedMetadata(
+    metadata: GroupInfoVersionedMetadata,
+    groupInfoMetadataKeyBase64: string,
+  ): { ciphertext: string; nonce: string } {
+    const key = Buffer.from(groupInfoMetadataKeyBase64, 'base64');
+    if (key.length !== 32) {
+      throw new Error('Invalid group info metadata key length');
+    }
+    const nonce = randomBytes(24);
+    const payloadBytes = new TextEncoder().encode(JSON.stringify(metadata));
+    const cipher = xchacha20poly1305(key, nonce);
+    const encrypted = cipher.encrypt(payloadBytes);
+    return {
+      ciphertext: Buffer.from(encrypted).toString('base64'),
+      nonce: Buffer.from(nonce).toString('base64'),
+    };
   }
 
   private async snapshotPrevEpochBoundaries(

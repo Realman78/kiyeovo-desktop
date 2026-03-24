@@ -76,6 +76,7 @@ export interface GroupWelcome {
   groupName: string;
   keyVersion: number;
   encryptedGroupKey: string; // RSA-encrypted per recipient
+  encryptedGroupInfoMetadataKey: string; // RSA-encrypted per recipient
   roster: GroupRosterEntry[];
   groupInfoLatestDhtKey: string;
   messageId: string;
@@ -88,6 +89,7 @@ export interface GroupStateUpdate {
   keyVersion: number;
   timestamp: number;
   encryptedGroupKey: string; // RSA-encrypted per recipient
+  encryptedGroupInfoMetadataKey: string; // RSA-encrypted per recipient
   roster: GroupRosterEntry[];
   event: GroupMembershipEvent;
   targetPeerId: string; // who joined/left/was kicked
@@ -166,15 +168,19 @@ export interface GroupInfoVersioned {
   groupId: string;
   version: number;
   prevVersionHash: string; // SHA256 of previous version record, empty string for v1
-  members: string[]; // peerIds
-  memberSigningPubKeys: Record<string, string>; // peerId -> base64 Ed25519 pubkey
+  encryptedMetadata: string; // xchacha20poly1305(ciphertext, metadataKey)
+  encryptedMetadataNonce: string; // base64 24-byte nonce
   activatedAt: number;
+  stateHash: string;
+  creatorSignature: string;
+}
+
+export interface GroupInfoVersionedMetadata {
+  members: string[]; // peerIds
   // usedUntil is NOT in the DHT record (immutable records can't be updated after the fact).
   // Remote members derive it: usedUntil(version N) = activatedAt(version N+1).
   // Creator tracks it locally in group_key_history.used_until.
-  senderSeqBoundaries: Record<string, number>; // peerId -> last valid seq for this keyVersion
-  stateHash: string;
-  creatorSignature: string;
+  senderSeqBoundaries: Record<string, number>; // peerId -> last valid seq for previous keyVersion
 }
 
 // --- Group offline bucket ---

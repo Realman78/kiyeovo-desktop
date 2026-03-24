@@ -440,9 +440,15 @@ export class GroupResponder {
       ourPrivateKeyPem,
       Buffer.from(welcome.encryptedGroupKey, 'base64'),
     ).toString('base64');
+    const groupInfoMetadataKey = privateDecrypt(
+      ourPrivateKeyPem,
+      Buffer.from(welcome.encryptedGroupInfoMetadataKey, 'base64'),
+    ).toString('base64');
+    const welcomeMetadataKeyBytes = Buffer.from(groupInfoMetadataKey, 'base64');
+    console.log('[GROUP-INFO][META][RECEIVE][WELCOME] group=' + welcome.groupId + ' keyVersion=' + String(welcome.keyVersion) + ' metadataKeyBytes=' + String(welcomeMetadataKeyBytes.length));
 
     // Store key in history
-    database.insertGroupKeyHistory(welcome.groupId, welcome.keyVersion, groupKey);
+    database.insertGroupKeyHistory(welcome.groupId, welcome.keyVersion, groupKey, groupInfoMetadataKey);
 
     // Update chat with key version and group info DHT key
     database.updateChatKeyVersion(chat.id, welcome.keyVersion);
@@ -598,8 +604,14 @@ export class GroupResponder {
       userIdentity.offlinePrivateKey,
       Buffer.from(update.encryptedGroupKey, 'base64'),
     ).toString('base64');
+    const groupInfoMetadataKey = privateDecrypt(
+      userIdentity.offlinePrivateKey,
+      Buffer.from(update.encryptedGroupInfoMetadataKey, 'base64'),
+    ).toString('base64');
+    const stateUpdateMetadataKeyBytes = Buffer.from(groupInfoMetadataKey, 'base64');
+    console.log('[GROUP-INFO][META][RECEIVE][STATE_UPDATE] group=' + update.groupId + ' keyVersion=' + String(update.keyVersion) + ' metadataKeyBytes=' + String(stateUpdateMetadataKeyBytes.length));
 
-    database.insertGroupKeyHistory(update.groupId, update.keyVersion, groupKey);
+    database.insertGroupKeyHistory(update.groupId, update.keyVersion, groupKey, groupInfoMetadataKey);
 
     // Ensure all roster members exist in users table (required by chat_participants FK)
     for (const entry of update.roster) {

@@ -1,3 +1,4 @@
+import { xchacha20poly1305 } from '@noble/ciphers/chacha';
 import type { ChatNode, NetworkMode } from '../../types.js';
 import {
   GROUP_INFO_REPUBLISH_MAX_ATTEMPTS,
@@ -6,8 +7,9 @@ import {
 } from '../../constants.js';
 import { generalErrorHandler } from '../../utils/general-error.js';
 import type { ChatDatabase, GroupPendingInfoPublish } from '../db/database.js';
-import type { GroupInfoLatest, GroupInfoVersioned } from './types.js';
+import type { GroupInfoLatest, GroupInfoVersioned, GroupInfoVersionedMetadata } from './types.js';
 import { putJsonToDHT } from './group-dht-publish.js';
+import { decodeBase64Strict } from '../../utils/validators.js';
 
 interface GroupInfoRepublisherDeps {
   node: ChatNode;
@@ -83,12 +85,24 @@ export class GroupInfoRepublisher {
 
           this.deps.database.updateGroupKeyStateHash(pending.group_id, pending.key_version, parsed.versionedRecord.stateHash);
           if (pending.key_version > 1) {
-            this.deps.database.upsertGroupEpochBoundaries(
+            const decryptedBoundaries = this.decryptSenderSeqBoundaries(
               pending.group_id,
-              pending.key_version - 1,
-              parsed.versionedRecord.senderSeqBoundaries ?? {},
-              'creator_republish',
+              pending.key_version,
+              parsed.versionedRecord,
             );
+            if (decryptedBoundaries && Object.keys(decryptedBoundaries).length > 0) {
+              this.deps.database.upsertGroupEpochBoundaries(
+                pending.group_id,
+                pending.key_version - 1,
+                decryptedBoundaries,
+                'creator_republish',
+              );
+            } else if (decryptedBoundaries === null) {
+              console.warn(
+                `[GROUP-INFO][ITEM][BOUNDARIES_SKIP] group=${pending.group_id} keyVersion=${pending.key_version} ` +
+                `reason=missing_or_invalid_metadata_boundaries`,
+              );
+            }
             this.deps.database.markGroupKeyUsedUntil(pending.group_id, pending.key_version - 1, Date.now());
           }
           this.deps.database.removePendingGroupInfoPublish(
@@ -156,7 +170,60 @@ export class GroupInfoRepublisher {
         versionedRecord,
         latestRecord,
       };
-    } catch {
+    } catch (error: unknown) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.log('[GROUP-INFO][ITEM][PARSE_FAIL] group=' + pending.group_id + ' keyVersion=' + String(pending.key_version) + ' reason=' + reason);
+      return null;
+    }
+  }
+
+  private decryptSenderSeqBoundaries(
+    groupId: string,
+    keyVersion: number,
+    versionedRecord: GroupInfoVersioned,
+  ): Record<string, number> | null {
+    const metadataKeyBase64 = this.deps.database.getGroupInfoMetadataKeyForEpoch(groupId, keyVersion);
+    if (!metadataKeyBase64) {
+      console.log('[GROUP-INFO][META][REPUBLISH_DECRYPT_SKIP] group=' + groupId + ' keyVersion=' + String(keyVersion) + ' reason=missing_local_metadata_key');
+      return null;
+    }
+
+    const metadataKeyBytes = decodeBase64Strict(metadataKeyBase64);
+    if (!metadataKeyBytes || metadataKeyBytes.length !== 32) {
+      console.log('[GROUP-INFO][META][REPUBLISH_DECRYPT_SKIP] group=' + groupId + ' keyVersion=' + String(keyVersion) + ' reason=invalid_local_metadata_key');
+      return null;
+    }
+
+    const nonce = decodeBase64Strict(versionedRecord.encryptedMetadataNonce);
+    if (!nonce || nonce.length !== 24) {
+      console.log('[GROUP-INFO][META][REPUBLISH_DECRYPT_SKIP] group=' + groupId + ' keyVersion=' + String(keyVersion) + ' reason=invalid_nonce');
+      return null;
+    }
+
+    const encrypted = decodeBase64Strict(versionedRecord.encryptedMetadata);
+    if (!encrypted) {
+      console.log('[GROUP-INFO][META][REPUBLISH_DECRYPT_SKIP] group=' + groupId + ' keyVersion=' + String(keyVersion) + ' reason=invalid_ciphertext');
+      return null;
+    }
+
+    try {
+      const cipher = xchacha20poly1305(metadataKeyBytes, nonce);
+      const decrypted = cipher.decrypt(encrypted);
+      const parsed = JSON.parse(new TextDecoder().decode(decrypted)) as GroupInfoVersionedMetadata;
+      if (!parsed.senderSeqBoundaries || typeof parsed.senderSeqBoundaries !== 'object') {
+        return {};
+      }
+
+      const boundaries: Record<string, number> = {};
+      for (const [peerId, seq] of Object.entries(parsed.senderSeqBoundaries)) {
+        if (!peerId || !Number.isFinite(seq)) continue;
+        boundaries[peerId] = Math.max(0, Math.floor(seq));
+      }
+      console.log('[GROUP-INFO][META][REPUBLISH_DECRYPT_OK] group=' + groupId + ' keyVersion=' + String(keyVersion) + ' boundaries=' + String(Object.keys(boundaries).length) + ' nonceBytes=' + String(nonce.length) + ' cipherBytes=' + String(encrypted.length));
+      return boundaries;
+    } catch (error: unknown) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.log('[GROUP-INFO][META][REPUBLISH_DECRYPT_SKIP] group=' + groupId + ' keyVersion=' + String(keyVersion) + ' reason=decrypt_failed error=' + reason);
       return null;
     }
   }

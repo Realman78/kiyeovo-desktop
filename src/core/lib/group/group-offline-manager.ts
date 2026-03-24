@@ -21,6 +21,7 @@ import {
 import {
   type GroupContentMessage,
   type GroupInfoVersioned,
+  type GroupInfoVersionedMetadata,
   type GroupOfflineSignedPayload,
   type GroupOfflineStore,
   GroupMessageType,
@@ -665,12 +666,28 @@ export class GroupOfflineManager {
       }
     }
     if (!creatorPubBytes) return null;
+    const metadataKeyBase64 = this.deps.database.getGroupInfoMetadataKeyForEpoch(chat.group_id, keyVersion);
+    if (!metadataKeyBase64) {
+      console.log(
+        `[GROUP-OFFLINE][TIMING][META] group=${chat.group_id.slice(0, 8)} keyVersion=${keyVersion} ` +
+        `hasMeta=false reason=missing_local_metadata_key`
+      );
+      return null;
+    }
+    const metadataKeyBytes = Buffer.from(metadataKeyBase64, 'base64');
+    if (metadataKeyBytes.length !== 32) {
+      console.log(
+        `[GROUP-OFFLINE][TIMING][META] group=${chat.group_id.slice(0, 8)} keyVersion=${keyVersion} ` +
+        `hasMeta=false reason=invalid_local_metadata_key`
+      );
+      return null;
+    }
 
     const creatorPubKeyBase64url = toBase64Url(creatorPubBytes);
     const dhtKey = `${this.groupInfoVersionPrefix}/${chat.group_id}/${creatorPubKeyBase64url}/${keyVersion}`;
     const keyBytes = new TextEncoder().encode(dhtKey);
 
-    let best: GroupInfoVersioned | null = null;
+    let decryptedMeta: GroupOfflineVersionMeta | null = null;
 
     try {
       for await (const event of this.deps.node.services.dht.get(keyBytes) as AsyncIterable<QueryEvent>) {
@@ -679,7 +696,10 @@ export class GroupOfflineManager {
           const candidate = JSON.parse(new TextDecoder().decode(event.value)) as GroupInfoVersioned;
           if (candidate.groupId !== chat.group_id || candidate.version !== keyVersion) continue;
           if (!this.verifyGroupInfoVersionSignature(candidate, creatorPubBytes)) continue;
-          best = candidate;
+          const decrypted = this.decryptGroupInfoVersionedMetadata(candidate, metadataKeyBytes);
+          if (!decrypted) continue;
+          decryptedMeta = decrypted;
+          break;
         } catch {
           continue;
         }
@@ -692,17 +712,14 @@ export class GroupOfflineManager {
       return null;
     }
 
-    if (!best) {
+    if (!decryptedMeta) {
       console.log(
         `[GROUP-OFFLINE][TIMING][META] group=${chat.group_id.slice(0, 8)} keyVersion=${keyVersion} ` +
-        `hasMeta=false reason=no_valid_record`
+        `hasMeta=false reason=no_valid_decryptable_record`
       );
       return null;
     }
-    const value = {
-      members: best.members,
-      senderSeqBoundaries: best.senderSeqBoundaries ?? {},
-    };
+    const value = decryptedMeta;
     this.versionMetaCache.set(cacheKey, { value, cachedAt: Date.now() });
     console.log(
       `[GROUP-OFFLINE][TIMING][META] group=${chat.group_id.slice(0, 8)} keyVersion=${keyVersion} ` +
@@ -720,6 +737,32 @@ export class GroupOfflineManager {
       return ed25519.verify(sigBytes, payloadBytes, creatorPubKey);
     } catch {
       return false;
+    }
+  }
+
+  private decryptGroupInfoVersionedMetadata(
+    record: GroupInfoVersioned,
+    metadataKey: Uint8Array,
+  ): GroupOfflineVersionMeta | null {
+    try {
+      const nonce = Buffer.from(record.encryptedMetadataNonce, 'base64');
+      if (nonce.length !== 24) return null;
+      const encrypted = Buffer.from(record.encryptedMetadata, 'base64');
+      const cipher = xchacha20poly1305(metadataKey, nonce);
+      const decrypted = cipher.decrypt(encrypted);
+      const parsed = JSON.parse(new TextDecoder().decode(decrypted)) as GroupInfoVersionedMetadata;
+      if (!Array.isArray(parsed.members)) return null;
+      if (!parsed.senderSeqBoundaries || typeof parsed.senderSeqBoundaries !== 'object') return null;
+      const members = parsed.members.filter((peerId): peerId is string => typeof peerId === 'string');
+      const senderSeqBoundaries: Record<string, number> = {};
+      for (const [peerId, value] of Object.entries(parsed.senderSeqBoundaries)) {
+        if (typeof peerId !== 'string') continue;
+        if (!Number.isFinite(value)) continue;
+        senderSeqBoundaries[peerId] = Math.max(0, Math.floor(value));
+      }
+      return { members, senderSeqBoundaries };
+    } catch {
+      return null;
     }
   }
 
