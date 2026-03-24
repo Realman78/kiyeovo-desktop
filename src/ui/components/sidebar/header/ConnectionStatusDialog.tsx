@@ -431,7 +431,7 @@ const ConnectionStatusDialog = ({
               copiedAddress={copiedAddress}
               newAddress={newBootstrapAddress}
               retrying={isRetryingBootstrap}
-              retryDisabled={isRetryingBootstrap || isLoadingBootstrapNodes}
+              retryDisabled={isRetryingBootstrap || isLoadingBootstrapNodes || bootstrapNodes.length === 0}
               onNewAddressChange={setNewBootstrapAddress}
               onAdd={handleAddBootstrapNode}
               onRetry={handleRetryBootstrap}

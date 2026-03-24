@@ -28,7 +28,9 @@ export const IncomingCallCard = () => {
         mediaType: incomingCall.mediaType,
       });
       if (!result.success) {
-        toast.error(result.error || 'Failed to accept call');
+        const currErr = result.error?.toLowerCase().includes("device not found")
+          ? "Camera or Microphone not found" : result.error;
+        toast.error(currErr|| 'Failed to accept call');
         return;
       }
       dispatch(clearIncomingCall());
