@@ -163,6 +163,17 @@ const chatSlice = createSlice({
       const { chatId, id } = action.payload;
       const isFromCurrentUser = action.payload.currentUserPeerId &&
                                  action.payload.senderPeerId === action.payload.currentUserPeerId;
+      const isOptimisticSeedId = id.startsWith('contact-attempt-' + chatId + '-');
+
+      if (!isOptimisticSeedId) {
+        state.messages = state.messages.filter((msg) => {
+          if (msg.chatId !== chatId) return true;
+          if (!msg.id.startsWith('contact-attempt-' + chatId + '-')) return true;
+          if (msg.senderPeerId !== action.payload.senderPeerId) return true;
+          return msg.content !== action.payload.content;
+        });
+      }
+
       let insertedOrUpdated = false;
 
       // Check if message already exists (prevent duplicates)
