@@ -315,13 +315,13 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
                     Change
                   </Button>
                 </div>
-                <TorSettingsSection
+                {networkMode === 'anonymous' && <TorSettingsSection
                   torSettings={torSettings}
                   setTorSettings={setTorSettings}
                   originalTorSettings={originalTorSettings}
                   onConfirmRestart={handleConfirmTorRestart}
                   isAnonymousMode={networkMode === 'anonymous'}
-                />
+                />}
 
                 <div className="flex items-center justify-between p-3 border border-border rounded-lg transition-colors">
                   <div className="flex items-center gap-3">
