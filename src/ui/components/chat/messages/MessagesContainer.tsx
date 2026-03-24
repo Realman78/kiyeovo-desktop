@@ -76,6 +76,7 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isScrollable, setIsScrollable] = useState(true);
   const offsetRef = useRef(0);
+  const latestDisplayedMessagesRef = useRef(messages);
   const showEmptyState = !isPending && messages.length === 0;
 
   const getMembershipInfoTooltip = (message: ChatMessage): string | null => {
@@ -117,6 +118,10 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
     hasUserInteractedRef.current = true;
   }, []);
 
+  useEffect(() => {
+    latestDisplayedMessagesRef.current = messages;
+  }, [messages]);
+
   // Initial fetch
   useEffect(() => {
     const chatId = activeChat?.id ?? null;
@@ -140,6 +145,17 @@ export const MessagesContainer = ({ messages, isPending }: MessagesContainerProp
       }
       if (result.success) {
         const mapped = result.messages.map(mapDbMessage);
+        const hasOptimisticContactSeed = latestDisplayedMessagesRef.current.some(
+          (msg) => msg.chatId === chatId && msg.id.startsWith('contact-attempt-' + chatId + '-'),
+        );
+
+        if (mapped.length === 0 && hasOptimisticContactSeed) {
+          console.log('[MessagesContainer] Preserving optimistic contact seed for chat ' + chatId + ' until DB catch-up');
+          offsetRef.current = 0;
+          setHasMore(false);
+          return;
+        }
+
         dispatch(setMessages(mapped));
         offsetRef.current = mapped.length;
         setHasMore(mapped.length >= INITIAL_MESSAGES_LIMIT);

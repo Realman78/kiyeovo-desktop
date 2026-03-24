@@ -287,7 +287,15 @@ const chatSlice = createSlice({
       state.contactAttempts = action.payload
     },
     addContactAttempt: (state, action: PayloadAction<ContactAttempt>) => {
-      state.contactAttempts.push(action.payload)
+      const existingIndex = state.contactAttempts.findIndex((attempt) => attempt.peerId === action.payload.peerId);
+      if (existingIndex >= 0) {
+        state.contactAttempts[existingIndex] = action.payload;
+        if (state.activeContactAttempt?.peerId === action.payload.peerId) {
+          state.activeContactAttempt = action.payload;
+        }
+        return;
+      }
+      state.contactAttempts.push(action.payload);
     },
     removeContactAttempt: (state, action: PayloadAction<string>) => {
       state.contactAttempts = state.contactAttempts.filter((ca) => ca.peerId !== action.payload);

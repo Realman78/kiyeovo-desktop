@@ -640,12 +640,6 @@ export class KeyExchange {
       timestamp: Date.now()
     });
 
-    // Silent does not make sense with the new UI.
-    // if (contactMode === 'silent') {
-    //   console.log(`Logged contact attempt from ${senderUsername} (silent mode)`);
-    //   return null;
-    // }
-
     // Active mode
     return await this.handleActiveContactRequest(remoteId, message, contactAttemptId, initialMessageBody);
   }
@@ -995,8 +989,18 @@ export class KeyExchange {
 
       const ourPendingKeyExchange = this.sessionManager.getPendingKeyExchange(remoteId);
       if (ourPendingKeyExchange) {
-        console.log(`Cleaning up our pending key exchange with ${remoteId.slice(0, 8)}... - they initiated a new one`);
-        this.sessionManager.removePendingKeyExchange(remoteId);
+        const weWin = this.node.peerId.toString() < remoteId;
+        if (weWin) {
+          console.log(
+            `Simultaneous key exchange init detected with ${remoteId.slice(0, 8)}... - keeping our outgoing request (local peerId wins)`,
+          );
+          return;
+        }
+
+        console.log(
+          `Simultaneous key exchange init detected with ${remoteId.slice(0, 8)}... - remote request wins, cancelling ours`,
+        );
+        await this.cancelPendingKeyExchange(remoteId);
       }
 
       // Clean up any existing session - handles case where sender cancelled but we accepted

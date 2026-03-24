@@ -5,8 +5,8 @@ import { ChatList } from './chats/ChatList'
 import { SidebarFooter } from './footer/SidebarFooter'
 import { type ContactAttempt } from './contact-attempts/ContactAttemptItem'
 import { useDispatch, useSelector } from 'react-redux';
-import { addContactAttempt, removeContactAttempt, setContactAttempts } from '../../state/slices/chatSlice'
-import type { RootState } from '../../state/store'
+import { addContactAttempt, removeContactAttempt, removePendingKeyExchange, setContactAttempts } from '../../state/slices/chatSlice'
+import { store, type RootState } from '../../state/store'
 import { ContactAttemptList } from './contact-attempts/ContactAttemptList'
 import { PendingKeyExchangeList } from './pending-key-exchange/PendingKeyExchangeList'
 import { GroupInviteList } from './group-invites/GroupInviteList'
@@ -64,7 +64,22 @@ export const Sidebar: FC = () => {
     // Also listen for future username restoration events
     const unsubscribe = window.kiyeovoAPI.onContactRequestReceived((data) => {
       console.log('[UI] Contact request received:', data);
-      dispatch(addContactAttempt(data))
+
+      const state = store.getState();
+      const myPeerId = state.user.peerId;
+      const hasPendingForPeer = state.chat.pendingKeyExchanges.some((pending) => pending.peerId === data.peerId);
+
+      if (hasPendingForPeer && myPeerId) {
+        const outgoingWins = myPeerId < data.peerId;
+        if (outgoingWins) {
+          console.log('[UI] Ignoring duplicate incoming contact request from ' + data.peerId.slice(-8) + ' due to peerId tie-break');
+          return;
+        }
+
+        dispatch(removePendingKeyExchange(data.peerId));
+      }
+
+      dispatch(addContactAttempt(data));
     });
 
     const restoreUnsubscribe = window.kiyeovoAPI.onRestoreUsername((username) => {

@@ -9,7 +9,7 @@ import { setConnected, setRegistered, setRegistrationInProgress, setUsername } f
 import NewConversationDialog from "./NewConversationDialog";
 import ImportTrustedUserDialog from "./ImportTrustedUserDialog";
 import NewGroupDialog, { type GroupInviteDeliveryView } from "./NewGroupDialog";
-import { addPendingKeyExchange, setActivePendingKeyExchange, setActiveChat, addChat, type Chat } from "../../../state/slices/chatSlice";
+import { addPendingKeyExchange, removeContactAttempt, removePendingKeyExchange, setActivePendingKeyExchange, setActiveChat, addChat, type Chat } from "../../../state/slices/chatSlice";
 import type { RootState } from "../../../state/store";
 import { DropdownMenu, DropdownMenuItem } from "../../ui/DropdownMenu";
 import { useToast } from "../../ui/use-toast";
@@ -32,7 +32,9 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
     const isRegistered = useSelector((state: RootState) => state.user.registered);
     const registrationInProgress = useSelector((state: RootState) => state.user.registrationInProgress);
     const chats = useSelector((state: RootState) => state.chat.chats);
+    const contactAttempts = useSelector((state: RootState) => state.chat.contactAttempts);
     const pendingKeyExchanges = useSelector((state: RootState) => state.chat.pendingKeyExchanges);
+    const myPeerId = useSelector((state: RootState) => state.user.peerId);
 
     const dispatch = useDispatch();
     const { toast } = useToast();
@@ -44,7 +46,9 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
     const registrationInProgressRef = useRef(registrationInProgress);
     const autoRegisterEnabledRef = useRef<boolean | null>(null);
     const chatsRef = useRef(chats);
+    const contactAttemptsRef = useRef(contactAttempts);
     const pendingKeyExchangesRef = useRef(pendingKeyExchanges);
+    const myPeerIdRef = useRef(myPeerId);
 
     // Keep ref in sync with state
     useEffect(() => {
@@ -54,6 +58,10 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
     useEffect(() => {
         chatsRef.current = chats;
     }, [chats]);
+
+    useEffect(() => {
+        contactAttemptsRef.current = contactAttempts;
+    }, [contactAttempts]);
 
     useEffect(() => {
         isRegisteredRef.current = isRegistered;
@@ -66,6 +74,10 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
     useEffect(() => {
         pendingKeyExchangesRef.current = pendingKeyExchanges;
     }, [pendingKeyExchanges]);
+
+    useEffect(() => {
+        myPeerIdRef.current = myPeerId;
+    }, [myPeerId]);
 
     const handleNewConversation = async (peerIdOrUsername: string, message: string) => {
         setError(undefined);
@@ -186,8 +198,23 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
             console.log(`[UI] Key exchange sent to ${data.username}, closing dialog...`);
             const existingDirectChat = chatsRef.current.find((chat) => chat.type === 'direct' && chat.peerId === data.peerId);
             if (!existingDirectChat) {
-                dispatch(addPendingKeyExchange(data));
-                dispatch(setActivePendingKeyExchange(data.peerId));
+                const existingContactAttempt = contactAttemptsRef.current.some((attempt) => attempt.peerId === data.peerId);
+                const localPeerId = myPeerIdRef.current;
+
+                if (existingContactAttempt && localPeerId) {
+                    const outgoingWins = localPeerId < data.peerId;
+                    if (outgoingWins) {
+                        dispatch(removeContactAttempt(data.peerId));
+                        dispatch(addPendingKeyExchange(data));
+                        dispatch(setActivePendingKeyExchange(data.peerId));
+                    } else {
+                        dispatch(removePendingKeyExchange(data.peerId));
+                        dispatch(setActivePendingKeyExchange(null));
+                    }
+                } else {
+                    dispatch(addPendingKeyExchange(data));
+                    dispatch(setActivePendingKeyExchange(data.peerId));
+                }
             } else {
                 const alreadyPending = pendingKeyExchangesRef.current.some((pending) => pending.peerId === data.peerId);
                 if (alreadyPending) {
