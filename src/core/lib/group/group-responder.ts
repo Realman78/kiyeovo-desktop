@@ -447,6 +447,8 @@ export class GroupResponder {
     const welcomeMetadataKeyBytes = Buffer.from(groupInfoMetadataKey, 'base64');
     console.log('[GROUP-INFO][META][RECEIVE][WELCOME] group=' + welcome.groupId + ' keyVersion=' + String(welcome.keyVersion) + ' metadataKeyBytes=' + String(welcomeMetadataKeyBytes.length));
 
+    console.log("MARINKOPARINKO 2", String(welcomeMetadataKeyBytes))
+
     // Store key in history
     database.insertGroupKeyHistory(welcome.groupId, welcome.keyVersion, groupKey, groupInfoMetadataKey);
 
@@ -610,6 +612,8 @@ export class GroupResponder {
     ).toString('base64');
     const stateUpdateMetadataKeyBytes = Buffer.from(groupInfoMetadataKey, 'base64');
     console.log('[GROUP-INFO][META][RECEIVE][STATE_UPDATE] group=' + update.groupId + ' keyVersion=' + String(update.keyVersion) + ' metadataKeyBytes=' + String(stateUpdateMetadataKeyBytes.length));
+
+    console.log("MARINKOPARINKO 1", String(stateUpdateMetadataKeyBytes))
 
     database.insertGroupKeyHistory(update.groupId, update.keyVersion, groupKey, groupInfoMetadataKey);
 
