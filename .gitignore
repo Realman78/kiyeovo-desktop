@@ -29,3 +29,7 @@ dist-electron
 .env
 bootstrap-peer-id.bin
 bootstrap-datastore
+
+.claude
+AGENTS.md
+temp.md

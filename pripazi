@@ -1,8 +1,4 @@
-0. u stashu ti je enkripcija group info-a
-
 0.5 U stashu ti je early return za dht queries (to su oni slucajevi kada je peer u konekciji ali ga se ne more dohvatit)
-
-0.75 U kojim bucketima se jos vidi previse informacija cak i ako nemas encryption key?
 
 1. [NUDGE][SEND_FAIL] peer=fz9zYUjU group=32398e08 reason=Remote closed connection during opening -> do libp2p je jednostavno. probal san fixat i zasad nemoren replicirat. zbrisat cu ovo ako se kad desi opet
 

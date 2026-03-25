@@ -447,10 +447,6 @@ export class GroupResponder {
     const welcomeMetadataKeyBytes = Buffer.from(groupInfoMetadataKey, 'base64');
     console.log('[GROUP-INFO][META][RECEIVE][WELCOME] group=' + welcome.groupId + ' keyVersion=' + String(welcome.keyVersion) + ' metadataKeyBytes=' + String(welcomeMetadataKeyBytes.length));
 
-    console.log("MARINKOPARINKO 2 utf8", JSON.stringify(welcomeMetadataKeyBytes.toString('utf8')));
-    console.log("MARINKOPARINKO 2 b64", welcomeMetadataKeyBytes.toString('base64'));
-    console.log("MARINKOPARINKO 2 hex", welcomeMetadataKeyBytes.toString('hex'));
-
     // Store key in history
     database.insertGroupKeyHistory(welcome.groupId, welcome.keyVersion, groupKey, groupInfoMetadataKey);
 
@@ -614,10 +610,6 @@ export class GroupResponder {
     ).toString('base64');
     const stateUpdateMetadataKeyBytes = Buffer.from(groupInfoMetadataKey, 'base64');
     console.log('[GROUP-INFO][META][RECEIVE][STATE_UPDATE] group=' + update.groupId + ' keyVersion=' + String(update.keyVersion) + ' metadataKeyBytes=' + String(stateUpdateMetadataKeyBytes.length));
-
-    console.log("MARINKOPARINKO 1 utf8", JSON.stringify(stateUpdateMetadataKeyBytes.toString('utf8')));
-    console.log("MARINKOPARINKO 1 b64", stateUpdateMetadataKeyBytes.toString('base64'));
-    console.log("MARINKOPARINKO 1 hex", stateUpdateMetadataKeyBytes.toString('hex'));
 
     database.insertGroupKeyHistory(update.groupId, update.keyVersion, groupKey, groupInfoMetadataKey);
 

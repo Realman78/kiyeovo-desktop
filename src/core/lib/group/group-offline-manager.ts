@@ -751,7 +751,6 @@ export class GroupOfflineManager {
       const cipher = xchacha20poly1305(metadataKey, nonce);
       const decrypted = cipher.decrypt(encrypted);
       const parsed = JSON.parse(new TextDecoder().decode(decrypted)) as GroupInfoVersionedMetadata;
-      console.log("MARINKOPARINKO", parsed);
       if (!Array.isArray(parsed.members)) return null;
       if (!parsed.senderSeqBoundaries || typeof parsed.senderSeqBoundaries !== 'object') return null;
       const members = parsed.members.filter((peerId): peerId is string => typeof peerId === 'string');
