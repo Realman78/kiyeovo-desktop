@@ -1,4 +1,4 @@
-import type { MultiaddrConnection, PeerId } from '@libp2p/interface';
+import type { MultiaddrConnection, PeerId, PeerInfo } from '@libp2p/interface';
 import type { Libp2p } from 'libp2p';
 import type { KadDHT } from '@libp2p/kad-dht';
 import type { Identify } from '@libp2p/identify';
@@ -927,3 +927,46 @@ export interface CallErrorEvent {
   code?: string;
   timestamp: number;
 }
+
+
+export type DhtAdmissionApi = {
+  routingTable: { size: number };
+  onPeerConnect: (peerData: PeerInfo) => Promise<void>;
+};
+
+export type BootstrapConnectOptions = {
+  signal?: AbortSignal;
+};
+
+export type BootstrapAddressResolution = {
+  networkMode: NetworkMode;
+  bootstrapEnvKey: string;
+  addresses: string[];
+};
+
+export type BootstrapAttempt = {
+  address: string;
+  ok: boolean;
+  durationMs: number;
+  error?: string;
+};
+
+export type BootstrapConnection = {
+  address: string;
+  remotePeer: PeerId | undefined;
+};
+
+export type BootstrapConnectResult = {
+  status: 'connected' | 'all_failed' | 'no_candidates' | 'aborted';
+  connectedAddresses: string[];
+  connectedPeerIds: string[];
+  connectedCount: number;
+  targetConnectionCount: number;
+  targetReached: boolean;
+  attempts: BootstrapAttempt[];
+};
+
+export type TorBootstrapTarget = {
+  host: string;
+  port: number;
+};

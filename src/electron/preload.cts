@@ -57,8 +57,8 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     },
 
     // DHT connection status
-    onDHTConnectionStatus: (callback: (status: { connected: boolean }) => void) => {
-        const listener = (_event: any, status: { connected: boolean }) => callback(status);
+    onDHTConnectionStatus: (callback: (status: { connected: boolean | null }) => void) => {
+        const listener = (_event: any, status: { connected: boolean | null }) => callback(status);
         ipcRenderer.on(IPC_CHANNELS.DHT_CONNECTION_STATUS, listener);
         return () => ipcRenderer.removeListener(IPC_CHANNELS.DHT_CONNECTION_STATUS, listener);
     },
@@ -196,7 +196,19 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     getBootstrapNodes: async (): Promise<{ success: boolean; nodes: Array<{ address: string; connected: boolean }>; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.GET_BOOTSTRAP_NODES);
     },
-    retryBootstrap: async (): Promise<{ success: boolean; error: string | null }> => {
+    retryBootstrap: async (): Promise<{
+        success: boolean;
+        result: {
+            status: 'connected' | 'all_failed' | 'no_candidates' | 'aborted';
+            connectedAddresses: string[];
+            connectedPeerIds: string[];
+            connectedCount: number;
+            targetConnectionCount: number;
+            targetReached: boolean;
+            attempts: Array<{ address: string; ok: boolean; durationMs: number; error?: string }>;
+        } | null;
+        error: string | null;
+    }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.RETRY_BOOTSTRAP);
     },
     retryRelays: async (): Promise<{ success: boolean; attempted: number; connected: number; error: string | null }> => {

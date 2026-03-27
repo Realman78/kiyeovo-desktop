@@ -1,0 +1,107 @@
+import { multiaddr } from '@multiformats/multiaddr';
+
+import type { ChatNode } from '../types.js';
+
+import {
+  FAST_RELAY_MULTIADDRS_SETTING_KEY,
+  NETWORK_MODES,
+} from '../constants.js';
+import { DEFAULT_FAST_RELAY_MULTIADDRS } from '../default-relay-nodes.js';
+import { dedupe } from '../utils/collections.js';
+import { ChatDatabase } from './db/database.js';
+
+export type FastRelayDialResult = {
+  attempted: number;
+  connected: number;
+  addresses: string[];
+  source: 'db' | 'default' | 'none';
+  skipped: boolean;
+};
+
+function parseAddressList(raw: string): string[] {
+  return raw
+    .split(/[\n,]/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function logFastCircuitState(node: ChatNode): void {
+  const circuitAddrs = node
+    .getMultiaddrs()
+    .map((addr) => addr.toString())
+    .filter((addr) => addr.includes('/p2p-circuit'));
+
+  console.log(
+    `[STACK][FAST][RELAY] localCircuitAddrs=${circuitAddrs.length} values=${circuitAddrs.join(',') || 'none'}`
+  );
+}
+
+export function getConfiguredFastRelayAddrs(database: ChatDatabase): { addresses: string[]; source: 'db' | 'default' } {
+  const settingValue = database.getSetting(FAST_RELAY_MULTIADDRS_SETTING_KEY);
+  if (settingValue !== null) {
+    const fromDb = dedupe(parseAddressList(settingValue));
+    return { addresses: fromDb, source: 'db' };
+  }
+
+  return { addresses: dedupe(DEFAULT_FAST_RELAY_MULTIADDRS), source: 'default' };
+}
+
+export async function dialConfiguredFastRelays(node: ChatNode, database: ChatDatabase): Promise<FastRelayDialResult> {
+  const networkMode = database.getSessionNetworkMode();
+  if (networkMode !== NETWORK_MODES.FAST) {
+    return {
+      attempted: 0,
+      connected: 0,
+      addresses: [],
+      source: 'none',
+      skipped: true,
+    };
+  }
+
+  const fastRelayConfig = getConfiguredFastRelayAddrs(database);
+  const fastRelayAddrs = fastRelayConfig.addresses;
+  if (fastRelayAddrs.length === 0) {
+    console.log(`[STACK][FAST] no relay addresses configured (source=${fastRelayConfig.source})`);
+    logFastCircuitState(node);
+    return {
+      attempted: 0,
+      connected: 0,
+      addresses: [],
+      source: fastRelayConfig.source,
+      skipped: false,
+    };
+  }
+
+  const concurrency = Math.min(5, fastRelayAddrs.length);
+  console.log(
+    `[STACK][FAST] attempting deterministic relay dials count=${fastRelayAddrs.length} concurrency=${concurrency} source=${fastRelayConfig.source}`
+  );
+  let connected = 0;
+  let cursor = 0;
+
+  const runWorker = async (): Promise<void> => {
+    while (cursor < fastRelayAddrs.length) {
+      const relayAddr = fastRelayAddrs[cursor++];
+      try {
+        await node.dial(multiaddr(relayAddr));
+        connected++;
+        console.log(`[STACK][FAST][RELAY] connected ${relayAddr}`);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : 'unknown';
+        console.warn(`[STACK][FAST][RELAY] failed ${relayAddr} reason=${reason}`);
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: concurrency }, () => runWorker()));
+  console.log(`[STACK][FAST][RELAY] connected=${connected}/${fastRelayAddrs.length}`);
+  logFastCircuitState(node);
+
+  return {
+    attempted: fastRelayAddrs.length,
+    connected,
+    addresses: fastRelayAddrs,
+    source: fastRelayConfig.source,
+    skipped: false,
+  };
+}

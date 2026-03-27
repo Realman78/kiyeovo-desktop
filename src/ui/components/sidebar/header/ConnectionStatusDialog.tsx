@@ -146,25 +146,51 @@ const ConnectionStatusDialog = ({
     }
   }, [networkMode, activeTab]);
 
+  const showBootstrapError = (message: string) => {
+    setBootstrapError(message);
+    toast.error(message);
+  };
+
   const handleRetryBootstrap = async () => {
     setIsRetryingBootstrap(true);
     setBootstrapError(null);
 
     try {
-      const result = await window.kiyeovoAPI.retryBootstrap();
-      if (!result.success) {
-        const message = result.error || 'Failed to retry bootstrap connection';
-        setBootstrapError(message);
-        toast.error(message);
+      const {result, success, error} = await window.kiyeovoAPI.retryBootstrap();
+      if (!success) {
+        const message = error || 'Failed to retry bootstrap connection';
+        showBootstrapError(message);
         return;
       }
 
       await refreshConnectionSnapshotAfterRetry(networkMode);
-      toast.success('Bootstrap retry complete');
+      switch (result?.status) {
+        case 'connected':
+          toast.success(
+            `Connected to ${result.connectedCount} bootstrap node${result.connectedCount === 1 ? '' : 's'}`
+          );
+          break;
+        case 'no_candidates': {
+          const message = 'No bootstrap nodes configured';
+          showBootstrapError(message);
+          break;
+        }
+        case 'all_failed': {
+          const message = 'All configured bootstrap nodes failed';
+          showBootstrapError(message);
+          break;
+        }
+        case 'aborted': {
+          const message = 'Bootstrap retry was aborted';
+          showBootstrapError(message);
+          break;
+        }
+        default:
+          toast.success('Bootstrap retry complete');
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unexpected error occurred';
-      setBootstrapError(message);
-      toast.error(message);
+      showBootstrapError(message);
     } finally {
       setIsRetryingBootstrap(false);
     }
@@ -359,6 +385,20 @@ const ConnectionStatusDialog = ({
   const isFastMode = networkMode === 'fast';
   const isRelayTab = activeTab === 'relays' && isFastMode;
   const isRetryingAny = isRetryingBootstrap || isRetryingRelays;
+  const networkStatusClassName = isRetryingAny
+    ? 'text-muted-foreground'
+    : isConnected === null
+      ? 'text-muted-foreground'
+      : isConnected
+        ? 'text-success'
+        : 'text-destructive';
+  const networkStatusLabel = isRetryingAny
+    ? 'RETRYING'
+    : isConnected === null
+      ? 'CONNECTING'
+      : isConnected
+        ? 'ONLINE'
+        : 'OFFLINE';
 
   const headerDescription = isRetryingAny
     ? (isRelayTab ? 'Retrying relay reservations...' : 'Retrying bootstrap connection...')
@@ -470,9 +510,7 @@ const ConnectionStatusDialog = ({
           <div className="pt-2 border-t border-border">
             <div className="flex items-center justify-between text-xs font-mono">
               <span className="text-muted-foreground">Network Status</span>
-              <span className={isRetryingAny ? "text-muted-foreground" : isConnected ? "text-success" : "text-destructive"}>
-                {isRetryingAny ? "RETRYING" : isConnected ? "ONLINE" : "OFFLINE"}
-              </span>
+              <span className={networkStatusClassName}>{networkStatusLabel}</span>
             </div>
             <div className="flex items-center justify-between text-xs font-mono mt-1">
               <span className="text-muted-foreground">Bootstrap Nodes Connected</span>

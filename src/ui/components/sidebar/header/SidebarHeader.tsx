@@ -163,11 +163,11 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
             console.log("getDHTConnectionStatus result")
             console.log('result :>> ', result);
             if (isDisposed) return;
-            if (!result.success || result.connected === null) {
+            if (!result.success) {
                 console.log('[DHT-STATUS][UI][SNAPSHOT] unavailable');
                 return;
             }
-            console.log(`[DHT-STATUS][UI][SNAPSHOT] connected=${result.connected}`);
+            console.log(`[DHT-STATUS][UI][SNAPSHOT] connected=${String(result.connected)}`);
             setIsDHTConnected(result.connected);
             dispatch(setConnected(result.connected));
             if (result.connected) {
@@ -177,10 +177,13 @@ export const SidebarHeader: FC<SidebarHeaderProps> = ({ collapsed = false }) => 
             console.error('[DHT-STATUS][UI][SNAPSHOT] failed:', error);
         });
 
-        const unsubStatus = window.kiyeovoAPI.onDHTConnectionStatus((status: { connected: boolean }) => {
-            console.log(`[DHT-STATUS][UI][EVENT] connected=${status.connected}`);
+        const unsubStatus = window.kiyeovoAPI.onDHTConnectionStatus((status: { connected: boolean | null }) => {
+            console.log(`[DHT-STATUS][UI][EVENT] connected=${String(status.connected)}`);
             setIsDHTConnected(status.connected);
             dispatch(setConnected(status.connected));
+            if (status.connected === null) {
+                return;
+            }
             if (!status.connected) {
                 attemptedAutoRegisterRef.current = false;
                 autoRegisterEnabledRef.current = null;

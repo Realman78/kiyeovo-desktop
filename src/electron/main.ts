@@ -228,7 +228,7 @@ function sendInitStatus(message: string, stage: InitStatus['stage']) {
   }
 }
 
-function sendDHTConnectionStatus(status: { connected: boolean }) {
+function sendDHTConnectionStatus(status: { connected: boolean | null }) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     console.log(`[Electron] Sending DHT connection status: ${status.connected}`);
     console.log(`[DHT-STATUS][ELECTRON][EMIT] connected=${status.connected}`);
@@ -495,8 +495,8 @@ async function initializeP2PAfterWindow() {
         console.log(`[P2P Core] ${message}`);
         sendInitStatus(message, stage);
       },
-      onDHTConnectionStatus: (status: { connected: boolean }) => {
-        console.log(`[Electron] DHT connection status: ${status.connected}`);
+      onDHTConnectionStatus: (status: { connected: boolean | null }) => {
+        console.log(`[Electron] DHT connection status: ${String(status.connected)}`);
         sendDHTConnectionStatus(status);
       },
       onKeyExchangeSent: (data: KeyExchangeEvent) => {

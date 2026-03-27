@@ -14,6 +14,17 @@ export const filterOnionAddressesMapper = (peer: PeerInfo): PeerInfo => {
     return peer;
 };
 
+export function parseCommaSeparatedEnv(key: string): string[] {
+    return (process.env[key] ?? '')
+        .split(',')
+        .map((value) => value.trim())
+        .filter(Boolean);
+};
+  
+export function isOnionMultiaddr(address: string): boolean {
+    return address.includes('/onion3/');
+};
+
 export const ensurePort = (args: string[]): number => {
     try {
         if (args.length > 0 && args[0]) {

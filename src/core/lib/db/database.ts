@@ -158,7 +158,6 @@ export interface BootstrapNode {
     id: number
     address: string
     network_mode: NetworkMode
-    connected: boolean
     created_at: Date
     updated_at: Date
 }
@@ -508,7 +507,6 @@ export class ChatDatabase {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 address TEXT NOT NULL,
                 network_mode TEXT NOT NULL DEFAULT '${DEFAULT_NETWORK_MODE}' CHECK(network_mode IN ('${NETWORK_MODES.FAST}','${NETWORK_MODES.ANONYMOUS}')),
-                connected INTEGER NOT NULL DEFAULT 0,
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -526,7 +524,7 @@ export class ChatDatabase {
                 const mode = node.includes('/onion')
                     ? NETWORK_MODES.ANONYMOUS
                     : NETWORK_MODES.FAST;
-                this.db.prepare('INSERT INTO bootstrap_nodes (address, network_mode, connected, sort_order) VALUES (?, ?, 0, ?)').run(node, mode, i);
+                this.db.prepare('INSERT INTO bootstrap_nodes (address, network_mode, sort_order) VALUES (?, ?, ?)').run(node, mode, i);
             }
             this.db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('bootstrap_nodes_initialized', 'true');
         }
@@ -2150,20 +2148,9 @@ export class ChatDatabase {
     }
 
     // Bootstrap nodes operations
-    getBootstrapNodes(): { address: string; connected: boolean }[] {
-        const stmt = this.db.prepare('SELECT address, connected FROM bootstrap_nodes WHERE network_mode = ? ORDER BY sort_order ASC, id ASC');
-        const rows = stmt.all(this.getActiveNetworkMode()) as { address: string; connected: number }[];
-        return rows.map(row => ({ address: row.address, connected: Boolean(row.connected) }));
-    }
-
-    updateBootstrapNodeStatus(address: string, connected: boolean): void {
-        const stmt = this.db.prepare('UPDATE bootstrap_nodes SET connected = ?, updated_at = CURRENT_TIMESTAMP WHERE address = ? AND network_mode = ?');
-        stmt.run(connected ? 1 : 0, address, this.getActiveNetworkMode());
-    }
-
-    clearAllBootstrapNodeStatus(): void {
-        const stmt = this.db.prepare('UPDATE bootstrap_nodes SET connected = 0, updated_at = CURRENT_TIMESTAMP WHERE network_mode = ?');
-        stmt.run(this.getActiveNetworkMode());
+    getBootstrapNodes(): { address: string }[] {
+        const stmt = this.db.prepare('SELECT address FROM bootstrap_nodes WHERE network_mode = ? ORDER BY sort_order ASC, id ASC');
+        return stmt.all(this.getActiveNetworkMode()) as { address: string }[];
     }
 
     removeBootstrapNode(address: string): void {
@@ -2180,7 +2167,7 @@ export class ChatDatabase {
         }
 
         const maxOrder = (this.db.prepare('SELECT MAX(sort_order) as max_order FROM bootstrap_nodes WHERE network_mode = ?').get(mode) as { max_order: number | null })?.max_order ?? -1;
-        const stmt = this.db.prepare('INSERT INTO bootstrap_nodes (address, network_mode, connected, sort_order) VALUES (?, ?, 0, ?)');
+        const stmt = this.db.prepare('INSERT INTO bootstrap_nodes (address, network_mode, sort_order) VALUES (?, ?, ?)');
         stmt.run(address, mode, maxOrder + 1);
     }
 

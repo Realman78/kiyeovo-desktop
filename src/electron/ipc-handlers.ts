@@ -521,19 +521,20 @@ function setupBootstrapHandlers(
 
       console.log('[IPC] Fetching bootstrap nodes from database...');
       const dbNodes = p2pCore.database.getBootstrapNodes();
-      const connectedPeerIds = new Set(
-        p2pCore.node.getConnections().map((connection) => connection.remotePeer.toString()),
+      const connectedRemoteAddrs = new Set(
+        p2pCore.node.getConnections().map((connection) => connection.remoteAddr.toString()),
       );
       const nodes = dbNodes.map((node) => {
-        let peerId: string | null = null;
+        let normalizedAddress: string | null = null;
         try {
-          peerId = multiaddr(node.address).getPeerId() ?? null;
+          normalizedAddress = multiaddr(node.address).toString();
         } catch {
-          peerId = null;
+          normalizedAddress = null;
         }
+
         return {
           address: node.address,
-          connected: peerId !== null && connectedPeerIds.has(peerId),
+          connected: normalizedAddress !== null && connectedRemoteAddrs.has(normalizedAddress),
         };
       });
       console.log(`[IPC] Found ${nodes.length} bootstrap nodes`);
@@ -554,14 +555,18 @@ function setupBootstrapHandlers(
       }
 
       console.log('[IPC] Retrying bootstrap connection...');
-      await p2pCore.retryBootstrap();
+      const result = await p2pCore.retryBootstrap();
       console.log(`[DHT-STATUS][IPC][RETRY_BOOTSTRAP] complete peerCount=${p2pCore.node.getConnections().length}`);
-      console.log('[IPC] Bootstrap retry complete');
+      console.log(`[IPC] Bootstrap retry complete status=${result.status}`);
 
-      return { success: true, error: null };
+      return { success: true, result, error: null };
     } catch (error) {
       console.error('[IPC] Failed to retry bootstrap:', error);
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to retry bootstrap connection' };
+      return {
+        success: false,
+        result: null,
+        error: error instanceof Error ? error.message : 'Failed to retry bootstrap connection',
+      };
     }
   });
 

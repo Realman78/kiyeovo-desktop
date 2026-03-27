@@ -31,7 +31,7 @@ const userSlice = createSlice({
     setUsername: (state, action: PayloadAction<string>) => {
       state.username = action.payload;
     },
-    setConnected: (state, action: PayloadAction<boolean>) => {
+    setConnected: (state, action: PayloadAction<boolean | null>) => {
       state.connected = action.payload;
     },
     setRegistered: (state, action: PayloadAction<boolean>) => {

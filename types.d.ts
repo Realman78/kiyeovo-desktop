@@ -47,7 +47,7 @@ declare global {
             startInitialization: () => Promise<{ success: boolean; error: string | null }>;
 
             // DHT connection status
-            onDHTConnectionStatus: (callback: (status: { connected: boolean }) => void) => () => void;
+            onDHTConnectionStatus: (callback: (status: { connected: boolean | null }) => void) => () => void;
             getDHTConnectionStatus: () => Promise<{ success: boolean; connected: boolean | null; error: string | null }>;
             getNetworkMode: () => Promise<{ success: boolean; mode: NetworkMode; error: string | null }>;
             setNetworkMode: (mode: NetworkMode) => Promise<{ success: boolean; error: string | null }>;
@@ -106,7 +106,19 @@ declare global {
 
             // Bootstrap nodes
             getBootstrapNodes: () => Promise<{ success: boolean; nodes: Array<{ address: string; connected: boolean }>; error: string | null }>;
-            retryBootstrap: () => Promise<{ success: boolean; error: string | null }>;
+            retryBootstrap: () => Promise<{
+                success: boolean;
+                result: {
+                    status: 'connected' | 'all_failed' | 'no_candidates' | 'aborted';
+                    connectedAddresses: string[];
+                    connectedPeerIds: string[];
+                    connectedCount: number;
+                    targetConnectionCount: number;
+                    targetReached: boolean;
+                    attempts: Array<{ address: string; ok: boolean; durationMs: number; error?: string }>;
+                } | null;
+                error: string | null;
+            }>;
             retryRelays: () => Promise<{ success: boolean; attempted: number; connected: number; error: string | null }>;
             getRelayStatus: () => Promise<{ success: boolean; nodes: Array<{ address: string; connected: boolean }>; error: string | null }>;
             addRelayNode: (address: string) => Promise<{ success: boolean; error: string | null }>;
