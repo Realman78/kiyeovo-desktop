@@ -17,7 +17,12 @@ import { ProfileManager } from '../core/lib/profile-manager.js';
 import { GroupCreator } from '../core/lib/group/group-creator.js';
 import { GroupResponder } from '../core/lib/group/group-responder.js';
 import { ChatDatabase } from '../core/lib/db/database.js';
-import { DEFAULT_FAST_RELAY_MULTIADDRS } from '../core/default-relay-nodes.js';
+import {
+  getConfiguredFastRelayAddrs,
+  getFastRelayStatusSnapshot,
+  normalizeFastRelayAddressList,
+  serializeFastRelayAddressList,
+} from '../core/lib/node-relays.js';
 import { ensureAppDataDir } from '../core/utils/miscellaneous.js';
 import { homedir } from 'os';
 import { basename, isAbsolute, join, resolve as resolvePath } from 'path';
@@ -41,17 +46,6 @@ function withSettingsDatabase<T>(getP2PCore: () => P2PCore | null, run: (db: Cha
   } finally {
     tempDb.close();
   }
-}
-
-function parseRelayMultiaddrList(raw: string): string[] {
-  return Array.from(
-    new Set(
-      raw
-        .split(/[\n,]/)
-        .map(value => value.trim())
-        .filter(Boolean)
-    )
-  );
 }
 
 function normalizeAddressList(addresses: string[]): string[] {
@@ -609,43 +603,7 @@ function setupBootstrapHandlers(
         return { success: true, nodes: [], error: null };
       }
 
-      const rawRelaySetting = p2pCore.database.getSetting(FAST_RELAY_MULTIADDRS_SETTING_KEY);
-      const relayAddresses = rawRelaySetting === null
-        ? DEFAULT_FAST_RELAY_MULTIADDRS
-        : parseRelayMultiaddrList(rawRelaySetting);
-
-      const connectedPeerIds = new Set(
-        p2pCore.node.getConnections().map((connection) => connection.remotePeer.toString()),
-      );
-
-      const reservedRelayPeerIds = new Set(
-        p2pCore.node
-          .getMultiaddrs()
-          .map((addr) => addr.toString())
-          .filter((addr) => addr.includes('/p2p-circuit'))
-          .map((addr) => {
-            const beforeCircuit = addr.split('/p2p-circuit')[0] ?? '';
-            if (!beforeCircuit) return null;
-            try {
-              return multiaddr(beforeCircuit).getPeerId() ?? null;
-            } catch {
-              return null;
-            }
-          })
-          .filter((peerId): peerId is string => peerId !== null),
-      );
-
-      const nodes = relayAddresses.map((address) => {
-        let peerId: string | null = null;
-        try {
-          peerId = multiaddr(address).getPeerId() ?? null;
-        } catch {
-          peerId = null;
-        }
-        const connected = peerId !== null
-          && (connectedPeerIds.has(peerId) || reservedRelayPeerIds.has(peerId));
-        return { address, connected };
-      });
+      const { nodes } = getFastRelayStatusSnapshot(p2pCore.node, p2pCore.database);
 
       return { success: true, nodes, error: null };
     } catch (error) {
@@ -669,17 +627,14 @@ function setupBootstrapHandlers(
       }
 
       withSettingsDatabase(getP2PCore, (db) => {
-        const stored = db.getSetting(FAST_RELAY_MULTIADDRS_SETTING_KEY);
-        const existing = stored === null
-          ? [...DEFAULT_FAST_RELAY_MULTIADDRS]
-          : parseRelayMultiaddrList(stored);
+        const existing = [...getConfiguredFastRelayAddrs(db).addresses];
 
         if (existing.includes(normalized)) {
           throw new Error('Relay node already exists');
         }
 
         existing.push(normalized);
-        db.setSetting(FAST_RELAY_MULTIADDRS_SETTING_KEY, existing.join(','));
+        db.setSetting(FAST_RELAY_MULTIADDRS_SETTING_KEY, serializeFastRelayAddressList(existing));
       });
 
       if (p2pCore && p2pCore.networkMode === NETWORK_MODES.FAST) {
@@ -711,12 +666,9 @@ function setupBootstrapHandlers(
       }
 
       withSettingsDatabase(getP2PCore, (db) => {
-        const stored = db.getSetting(FAST_RELAY_MULTIADDRS_SETTING_KEY);
-        const existing = stored === null
-          ? [...DEFAULT_FAST_RELAY_MULTIADDRS]
-          : parseRelayMultiaddrList(stored);
+        const existing = getConfiguredFastRelayAddrs(db).addresses;
         const next = existing.filter((entry) => entry !== normalized);
-        db.setSetting(FAST_RELAY_MULTIADDRS_SETTING_KEY, next.join(','));
+        db.setSetting(FAST_RELAY_MULTIADDRS_SETTING_KEY, serializeFastRelayAddressList(next));
       });
 
       return { success: true, error: null };
@@ -730,11 +682,8 @@ function setupBootstrapHandlers(
   ipcMain.handle(IPC_CHANNELS.REORDER_RELAY_NODES, async (_event, addresses: string[]) => {
     try {
       withSettingsDatabase(getP2PCore, (db) => {
-        const incoming = normalizeAddressList(addresses);
-        const existingRaw = db.getSetting(FAST_RELAY_MULTIADDRS_SETTING_KEY);
-        const existing = existingRaw === null
-          ? [...DEFAULT_FAST_RELAY_MULTIADDRS]
-          : parseRelayMultiaddrList(existingRaw);
+        const incoming = normalizeFastRelayAddressList(addresses);
+        const existing = getConfiguredFastRelayAddrs(db).addresses;
         const existingSet = new Set(existing);
 
         if (incoming.length !== existingSet.size || incoming.some((address) => !existingSet.has(address))) {
@@ -748,7 +697,7 @@ function setupBootstrapHandlers(
           }
         }
 
-        db.setSetting(FAST_RELAY_MULTIADDRS_SETTING_KEY, incoming.join(','));
+        db.setSetting(FAST_RELAY_MULTIADDRS_SETTING_KEY, serializeFastRelayAddressList(incoming));
       });
 
       return { success: true, error: null };

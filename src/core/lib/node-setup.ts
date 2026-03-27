@@ -10,5 +10,10 @@ export {
 export {
   dialConfiguredFastRelays,
   getConfiguredFastRelayAddrs,
+  getFastRelayStatusSnapshot,
+  normalizeFastRelayAddressList,
+  parseFastRelayAddressList,
+  serializeFastRelayAddressList,
   type FastRelayDialResult,
+  type FastRelayStatusSnapshot,
 } from './node-relays.js';

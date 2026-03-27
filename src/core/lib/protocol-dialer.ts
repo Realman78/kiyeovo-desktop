@@ -2,9 +2,9 @@ import type { PeerId, Stream } from '@libp2p/interface';
 import { multiaddr } from '@multiformats/multiaddr';
 
 import type { ChatNode } from '../types.js';
-import { FAST_RELAY_MULTIADDRS_SETTING_KEY, NETWORK_MODES, getNetworkModeConfig } from '../constants.js';
-import { DEFAULT_FAST_RELAY_MULTIADDRS } from '../default-relay-nodes.js';
+import { NETWORK_MODES, getNetworkModeConfig } from '../constants.js';
 import type { ChatDatabase } from './db/database.js';
+import { getConfiguredFastRelayAddrs } from './node-relays.js';
 
 type DialProtocolWithRelayFallbackParams = {
   node: ChatNode;
@@ -13,23 +13,6 @@ type DialProtocolWithRelayFallbackParams = {
   protocol: string;
   context: string;
 };
-
-function parseRelayMultiaddrs(raw: string): string[] {
-  return Array.from(
-    new Set(
-      raw
-        .split(/[\n,]/)
-        .map((value) => value.trim())
-        .filter(Boolean)
-    )
-  );
-}
-
-export function getConfiguredFastRelayMultiaddrs(database: ChatDatabase): string[] {
-  const configured = database.getSetting(FAST_RELAY_MULTIADDRS_SETTING_KEY);
-  const source = configured ?? DEFAULT_FAST_RELAY_MULTIADDRS.join(',');
-  return parseRelayMultiaddrs(source);
-}
 
 export async function dialProtocolWithRelayFallback(
   params: DialProtocolWithRelayFallbackParams
@@ -62,7 +45,7 @@ export async function dialProtocolWithRelayFallback(
       throw directDialError;
     }
 
-    const relayAddrs = getConfiguredFastRelayMultiaddrs(database);
+    const relayAddrs = getConfiguredFastRelayAddrs(database).addresses;
     if (relayAddrs.length === 0) {
       throw directDialError;
     }
