@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { Wifi, WifiOff, Loader2 } from "lucide-react";
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../ui/Dialog";
 import { useToast } from "../../ui/use-toast";
-import type { NetworkMode } from "../../../../core/types";
+import type { BootstrapConnectResult, NetworkMode } from "../../../../core/types";
 import { ConnectionNodesTab } from "./ConnectionNodesTab";
 
 interface BootstrapNode {
@@ -20,6 +20,22 @@ interface ConnectionStatusDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   isConnected: boolean | null;
+}
+
+function getUnexpectedErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'Unexpected error occurred';
+}
+
+function unwrapIpcResult<T extends { success: boolean; error: string | null }>(
+  result: T,
+  fallbackMessage: string,
+): Omit<T, 'success' | 'error'> {
+  if (!result.success) {
+    throw new Error(result.error || fallbackMessage);
+  }
+
+  const { success: _success, error: _error, ...payload } = result;
+  return payload;
 }
 
 const ConnectionStatusDialog = ({
@@ -50,12 +66,11 @@ const ConnectionStatusDialog = ({
   const relayReorderInFlightRef = useRef(false);
 
   const refreshBootstrapNodes = async () => {
-    const nodesResult = await window.kiyeovoAPI.getBootstrapNodes();
-    if (!nodesResult.success) {
-      throw new Error(nodesResult.error || 'Failed to fetch bootstrap nodes');
-    }
-
-    const fetchedNodes: BootstrapNode[] = nodesResult.nodes.map((node, index) => ({
+    const { nodes } = unwrapIpcResult(
+      await window.kiyeovoAPI.getBootstrapNodes(),
+      'Failed to fetch bootstrap nodes',
+    );
+    const fetchedNodes: BootstrapNode[] = nodes.map((node, index) => ({
       id: `${index}`,
       address: node.address,
       connected: node.connected,
@@ -64,11 +79,11 @@ const ConnectionStatusDialog = ({
   };
 
   const refreshRelayNodes = async () => {
-    const relayResult = await window.kiyeovoAPI.getRelayStatus();
-    if (!relayResult.success) {
-      throw new Error(relayResult.error || 'Failed to fetch relay nodes');
-    }
-    setRelayNodes(relayResult.nodes);
+    const { nodes } = unwrapIpcResult(
+      await window.kiyeovoAPI.getRelayStatus(),
+      'Failed to fetch relay nodes',
+    );
+    setRelayNodes(nodes);
   };
 
   const refreshConnectionSnapshot = async (modeOverride?: NetworkMode) => {
@@ -110,7 +125,7 @@ const ConnectionStatusDialog = ({
 
         await refreshConnectionSnapshot(modeResult.mode);
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Unexpected error occurred';
+        const message = getUnexpectedErrorMessage(error);
         setBootstrapError(message);
         setRelayError(message);
       } finally {
@@ -151,45 +166,45 @@ const ConnectionStatusDialog = ({
     toast.error(message);
   };
 
+  const showRelayError = (message: string) => {
+    setRelayError(message);
+    toast.error(message);
+  };
+
+  const handleBootstrapRetryResult = (result: BootstrapConnectResult | null) => {
+    switch (result?.status) {
+      case 'connected':
+        toast.success(
+          `Connected to ${result.connectedCount} bootstrap node${result.connectedCount === 1 ? '' : 's'}`
+        );
+        break;
+      case 'no_candidates':
+        showBootstrapError('No bootstrap nodes configured');
+        break;
+      case 'all_failed':
+        showBootstrapError('All configured bootstrap nodes failed');
+        break;
+      case 'aborted':
+        showBootstrapError('Bootstrap retry was aborted');
+        break;
+      default:
+        toast.success('Bootstrap retry complete');
+    }
+  };
+
   const handleRetryBootstrap = async () => {
     setIsRetryingBootstrap(true);
     setBootstrapError(null);
 
     try {
-      const {result, success, error} = await window.kiyeovoAPI.retryBootstrap();
-      if (!success) {
-        const message = error || 'Failed to retry bootstrap connection';
-        showBootstrapError(message);
-        return;
-      }
-
+      const { result } = unwrapIpcResult(
+        await window.kiyeovoAPI.retryBootstrap(),
+        'Failed to retry bootstrap connection',
+      );
       await refreshConnectionSnapshotAfterRetry(networkMode);
-      switch (result?.status) {
-        case 'connected':
-          toast.success(
-            `Connected to ${result.connectedCount} bootstrap node${result.connectedCount === 1 ? '' : 's'}`
-          );
-          break;
-        case 'no_candidates': {
-          const message = 'No bootstrap nodes configured';
-          showBootstrapError(message);
-          break;
-        }
-        case 'all_failed': {
-          const message = 'All configured bootstrap nodes failed';
-          showBootstrapError(message);
-          break;
-        }
-        case 'aborted': {
-          const message = 'Bootstrap retry was aborted';
-          showBootstrapError(message);
-          break;
-        }
-        default:
-          toast.success('Bootstrap retry complete');
-      }
+      handleBootstrapRetryResult(result);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unexpected error occurred';
+      const message = getUnexpectedErrorMessage(error);
       showBootstrapError(message);
     } finally {
       setIsRetryingBootstrap(false);
@@ -201,20 +216,15 @@ const ConnectionStatusDialog = ({
     setRelayError(null);
 
     try {
-      const result = await window.kiyeovoAPI.retryRelays();
-      if (!result.success) {
-        const message = result.error || 'Failed to retry relay reservations';
-        setRelayError(message);
-        toast.error(message);
-        return;
-      }
-
+      const result = unwrapIpcResult(
+        await window.kiyeovoAPI.retryRelays(),
+        'Failed to retry relay reservations',
+      );
       await refreshConnectionSnapshotAfterRetry(networkMode);
       toast.success(`Relay retry complete (${result.connected}/${result.attempted})`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unexpected error occurred';
-      setRelayError(message);
-      toast.error(message);
+      const message = getUnexpectedErrorMessage(error);
+      showRelayError(message);
     } finally {
       setIsRetryingRelays(false);
     }
@@ -231,16 +241,14 @@ const ConnectionStatusDialog = ({
 
     setBootstrapError(null);
     try {
-      const result = await window.kiyeovoAPI.addBootstrapNode(normalizedAddress);
-      if (!result.success) {
-        setBootstrapError(result.error || 'Failed to add bootstrap node');
-        return;
-      }
-
+      unwrapIpcResult(
+        await window.kiyeovoAPI.addBootstrapNode(normalizedAddress),
+        'Failed to add bootstrap node',
+      );
       await refreshBootstrapNodes();
       setNewBootstrapAddress("");
     } catch (error) {
-      setBootstrapError(error instanceof Error ? error.message : 'Unexpected error occurred');
+      setBootstrapError(getUnexpectedErrorMessage(error));
     }
   };
 
@@ -255,54 +263,42 @@ const ConnectionStatusDialog = ({
 
     setRelayError(null);
     try {
-      const result = await window.kiyeovoAPI.addRelayNode(normalizedAddress);
-      if (!result.success) {
-        const message = result.error || 'Failed to add relay node';
-        setRelayError(message);
-        toast.error(message);
-        return;
-      }
-
+      unwrapIpcResult(
+        await window.kiyeovoAPI.addRelayNode(normalizedAddress),
+        'Failed to add relay node',
+      );
       await refreshRelayNodes();
       setNewRelayAddress("");
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unexpected error occurred';
-      setRelayError(message);
-      toast.error(message);
+      const message = getUnexpectedErrorMessage(error);
+      showRelayError(message);
     }
   };
 
   const handleRemoveBootstrapNode = async (address: string) => {
     setBootstrapError(null);
     try {
-      const result = await window.kiyeovoAPI.removeBootstrapNode(address);
-      if (!result.success) {
-        setBootstrapError(result.error || 'Failed to remove bootstrap node');
-        return;
-      }
-
+      unwrapIpcResult(
+        await window.kiyeovoAPI.removeBootstrapNode(address),
+        'Failed to remove bootstrap node',
+      );
       await refreshBootstrapNodes();
     } catch (error) {
-      setBootstrapError(error instanceof Error ? error.message : 'Unexpected error occurred');
+      setBootstrapError(getUnexpectedErrorMessage(error));
     }
   };
 
   const handleRemoveRelayNode = async (address: string) => {
     setRelayError(null);
     try {
-      const result = await window.kiyeovoAPI.removeRelayNode(address);
-      if (!result.success) {
-        const message = result.error || 'Failed to remove relay node';
-        setRelayError(message);
-        toast.error(message);
-        return;
-      }
-
+      unwrapIpcResult(
+        await window.kiyeovoAPI.removeRelayNode(address),
+        'Failed to remove relay node',
+      );
       await refreshRelayNodes();
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unexpected error occurred';
-      setRelayError(message);
-      toast.error(message);
+      const message = getUnexpectedErrorMessage(error);
+      showRelayError(message);
     }
   };
 
@@ -320,13 +316,12 @@ const ConnectionStatusDialog = ({
 
     try {
       const addresses = newNodes.map((n) => n.address);
-      const result = await window.kiyeovoAPI.reorderBootstrapNodes(addresses);
-      if (!result.success) {
-        setBootstrapError(result.error || 'Failed to reorder bootstrap nodes');
-        await refreshBootstrapNodes();
-      }
+      unwrapIpcResult(
+        await window.kiyeovoAPI.reorderBootstrapNodes(addresses),
+        'Failed to reorder bootstrap nodes',
+      );
     } catch (error) {
-      setBootstrapError(error instanceof Error ? error.message : 'Unexpected error occurred');
+      setBootstrapError(getUnexpectedErrorMessage(error));
       await refreshBootstrapNodes();
     } finally {
       bootstrapReorderInFlightRef.current = false;
@@ -348,13 +343,12 @@ const ConnectionStatusDialog = ({
 
     try {
       const addresses = newNodes.map((n) => n.address);
-      const result = await window.kiyeovoAPI.reorderRelayNodes(addresses);
-      if (!result.success) {
-        setRelayError(result.error || 'Failed to reorder relay nodes');
-        await refreshRelayNodes();
-      }
+      unwrapIpcResult(
+        await window.kiyeovoAPI.reorderRelayNodes(addresses),
+        'Failed to reorder relay nodes',
+      );
     } catch (error) {
-      setRelayError(error instanceof Error ? error.message : 'Unexpected error occurred');
+      setRelayError(getUnexpectedErrorMessage(error));
       await refreshRelayNodes();
     } finally {
       relayReorderInFlightRef.current = false;

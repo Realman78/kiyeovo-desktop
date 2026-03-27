@@ -46,6 +46,16 @@ type BootstrapRuntime = {
   datastorePath: string;
 };
 
+type BootstrapRuntimeConfig = {
+  networkMode: 'fast' | 'anonymous';
+  modeConfig: ReturnType<typeof getNetworkModeConfig>;
+  modeRuntime: ReturnType<typeof getNetworkModeRuntime>;
+  torConfig: ReturnType<typeof getTorConfig>;
+  isAnonymousMode: boolean;
+  announceAddrs: string[];
+  datastorePath: string;
+};
+
 function readBootstrapNetworkMode(): 'fast' | 'anonymous' {
   const raw = process.env.BOOTSTRAP_NETWORK_MODE?.trim().toLowerCase();
   if (isNetworkMode(raw)) {
@@ -59,79 +69,228 @@ function readBootstrapNetworkMode(): 'fast' | 'anonymous' {
   return DEFAULT_NETWORK_MODE;
 }
 
-async function createBootstrapNode(): Promise<BootstrapRuntime> {
-  const { privateKey } = await PeerIdManager.loadOrCreate(BOOTSTRAP_PEER_ID_FILE);
-  const networkMode = readBootstrapNetworkMode();
-  const modeConfig = getNetworkModeConfig(networkMode);
-  const modeRuntime = getNetworkModeRuntime(networkMode);
-  const torConfig = getTorConfig();
-  const isAnonymousMode = networkMode === NETWORK_MODES.ANONYMOUS;
-  const datastorePath = resolve(join('./bootstrap-datastore', networkMode));
+function validateBootstrapAnnounceAddress(address: string, isAnonymousMode: boolean): string | null {
+  try {
+    const announceAddress = multiaddr(address);
+    const multiaddrComponents = announceAddress.getComponents();
+    
+    const protocols = multiaddrComponents.map((component) => component.code);
+    const isOnion = protocols.includes(445);
 
-  await mkdir(datastorePath, { recursive: true });
-  const datastore = new LevelDatastore(datastorePath);
-  await datastore.open();
-  // datastore-level can resolve a separate interface-datastore type instance; cast to libp2p Datastore type for wiring.
-  const libp2pDatastore = datastore as unknown as Datastore;
-
-  const announceAddrs: string[] = [];
-  if (process.env.BOOTSTRAP_ANNOUNCE_ADDRS) {
-    const rawAddrs = process.env.BOOTSTRAP_ANNOUNCE_ADDRS.split(',').map(addr => addr.trim()).filter(Boolean);
-
-    for (const addr of rawAddrs) {
-      try {
-        const ma = multiaddr(addr);
-        const protocols = ma.getComponents().map(c => c.code);
-        const isOnion = protocols.includes(445);
-
-        if (isOnion) {
-          // Validate onion address format
-          const onionTuple = ma.getComponents().find(c => c.code === 445);
-          if (onionTuple?.value) {
-            const [onionHost] = onionTuple.value.split(':');
-            if (onionHost && !/^[a-z2-7]{56}$/i.test(onionHost)) {
-              console.warn(`[BOOTSTRAP] Invalid onion v3 address ignored: ${addr} (must be 56 characters base32)`);
-              continue;
-            }
-          }
+    if (isOnion) {
+      const onionTuple = multiaddrComponents.find((component) => component.code === 445);
+      if (onionTuple?.value) {
+        const [onionHost] = onionTuple.value.split(':');
+        if (onionHost && !/^[a-z2-7]{56}$/i.test(onionHost)) {
+          console.warn(`[BOOTSTRAP] Invalid onion v3 address ignored: ${address} (must be 56 characters base32)`);
+          return null;
         }
-
-        if (isAnonymousMode && !isOnion) {
-          console.warn(`[STACK][BOOTSTRAP] ignoring non-onion announce address in anonymous mode: ${addr}`);
-          continue;
-        }
-
-        if (!isAnonymousMode && isOnion) {
-          console.warn(`[STACK][BOOTSTRAP] ignoring onion announce address in fast mode: ${addr}`);
-          continue;
-        }
-
-        announceAddrs.push(addr);
-      } catch {
-        console.warn(`[BOOTSTRAP] Invalid announce address ignored: ${addr}`);
       }
     }
-  }
 
-  if (isAnonymousMode && announceAddrs.length === 0) {
+    if (isAnonymousMode && !isOnion) {
+      console.warn(`[STACK][BOOTSTRAP] ignoring non-onion announce address in anonymous mode: ${address}`);
+      return null;
+    }
+
+    if (!isAnonymousMode && isOnion) {
+      console.warn(`[STACK][BOOTSTRAP] ignoring onion announce address in fast mode: ${address}`);
+      return null;
+    }
+
+    return address;
+  } catch {
+    console.warn(`[BOOTSTRAP] Invalid announce address ignored: ${address}`);
+    return null;
+  }
+}
+
+function readBootstrapAnnounceAddrs(isAnonymousMode: boolean): string[] {
+  const rawAddrs = process.env.BOOTSTRAP_ANNOUNCE_ADDRS
+    ?.split(',')
+    .map((address) => address.trim())
+    .filter(Boolean) ?? [];
+
+  return rawAddrs
+    .map((address) => validateBootstrapAnnounceAddress(address, isAnonymousMode))
+    .filter((address): address is string => address !== null);
+}
+
+function readBootstrapRuntimeConfig(): BootstrapRuntimeConfig {
+  const networkMode = readBootstrapNetworkMode();
+  const isAnonymousMode = networkMode === NETWORK_MODES.ANONYMOUS;
+  const announceAddrs = readBootstrapAnnounceAddrs(isAnonymousMode);
+  const runtimeConfig: BootstrapRuntimeConfig = {
+    networkMode,
+    modeConfig: getNetworkModeConfig(networkMode),
+    modeRuntime: getNetworkModeRuntime(networkMode),
+    torConfig: getTorConfig(),
+    isAnonymousMode,
+    announceAddrs,
+    datastorePath: resolve(join('./bootstrap-datastore', networkMode)),
+  };
+
+  if (runtimeConfig.isAnonymousMode && runtimeConfig.announceAddrs.length === 0) {
     console.warn('[STACK][BOOTSTRAP] anonymous mode configured without onion announce addresses');
   }
 
-  console.log(`[STACK][BOOTSTRAP] mode=${networkMode}`);
-  console.log(`[STACK][BOOTSTRAP] transport=tcp`);
-  console.log(`[STACK][BOOTSTRAP] dhtProtocol=${modeConfig.dhtProtocol}`);
-  console.log(`[STACK][BOOTSTRAP] announceCount=${announceAddrs.length}`);
-  console.log(`[STACK][BOOTSTRAP] datastore=${datastorePath}`);
-  console.log(`[STACK][BOOTSTRAP] tor_defaults_proxy=${torConfig.socksHost}:${torConfig.socksPort}`);
+  return runtimeConfig;
+}
 
-  const transports = [tcp()];
+function logBootstrapRuntimeConfig(runtimeConfig: BootstrapRuntimeConfig): void {
+  console.log(`[STACK][BOOTSTRAP] mode=${runtimeConfig.networkMode}`);
+  console.log('[STACK][BOOTSTRAP] transport=tcp');
+  console.log(`[STACK][BOOTSTRAP] dhtProtocol=${runtimeConfig.modeConfig.dhtProtocol}`);
+  console.log(`[STACK][BOOTSTRAP] announceCount=${runtimeConfig.announceAddrs.length}`);
+  console.log(`[STACK][BOOTSTRAP] datastore=${runtimeConfig.datastorePath}`);
+  console.log(
+    `[STACK][BOOTSTRAP] tor_defaults_proxy=${runtimeConfig.torConfig.socksHost}:${runtimeConfig.torConfig.socksPort}`
+  );
 
-  if (isAnonymousMode) {
+  if (runtimeConfig.isAnonymousMode) {
     console.log('Bootstrap: anonymous mode enabled (onion-only announce filtering active)');
-    console.log(`Bootstrap: Tor proxy defaults ${torConfig.socksHost}:${torConfig.socksPort}`);
+    console.log(
+      `Bootstrap: Tor proxy defaults ${runtimeConfig.torConfig.socksHost}:${runtimeConfig.torConfig.socksPort}`
+    );
   } else {
     console.log('Bootstrap: fast mode enabled (non-onion announce filtering active)');
   }
+}
+
+function createBootstrapValidateUpdate(runtimeConfig: BootstrapRuntimeConfig) {
+  return async (key: Uint8Array, existing: Uint8Array, incoming: Uint8Array) => {
+    const keyStr = new TextDecoder().decode(key);
+    if (keyStr.startsWith(runtimeConfig.modeRuntime.dhtKeyPrefixes.offline)) {
+      return offlineMessageValidateUpdate(key, existing, incoming);
+    }
+    if (keyStr.startsWith(runtimeConfig.modeRuntime.dhtKeyPrefixes.username)) {
+      return usernameRegistrationValidateUpdate(key, existing, incoming);
+    }
+    if (keyStr.startsWith(runtimeConfig.modeRuntime.dhtKeyPrefixes.groupOffline)) {
+      return groupOfflineValidateUpdate(key, existing, incoming);
+    }
+    if (keyStr.startsWith(runtimeConfig.modeRuntime.dhtKeyPrefixes.groupInfoLatest)) {
+      return groupInfoLatestValidateUpdate(key, existing, incoming);
+    }
+    if (keyStr.startsWith(runtimeConfig.modeRuntime.dhtKeyPrefixes.groupInfoVersion)) {
+      return groupInfoVersionedValidateUpdate(key, existing, incoming);
+    }
+    console.warn(
+      `[MODE-GUARD][REJECT][dht_validate_update][bootstrap] mode=${runtimeConfig.networkMode} reason=unknown_namespace key=${keyStr}`
+    );
+    throw new Error('cross_mode_dht_key_rejected');
+  };
+}
+
+function createBootstrapServices(runtimeConfig: BootstrapRuntimeConfig) {
+  return {
+    pubsub: gossipsub({
+      doPX: true,
+      fallbackToFloodsub: false,
+      allowPublishToZeroTopicPeers: false,
+    }),
+    dht: kadDHT({
+      protocol: runtimeConfig.modeConfig.dhtProtocol,
+      peerInfoMapper: runtimeConfig.isAnonymousMode ? filterOnionAddressesMapper : passthroughMapper,
+      clientMode: false,
+      kBucketSize: K_BUCKET_SIZE,
+      prefixLength: PREFIX_LENGTH,
+      validators: {
+        [runtimeConfig.modeRuntime.dhtNamespaceNames.offline]: offlineMessageValidator,
+        [runtimeConfig.modeRuntime.dhtNamespaceNames.username]: usernameRegistrationValidator,
+        [runtimeConfig.modeRuntime.dhtNamespaceNames.groupOffline]: groupOfflineMessageValidator,
+        [runtimeConfig.modeRuntime.dhtNamespaceNames.groupInfoLatest]: groupInfoLatestValidator,
+        [runtimeConfig.modeRuntime.dhtNamespaceNames.groupInfoVersion]: groupInfoVersionedValidator,
+      },
+      selectors: {
+        [runtimeConfig.modeRuntime.dhtNamespaceNames.offline]: offlineMessageSelector,
+        [runtimeConfig.modeRuntime.dhtNamespaceNames.username]: usernameRegistrationSelector,
+        [runtimeConfig.modeRuntime.dhtNamespaceNames.groupOffline]: groupOfflineMessageSelector,
+        [runtimeConfig.modeRuntime.dhtNamespaceNames.groupInfoLatest]: groupInfoLatestSelector,
+        [runtimeConfig.modeRuntime.dhtNamespaceNames.groupInfoVersion]: groupInfoVersionedSelector,
+      },
+      validateUpdate: createBootstrapValidateUpdate(runtimeConfig),
+    }),
+    identify: identify({
+      runOnConnectionOpen: true,
+    }),
+    ping: ping({
+      timeout: runtimeConfig.isAnonymousMode ? 60000 : 10000,
+    }),
+  };
+}
+
+function registerBootstrapLifecycleLogging(bootstrap: ChatNode, datastorePath: string): void {
+  console.log(`Bootstrap Peer ID: ${bootstrap.peerId.toString()}`);
+  console.log(`[STACK][BOOTSTRAP] datastore_opened=${datastorePath}`);
+
+  bootstrap.getMultiaddrs().forEach((address) => {
+    console.log(`Listening on: ${address.toString()}`);
+  });
+
+  bootstrap.addEventListener('peer:connect', (evt: CustomEvent<PeerId>) => {
+    const peerId: PeerId = evt.detail;
+    console.log(`Peer connected: ${peerId.toString()}`);
+  });
+
+  bootstrap.addEventListener('peer:disconnect', (evt: CustomEvent<PeerId>) => {
+    const peerId: PeerId = evt.detail;
+    console.log(`Peer disconnected: ${peerId.toString()}`);
+  });
+
+  console.log('Bootstrap node ready for connections...');
+}
+
+function registerBootstrapShutdownHandlers({ node, datastore }: BootstrapRuntime): void {
+  let shuttingDown = false;
+  const shutdown = async (signal: 'SIGINT' | 'SIGTERM'): Promise<void> => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+
+    console.log(`\nShutting down bootstrap node (${signal})...`);
+
+    try {
+      await node.stop();
+    } catch (stopError: unknown) {
+      console.error(
+        `[STACK][BOOTSTRAP] failed to stop libp2p cleanly: ${
+          stopError instanceof Error ? stopError.message : String(stopError)
+        }`
+      );
+    }
+
+    try {
+      await datastore.close();
+    } catch (closeError: unknown) {
+      console.error(
+        `[STACK][BOOTSTRAP] failed to close datastore cleanly: ${
+          closeError instanceof Error ? closeError.message : String(closeError)
+        }`
+      );
+    }
+
+    process.exit(0);
+  };
+
+  process.on('SIGINT', () => {
+    void shutdown('SIGINT');
+  });
+
+  process.on('SIGTERM', () => {
+    void shutdown('SIGTERM');
+  });
+}
+
+async function createBootstrapNode(): Promise<BootstrapRuntime> {
+  const { privateKey } = await PeerIdManager.loadOrCreate(BOOTSTRAP_PEER_ID_FILE);
+  const runtimeConfig = readBootstrapRuntimeConfig();
+
+  await mkdir(runtimeConfig.datastorePath, { recursive: true });
+  const datastore = new LevelDatastore(runtimeConfig.datastorePath);
+  await datastore.open();
+  // datastore-level can resolve a separate interface-datastore type instance; cast to libp2p Datastore type for wiring.
+  const libp2pDatastore = datastore as unknown as Datastore;
+  logBootstrapRuntimeConfig(runtimeConfig);
 
   try {
     const bootstrap = await createLibp2p({
@@ -139,9 +298,9 @@ async function createBootstrapNode(): Promise<BootstrapRuntime> {
       datastore: libp2pDatastore,
       addresses: {
         listen: [BOOTSTRAP_LISTEN_ADDRESS],
-        announce: announceAddrs
+        announce: runtimeConfig.announceAddrs
       },
-      transports: transports,
+      transports: [tcp()],
       connectionEncrypters: [noise()],
       streamMuxers: [yamux()],
       connectionManager: {
@@ -150,77 +309,22 @@ async function createBootstrapNode(): Promise<BootstrapRuntime> {
       },
       connectionMonitor: {
         enabled: true,
-        pingInterval: isAnonymousMode ? 120000 : 30000,
+        pingInterval: runtimeConfig.isAnonymousMode ? 120000 : 30000,
         pingTimeout: {
-          minTimeout: isAnonymousMode ? 30000 : 5000,
-          maxTimeout: isAnonymousMode ? 120000 : 30000,
+          minTimeout: runtimeConfig.isAnonymousMode ? 30000 : 5000,
+          maxTimeout: runtimeConfig.isAnonymousMode ? 120000 : 30000,
         },
         // Keep connections alive on transient ping misses; periodic health checker handles reconnect policy.
         abortConnectionOnPingFailure: false,
       },
-      services: {
-        pubsub: gossipsub({
-          doPX: true,
-          fallbackToFloodsub: false,
-          allowPublishToZeroTopicPeers: false,
-        }),
-        dht: kadDHT({
-          protocol: modeConfig.dhtProtocol,
-          peerInfoMapper: isAnonymousMode ? filterOnionAddressesMapper : passthroughMapper,
-          clientMode: false,
-          kBucketSize: K_BUCKET_SIZE,
-          prefixLength: PREFIX_LENGTH,
-          validators: {
-            [modeRuntime.dhtNamespaceNames.offline]: offlineMessageValidator,
-            [modeRuntime.dhtNamespaceNames.username]: usernameRegistrationValidator,
-            [modeRuntime.dhtNamespaceNames.groupOffline]: groupOfflineMessageValidator,
-            [modeRuntime.dhtNamespaceNames.groupInfoLatest]: groupInfoLatestValidator,
-            [modeRuntime.dhtNamespaceNames.groupInfoVersion]: groupInfoVersionedValidator,
-          },
-          selectors: {
-            [modeRuntime.dhtNamespaceNames.offline]: offlineMessageSelector,
-            [modeRuntime.dhtNamespaceNames.username]: usernameRegistrationSelector,
-            [modeRuntime.dhtNamespaceNames.groupOffline]: groupOfflineMessageSelector,
-            [modeRuntime.dhtNamespaceNames.groupInfoLatest]: groupInfoLatestSelector,
-            [modeRuntime.dhtNamespaceNames.groupInfoVersion]: groupInfoVersionedSelector,
-          },
-          validateUpdate: async (key, existing, incoming) => {
-            const keyStr = new TextDecoder().decode(key);
-            if (keyStr.startsWith(modeRuntime.dhtKeyPrefixes.offline)) {
-              return offlineMessageValidateUpdate(key, existing, incoming);
-            }
-            if (keyStr.startsWith(modeRuntime.dhtKeyPrefixes.username)) {
-              return usernameRegistrationValidateUpdate(key, existing, incoming);
-            }
-            if (keyStr.startsWith(modeRuntime.dhtKeyPrefixes.groupOffline)) {
-              return groupOfflineValidateUpdate(key, existing, incoming);
-            }
-            if (keyStr.startsWith(modeRuntime.dhtKeyPrefixes.groupInfoLatest)) {
-              return groupInfoLatestValidateUpdate(key, existing, incoming);
-            }
-            if (keyStr.startsWith(modeRuntime.dhtKeyPrefixes.groupInfoVersion)) {
-              return groupInfoVersionedValidateUpdate(key, existing, incoming);
-            }
-            console.warn(
-              `[MODE-GUARD][REJECT][dht_validate_update][bootstrap] mode=${networkMode} reason=unknown_namespace key=${keyStr}`
-            );
-            throw new Error('cross_mode_dht_key_rejected');
-          }
-        }),
-        identify: identify({
-          runOnConnectionOpen: true
-        }),
-        ping: ping({
-          timeout: isAnonymousMode ? 60000 : 10000,
-        })
-      }
+      services: createBootstrapServices(runtimeConfig),
     });
 
     await bootstrap.start();
     return {
       node: bootstrap as ChatNode,
       datastore,
-      datastorePath,
+      datastorePath: runtimeConfig.datastorePath,
     };
   } catch (error: unknown) {
     try {
@@ -238,65 +342,9 @@ async function createBootstrapNode(): Promise<BootstrapRuntime> {
 
 async function main(): Promise<void> {
   try {
-    const { node: bootstrap, datastore, datastorePath } = await createBootstrapNode();
-    console.log(`Bootstrap Peer ID: ${bootstrap.peerId.toString()}`);
-    console.log(`[STACK][BOOTSTRAP] datastore_opened=${datastorePath}`);
-
-    bootstrap.getMultiaddrs().forEach(addr => {
-      console.log(`Listening on: ${addr.toString()}`);
-    });
-
-    bootstrap.addEventListener('peer:connect', (evt: CustomEvent<PeerId>) => {
-      const peerId: PeerId = evt.detail;
-      console.log(`Peer connected: ${peerId.toString()}`);
-    });
-
-    bootstrap.addEventListener('peer:disconnect', (evt: CustomEvent<PeerId>) => {
-      const peerId: PeerId = evt.detail;
-      console.log(`Peer disconnected: ${peerId.toString()}`);
-    });
-
-    console.log('Bootstrap node ready for connections...');
-
-    let shuttingDown = false;
-    const shutdown = async (signal: 'SIGINT' | 'SIGTERM'): Promise<void> => {
-      if (shuttingDown) return;
-      shuttingDown = true;
-
-      console.log(`\nShutting down bootstrap node (${signal})...`);
-
-      try {
-        await bootstrap.stop();
-      } catch (stopError: unknown) {
-        console.error(
-          `[STACK][BOOTSTRAP] failed to stop libp2p cleanly: ${
-            stopError instanceof Error ? stopError.message : String(stopError)
-          }`
-        );
-      }
-
-      try {
-        await datastore.close();
-      } catch (closeError: unknown) {
-        console.error(
-          `[STACK][BOOTSTRAP] failed to close datastore cleanly: ${
-            closeError instanceof Error ? closeError.message : String(closeError)
-          }`
-        );
-      }
-
-      process.exit(0);
-    };
-
-    process.on('SIGINT', () => {
-      void shutdown('SIGINT');
-    });
-
-    process.on('SIGTERM', () => {
-      void shutdown('SIGTERM');
-    });
-
-
+    const bootstrapRuntime = await createBootstrapNode();
+    registerBootstrapLifecycleLogging(bootstrapRuntime.node, bootstrapRuntime.datastorePath);
+    registerBootstrapShutdownHandlers(bootstrapRuntime);
   } catch (err: unknown) {
     console.error('Failed to start bootstrap node:', err instanceof Error ? err.message : 'Unknown error');
     process.exit(1);

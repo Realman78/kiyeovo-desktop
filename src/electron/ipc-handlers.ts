@@ -7,6 +7,10 @@ import {
   type AppConfig,
   type NetworkMode,
   type CallSignalOutgoingInput,
+  type BootstrapRetryResponse,
+  type ConnectionNodeStatus,
+  type ConnectionNodesResponse,
+  type RelayRetryResponse,
 } from '../core/index.js';
 import { CHATS_TO_CHECK_FOR_OFFLINE_MESSAGES, DEFAULT_NETWORK_MODE, DOWNLOADS_DIR, FAST_RELAY_MULTIADDRS_SETTING_KEY, FILE_OFFER_RATE_LIMIT, KEY_EXCHANGE_RATE_LIMIT_DEFAULT, MAX_FILE_SIZE, MAX_PENDING_FILES_PER_PEER, MAX_PENDING_FILES_TOTAL, NETWORK_MODE_ONBOARDED_SETTING_KEY, OFFLINE_MESSAGE_LIMIT, SILENT_REJECTION_THRESHOLD_GLOBAL, SILENT_REJECTION_THRESHOLD_PER_PEER, NETWORK_MODES, getTorConfig, isNetworkMode } from '../core/constants.js';
 import { validateMessageLength, validateUsername } from '../core/utils/validators.js';
@@ -485,6 +489,25 @@ function setupBootstrapHandlers(
   ipcMain: IpcMain,
   getP2PCore: () => P2PCore | null
 ): void {
+  const failConnectionNodesResponse = (error: string): ConnectionNodesResponse => ({
+    success: false,
+    nodes: [],
+    error,
+  });
+
+  const failBootstrapRetryResponse = (error: string): BootstrapRetryResponse => ({
+    success: false,
+    result: null,
+    error,
+  });
+
+  const failRelayRetryResponse = (error: string): RelayRetryResponse => ({
+    success: false,
+    attempted: 0,
+    connected: 0,
+    error,
+  });
+
   // Get current DHT connection status snapshot
   ipcMain.handle(IPC_CHANNELS.GET_DHT_CONNECTION_STATUS, async () => {
     try {
@@ -510,7 +533,7 @@ function setupBootstrapHandlers(
     try {
       const p2pCore = getP2PCore();
       if (!p2pCore) {
-        return { success: false, nodes: [], error: 'P2P core not initialized' };
+        return failConnectionNodesResponse('P2P core not initialized');
       }
 
       console.log('[IPC] Fetching bootstrap nodes from database...');
@@ -518,7 +541,7 @@ function setupBootstrapHandlers(
       const connectedRemoteAddrs = new Set(
         p2pCore.node.getConnections().map((connection) => connection.remoteAddr.toString()),
       );
-      const nodes = dbNodes.map((node) => {
+      const nodes: ConnectionNodeStatus[] = dbNodes.map((node) => {
         let normalizedAddress: string | null = null;
         try {
           normalizedAddress = multiaddr(node.address).toString();
@@ -536,7 +559,7 @@ function setupBootstrapHandlers(
       return { success: true, nodes, error: null };
     } catch (error) {
       console.error('[IPC] Failed to get bootstrap nodes:', error);
-      return { success: false, nodes: [], error: error instanceof Error ? error.message : 'Failed to get bootstrap nodes' };
+      return failConnectionNodesResponse(error instanceof Error ? error.message : 'Failed to get bootstrap nodes');
     }
   });
 
@@ -545,7 +568,7 @@ function setupBootstrapHandlers(
     try {
       const p2pCore = getP2PCore();
       if (!p2pCore) {
-        return { success: false, error: 'P2P core not initialized' };
+        return failBootstrapRetryResponse('P2P core not initialized');
       }
 
       console.log('[IPC] Retrying bootstrap connection...');
@@ -556,11 +579,7 @@ function setupBootstrapHandlers(
       return { success: true, result, error: null };
     } catch (error) {
       console.error('[IPC] Failed to retry bootstrap:', error);
-      return {
-        success: false,
-        result: null,
-        error: error instanceof Error ? error.message : 'Failed to retry bootstrap connection',
-      };
+      return failBootstrapRetryResponse(error instanceof Error ? error.message : 'Failed to retry bootstrap connection');
     }
   });
 
@@ -569,11 +588,11 @@ function setupBootstrapHandlers(
     try {
       const p2pCore = getP2PCore();
       if (!p2pCore) {
-        return { success: false, attempted: 0, connected: 0, error: 'P2P core not initialized' };
+        return failRelayRetryResponse('P2P core not initialized');
       }
 
       if (p2pCore.networkMode !== NETWORK_MODES.FAST) {
-        return { success: false, attempted: 0, connected: 0, error: 'Relay retry is available only in Fast mode' };
+        return failRelayRetryResponse('Relay retry is available only in Fast mode');
       }
 
       console.log('[IPC] Retrying relay reservations...');
@@ -582,12 +601,7 @@ function setupBootstrapHandlers(
       return { success: true, attempted: result.attempted, connected: result.connected, error: null };
     } catch (error) {
       console.error('[IPC] Failed to retry relay reservations:', error);
-      return {
-        success: false,
-        attempted: 0,
-        connected: 0,
-        error: error instanceof Error ? error.message : 'Failed to retry relay reservations',
-      };
+      return failRelayRetryResponse(error instanceof Error ? error.message : 'Failed to retry relay reservations');
     }
   });
 
@@ -596,7 +610,7 @@ function setupBootstrapHandlers(
     try {
       const p2pCore = getP2PCore();
       if (!p2pCore) {
-        return { success: false, nodes: [], error: 'P2P core not initialized' };
+        return failConnectionNodesResponse('P2P core not initialized');
       }
 
       if (p2pCore.networkMode !== NETWORK_MODES.FAST) {
@@ -608,7 +622,7 @@ function setupBootstrapHandlers(
       return { success: true, nodes, error: null };
     } catch (error) {
       console.error('[IPC] Failed to get relay status:', error);
-      return { success: false, nodes: [], error: error instanceof Error ? error.message : 'Failed to get relay status' };
+      return failConnectionNodesResponse(error instanceof Error ? error.message : 'Failed to get relay status');
     }
   });
 

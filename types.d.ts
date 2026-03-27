@@ -16,6 +16,9 @@ import type {
     CallStateChangedEvent,
     CallErrorEvent,
     CallSignalOutgoingInput,
+    BootstrapRetryResponse,
+    ConnectionNodesResponse,
+    RelayRetryResponse,
 } from './src/core/types';
 import type { Chat, Message } from './src/core/lib/db/database';
 
@@ -105,22 +108,10 @@ declare global {
             rejectContactRequest: (peerId: string, block: boolean) => Promise<{ success: boolean; error: string | null }>;
 
             // Bootstrap nodes
-            getBootstrapNodes: () => Promise<{ success: boolean; nodes: Array<{ address: string; connected: boolean }>; error: string | null }>;
-            retryBootstrap: () => Promise<{
-                success: boolean;
-                result: {
-                    status: 'connected' | 'all_failed' | 'no_candidates' | 'aborted';
-                    connectedAddresses: string[];
-                    connectedPeerIds: string[];
-                    connectedCount: number;
-                    targetConnectionCount: number;
-                    targetReached: boolean;
-                    attempts: Array<{ address: string; ok: boolean; durationMs: number; error?: string }>;
-                } | null;
-                error: string | null;
-            }>;
-            retryRelays: () => Promise<{ success: boolean; attempted: number; connected: number; error: string | null }>;
-            getRelayStatus: () => Promise<{ success: boolean; nodes: Array<{ address: string; connected: boolean }>; error: string | null }>;
+            getBootstrapNodes: () => Promise<ConnectionNodesResponse>;
+            retryBootstrap: () => Promise<BootstrapRetryResponse>;
+            retryRelays: () => Promise<RelayRetryResponse>;
+            getRelayStatus: () => Promise<ConnectionNodesResponse>;
             addRelayNode: (address: string) => Promise<{ success: boolean; error: string | null }>;
             removeRelayNode: (address: string) => Promise<{ success: boolean; error: string | null }>;
             addBootstrapNode: (address: string) => Promise<{ success: boolean; error: string | null }>;

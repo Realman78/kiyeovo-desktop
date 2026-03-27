@@ -18,6 +18,9 @@ import {
     CallStateChangedEvent,
     CallErrorEvent,
     CallSignalOutgoingInput,
+    BootstrapRetryResponse,
+    ConnectionNodesResponse,
+    RelayRetryResponse,
 } from '../core';
 import type { NetworkMode } from '../core';
 import { ContactAttempt, Message } from '../core/lib/db/database';
@@ -193,28 +196,16 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
     },
 
     // Bootstrap nodes
-    getBootstrapNodes: async (): Promise<{ success: boolean; nodes: Array<{ address: string; connected: boolean }>; error: string | null }> => {
+    getBootstrapNodes: async (): Promise<ConnectionNodesResponse> => {
         return ipcRenderer.invoke(IPC_CHANNELS.GET_BOOTSTRAP_NODES);
     },
-    retryBootstrap: async (): Promise<{
-        success: boolean;
-        result: {
-            status: 'connected' | 'all_failed' | 'no_candidates' | 'aborted';
-            connectedAddresses: string[];
-            connectedPeerIds: string[];
-            connectedCount: number;
-            targetConnectionCount: number;
-            targetReached: boolean;
-            attempts: Array<{ address: string; ok: boolean; durationMs: number; error?: string }>;
-        } | null;
-        error: string | null;
-    }> => {
+    retryBootstrap: async (): Promise<BootstrapRetryResponse> => {
         return ipcRenderer.invoke(IPC_CHANNELS.RETRY_BOOTSTRAP);
     },
-    retryRelays: async (): Promise<{ success: boolean; attempted: number; connected: number; error: string | null }> => {
+    retryRelays: async (): Promise<RelayRetryResponse> => {
         return ipcRenderer.invoke(IPC_CHANNELS.RETRY_RELAYS);
     },
-    getRelayStatus: async (): Promise<{ success: boolean; nodes: Array<{ address: string; connected: boolean }>; error: string | null }> => {
+    getRelayStatus: async (): Promise<ConnectionNodesResponse> => {
         return ipcRenderer.invoke(IPC_CHANNELS.GET_RELAY_STATUS);
     },
     addRelayNode: async (address: string): Promise<{ success: boolean; error: string | null }> => {

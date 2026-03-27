@@ -197,7 +197,7 @@ export async function createChatNode(
         console.error(`  Make sure Tor is running and accessible via ${torConfig.socksHost}:${torConfig.socksPort}`);
         console.error('  Continuing anyway, but connections may fail...');
       } else {
-        console.log('✓ Tor connectivity validated');
+        console.log('Tor connectivity validated');
       }
     } else {
       console.log('Fast mode selected: using direct TCP + relay/DCUtR path');

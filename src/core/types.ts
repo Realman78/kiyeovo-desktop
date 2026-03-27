@@ -965,6 +965,30 @@ export type BootstrapConnectResult = {
   attempts: BootstrapAttempt[];
 };
 
+export type ConnectionNodeStatus = {
+  address: string;
+  connected: boolean;
+};
+
+export type ConnectionNodesResponse = {
+  success: boolean;
+  nodes: ConnectionNodeStatus[];
+  error: string | null;
+};
+
+export type BootstrapRetryResponse = {
+  success: boolean;
+  result: BootstrapConnectResult | null;
+  error: string | null;
+};
+
+export type RelayRetryResponse = {
+  success: boolean;
+  attempted: number;
+  connected: number;
+  error: string | null;
+};
+
 export type TorBootstrapTarget = {
   host: string;
   port: number;
