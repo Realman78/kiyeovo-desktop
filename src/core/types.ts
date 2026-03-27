@@ -940,7 +940,6 @@ export type BootstrapConnectOptions = {
 
 export type BootstrapAddressResolution = {
   networkMode: NetworkMode;
-  bootstrapEnvKey: string;
   addresses: string[];
 };
 

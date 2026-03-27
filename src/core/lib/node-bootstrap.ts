@@ -7,7 +7,6 @@ import type { BootstrapAddressResolution, BootstrapAttempt, BootstrapConnection,
 import {
   MAX_BOOTSTRAP_NODES_FAST,
   MAX_BOOTSTRAP_NODES_TOR,
-  NETWORK_MODE_BOOTSTRAP_ENV_KEYS,
   NETWORK_MODES,
 } from '../constants.js';
 import { dedupe } from '../utils/collections.js';
@@ -15,7 +14,7 @@ import { generalErrorHandler } from '../utils/general-error.js';
 import { parsePeerIdFromAddress } from '../utils/multiaddr.js';
 import { ChatDatabase } from './db/database.js';
 import { dialConfiguredFastRelays } from './node-relays.js';
-import { isOnionMultiaddr, parseCommaSeparatedEnv } from '../utils/miscellaneous.js';
+import { isOnionMultiaddr } from '../utils/miscellaneous.js';
 
 const MAX_BOOTSTRAP_CANDIDATES_PER_CONNECT = 6;
 const FAST_BOOTSTRAP_BATCH_TIMEOUT_MS = 10_000;
@@ -483,15 +482,12 @@ export function resolveBootstrapAddressesForCurrentMode(
   localPeerId?: string,
 ): BootstrapAddressResolution {
   const networkMode = database.getSessionNetworkMode();
-  const bootstrapEnvKey = NETWORK_MODE_BOOTSTRAP_ENV_KEYS[networkMode];
   const dbAddresses = database.getBootstrapNodes().map((bootstrapNode) => bootstrapNode.address);
-  const envAddresses = parseCommaSeparatedEnv(bootstrapEnvKey);
-  const candidateAddresses = dedupe([...dbAddresses, ...envAddresses])
+  const candidateAddresses = dedupe(dbAddresses)
     .filter((address) => !isLocalBootstrapAddress(address, localPeerId));
 
   return {
     networkMode,
-    bootstrapEnvKey,
     addresses: filterBootstrapAddressesForMode(networkMode, candidateAddresses),
   };
 }
@@ -573,7 +569,7 @@ export async function connectToBootstrap(
   }
 
   console.log(
-    `Attempting to connect to bootstrap nodes... mode=${networkMode} envKey=${bootstrapResolution.bootstrapEnvKey}`
+    `Attempting to connect to bootstrap nodes... mode=${networkMode} configured=${bootstrapResolution.addresses.length}`
   );
 
   const dialResult = await dialBootstrapCandidates(

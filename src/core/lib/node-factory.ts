@@ -170,7 +170,7 @@ export async function createChatNode(
 
     console.log(`[STACK] mode=${networkMode}`);
     console.log(`[STACK] protocol=${modeConfig.protocolName} dhtProtocol=${modeConfig.dhtProtocol}`);
-    console.log(`[STACK] bootstrapEnv=${bootstrapResolution.bootstrapEnvKey}`);
+    console.log(`[STACK] bootstrapConfigured=${bootstrapResolution.addresses.length}`);
     console.log(`[STACK] transport=${isAnonymousMode ? 'tcp+tor-socks' : 'tcp+relay(+dcutr)'}`);
     console.log(`[STACK] relaySource=${relayConfig.source} relayConfigured=${relayConfig.addresses.length}`);
     if (!isAnonymousMode) {

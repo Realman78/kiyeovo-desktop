@@ -11,6 +11,8 @@ import { UsernameRegistry } from './lib/username-registry.js';
 import { MessageHandler } from './lib/message-handler.js';
 import { EncryptedUserIdentity } from './lib/encrypted-user-identity.js';
 import { ChatDatabase } from './lib/db/database.js';
+import { createNetworkHealthMonitor } from './lib/network-health.js';
+import { createReconnectController } from './lib/reconnect-controller.js';
 import { DATABASE_CLEANUP_INTERVAL, getNetworkModeConfig, MAX_BOOTSTRAP_NODES_FAST, MAX_BOOTSTRAP_NODES_TOR } from './constants.js';
 import type {
   ChatNode,
@@ -33,6 +35,7 @@ import type {
   CallErrorEvent,
   BootstrapConnectResult,
 } from './types.js';
+import type { DhtStatusCheckSource } from './lib/network-health.js';
 
 dotenv.config();
 
@@ -108,6 +111,7 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
     onCallStateChanged,
     onCallError,
   } = config;
+
   const sendStatus = (message: string, stage: any) => {
     console.log(`[P2P Core] ${message}`);
     onStatus(message, stage);
@@ -204,19 +208,9 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
   let dhtStatusActiveCheckId: number | null = null;
   let dhtStatusActiveStartedAt = 0;
   let dhtStatusCheckSeq = 0;
-  let reconnectInProgress = false;
   let currentDhtConnected: boolean | null = null;
-  let consecutiveProbeFailures = 0;
-  let lastReconnectAt = 0;
-  let bootstrapRetryInProgress = false;
-  let staleProbeCleanupInFlight = false;
-  let postRetryVerifyTimeout: ReturnType<typeof setTimeout> | null = null;
-  const DHT_RECONNECT_FAILURE_THRESHOLD = 3;
-  const DHT_RECONNECT_COOLDOWN_MS = 120_000;
   const DHT_PING_PROBE_TIMEOUT_MS = 6_000;
   const DHT_PING_PROBE_HARD_TIMEOUT_MS = 7_000;
-  const POST_RETRY_VERIFY_DELAY_FAST_MS = 3_000;
-  const POST_RETRY_VERIFY_DELAY_ANONYMOUS_MS = 7_000;
   const activeDhtProtocol = getNetworkModeConfig(networkMode).dhtProtocol;
   const emitDhtStatus = (connected: boolean | null, reason: string) => {
     const peers = node.getConnections().map((p) => p.remotePeer.toString());
@@ -227,43 +221,6 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
     sendDHTConnectionStatus({ connected });
   };
 
-  const formatProbeError = (error: unknown): string => (
-    error instanceof Error ? error.message : String(error)
-  );
-
-  const getPostRetryVerifyDelayMs = (mode: NetworkMode): number => (
-    mode === 'anonymous' ? POST_RETRY_VERIFY_DELAY_ANONYMOUS_MS : POST_RETRY_VERIFY_DELAY_FAST_MS
-  );
-
-  const clearPostRetryVerifyTimeout = () => {
-    if (postRetryVerifyTimeout === null) return;
-    clearTimeout(postRetryVerifyTimeout);
-    postRetryVerifyTimeout = null;
-  };
-
-  const getDhtCapableConnections = async () => {
-    const connections = node.getConnections();
-    if (connections.length === 0) {
-      return [];
-    }
-
-    const capabilityChecks = connections.map(async (conn) => {
-      try {
-        const peerData = await node.peerStore.get(conn.remotePeer);
-        const protocols = peerData.protocols ?? [];
-        if (protocols.includes(activeDhtProtocol)) {
-          return conn;
-        }
-      } catch {
-        // Ignore peers we cannot resolve from peerStore.
-      }
-      return null;
-    });
-
-    const resolved = await Promise.all(capabilityChecks);
-    return resolved.filter((conn): conn is (typeof connections)[number] => conn !== null);
-  };
-
   const getConnectedBootstrapConnections = (
     connectionsToCheck: ReturnType<typeof node.getConnections>,
   ): ReturnType<typeof node.getConnections> => {
@@ -271,110 +228,17 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
     return connectionsToCheck.filter((conn) => bootstrapPeerIds.has(conn.remotePeer.toString()));
   };
 
-  const probeAnyAliveConnection = async (
-    connectionsToProbe: ReturnType<typeof node.getConnections>,
-    options: {
-      closeFailedConnections?: boolean;
-      probeSource?: 'dht' | 'bootstrap_fallback';
-    } = {},
-  ): Promise<boolean> => {
-    const {
-      closeFailedConnections = true,
-      probeSource = 'dht',
-    } = options;
+  const networkHealth = createNetworkHealthMonitor({
+    activeDhtProtocol,
+    getConnectedBootstrapConnections,
+    node,
+    pingProbeHardTimeoutMs: DHT_PING_PROBE_HARD_TIMEOUT_MS,
+    pingProbeTimeoutMs: DHT_PING_PROBE_TIMEOUT_MS,
+  });
 
-    if (connectionsToProbe.length === 0) return false;
-    const toProbe = connectionsToProbe.slice(0, 3);
-    console.log(
-      `[DHT-STATUS][CORE][PROBE][START] source=${probeSource} sampleSize=${toProbe.length} peers=${toProbe.map((c) => c.remotePeer.toString()).join(',')}`,
-    );
+  const reconnectController = createReconnectController();
 
-    const pingWithHardTimeout = (remotePeer: unknown) =>
-      Promise.race([
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (node.services as any).ping.ping(remotePeer, {
-          signal: AbortSignal.timeout(DHT_PING_PROBE_TIMEOUT_MS),
-        }),
-        new Promise((_, reject) => {
-          setTimeout(() => reject(new Error('ping_probe_hard_timeout')), DHT_PING_PROBE_HARD_TIMEOUT_MS);
-        }),
-      ]);
-
-    const probeTasks = toProbe.map(async (conn) => {
-      try {
-        await pingWithHardTimeout(conn.remotePeer);
-        return { conn, alive: true } as const;
-      } catch (error) {
-        return { conn, alive: false, error } as const;
-      }
-    });
-
-    const cleanupPromise = (async () => {
-      const probeResults = await Promise.all(probeTasks);
-      const deadResults = probeResults.filter((result) => !result.alive);
-      if (deadResults.length === 0) return;
-
-      console.log(
-        `[DHT-STATUS][CORE][PROBE][FAIL] source=${probeSource} count=${deadResults.length} details=${deadResults
-          .map((result) => `${result.conn.remotePeer.toString()}:${formatProbeError(result.error)}`)
-          .join('|')}`,
-      );
-
-      if (!closeFailedConnections) {
-        console.log(
-          `[DHT-STATUS][CORE][PROBE][CLOSE_STALE][SKIP] reason=non_destructive source=${probeSource} count=${deadResults.length}`,
-        );
-        return;
-      }
-
-      const dead = deadResults
-        .filter((result) => !result.alive)
-        .map((result) => result.conn);
-
-      if (staleProbeCleanupInFlight) {
-        console.log('[DHT-STATUS][CORE][PROBE][CLOSE_STALE][SKIP] reason=cleanup_in_flight');
-        return;
-      }
-
-      staleProbeCleanupInFlight = true;
-      try {
-        console.log(
-          `[DHT-STATUS][CORE][PROBE][CLOSE_STALE] count=${dead.length} peers=${dead.map((c) => c.remotePeer.toString()).join(',')}`,
-        );
-        await Promise.allSettled(dead.map((conn) => conn.close()));
-      } finally {
-        staleProbeCleanupInFlight = false;
-      }
-    })();
-
-    let anyAlive = false;
-    try {
-      await Promise.any(
-        probeTasks.map(async (task) => {
-          const result = await task;
-          if (!result.alive) {
-            throw (result.error instanceof Error ? result.error : new Error('probe_failed'));
-          }
-          return result.conn;
-        }),
-      );
-      anyAlive = true;
-    } catch {
-      anyAlive = false;
-    }
-
-    void cleanupPromise.catch((error) => {
-      console.warn(
-        '[DHT-STATUS][CORE][PROBE][CLOSE_STALE][ERROR] ' +
-        formatProbeError(error),
-      );
-    });
-
-    console.log(`[DHT-STATUS][CORE][PROBE][RESULT] source=${probeSource} alive=${anyAlive}`);
-    return anyAlive;
-  };
-
-  const checkDHTStatus = async (source: 'startup' | 'timer_5s' | 'timer_30s' | 'manual_retry' | 'post_retry_verify' = 'timer_30s') => {
+  const checkDHTStatus = async (source: DhtStatusCheckSource = 'timer_30s') => {
     if (dhtStatusCheckInFlight) {
       const ageMs = dhtStatusActiveStartedAt > 0 ? Date.now() - dhtStatusActiveStartedAt : -1;
       const staleInFlight = dhtStatusActiveCheckId === null || ageMs < 0 || ageMs > 90_000;
@@ -400,96 +264,34 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
 
     dhtStatusCheckInFlight = (async () => {
       try {
-        const suppressNegativeStatusDuringBootstrapRetry = bootstrapRetryInProgress
-          && (source === 'timer_5s' || source === 'timer_30s');
+        const suppressNegativeStatusDuringBootstrapRetry = reconnectController.shouldSuppressNegativeStatusDuringBootstrapRetry(source);
         const allConnections = node.getConnections();
+
         console.log(`[DHT-STATUS][CORE][CHECK][START] id=${checkId} source=${source} peerCount=${allConnections.length}`);
         console.log(`[P2P Core] Peers: ${allConnections.map(p => p.remotePeer.toString())}`);
 
-        if (allConnections.length === 0) {
-          if (suppressNegativeStatusDuringBootstrapRetry) {
-            emitDhtStatus(null, 'bootstrap_retry_in_progress');
-            return;
-          }
-          consecutiveProbeFailures += 1;
-          emitDhtStatus(false, 'no_connections');
-        } else {
-          const dhtConnections = await getDhtCapableConnections();
-          let connectionsToProbe = dhtConnections;
-          let probeSource: 'dht' | 'bootstrap_fallback' = 'dht';
+        const healthEvaluation = await networkHealth.evaluateStatus(allConnections, source, {
+          suppressNegativeStatusDuringBootstrapRetry,
+        });
 
-          if (connectionsToProbe.length === 0) {
-            const bootstrapConnections = getConnectedBootstrapConnections(allConnections);
-            if (bootstrapConnections.length > 0) {
-              probeSource = 'bootstrap_fallback';
-              connectionsToProbe = bootstrapConnections;
-              console.log(
-                '[DHT-STATUS][CORE][CHECK][FALLBACK] reason=no_dht_protocol_peers using=bootstrap_connections count=' +
-                bootstrapConnections.length,
-              );
-            }
-          }
+        emitDhtStatus(healthEvaluation.status, healthEvaluation.reason);
 
-          if (connectionsToProbe.length === 0) {
-            if (suppressNegativeStatusDuringBootstrapRetry) {
-              emitDhtStatus(null, 'bootstrap_retry_in_progress');
-              return;
-            }
-            consecutiveProbeFailures += 1;
-            emitDhtStatus(false, 'no_dht_protocol_peers');
-          } else {
-            const anyAlive = await probeAnyAliveConnection(connectionsToProbe, {
-              closeFailedConnections: probeSource === 'dht',
-              probeSource,
-            });
-            if (anyAlive) {
-              consecutiveProbeFailures = 0;
-              emitDhtStatus(true, probeSource === 'dht' ? 'probe_ok' : 'probe_ok_bootstrap_fallback');
-              console.log(
-                '[P2P Core] Network status: connected via ' +
-                (probeSource === 'dht' ? 'DHT-capable peers' : 'bootstrap fallback probe'),
-              );
-              return;
-            }
-            if (probeSource === 'bootstrap_fallback' && (source === 'startup' || source === 'post_retry_verify')) {
-              emitDhtStatus(null, source === 'startup' ? 'bootstrap_warmup_startup' : 'bootstrap_warmup_retry');
-              return;
-            }
-            if (suppressNegativeStatusDuringBootstrapRetry) {
-              emitDhtStatus(null, 'bootstrap_retry_in_progress');
-              return;
-            }
-            consecutiveProbeFailures += 1;
-            emitDhtStatus(false, probeSource === 'dht' ? 'probe_failed' : 'probe_failed_bootstrap_fallback');
-          }
-        }
-
-        // Shared reconnect gate for all failure paths
-        console.warn(
-          `[DHT-STATUS][CORE][RECONNECT][GATE] probeFailures=${consecutiveProbeFailures}/${DHT_RECONNECT_FAILURE_THRESHOLD}`,
-        );
-
-        if (consecutiveProbeFailures < DHT_RECONNECT_FAILURE_THRESHOLD) {
-          return;
-        }
-
-        const now = Date.now();
-        const sinceLastReconnect = now - lastReconnectAt;
-        if (lastReconnectAt > 0 && sinceLastReconnect < DHT_RECONNECT_COOLDOWN_MS) {
+        if (healthEvaluation.status === true) {
           console.log(
-            `[DHT-STATUS][CORE][RECONNECT][SKIP] reason=cooldown probeFailures=${consecutiveProbeFailures} ` +
-            `waitMs=${DHT_RECONNECT_COOLDOWN_MS - sinceLastReconnect}`,
+            '[P2P Core] Network status: connected via ' +
+            (healthEvaluation.probeSource === 'dht' ? 'DHT-capable peers' : 'bootstrap fallback probe'),
           );
           return;
         }
 
-        if (reconnectInProgress) {
-          console.log('[P2P Core] Reconnect already in progress, skipping duplicate reconnect attempt');
+        if (!reconnectController.recordHealthStatus(healthEvaluation.status)) {
           return;
         }
 
-        lastReconnectAt = now;
-        reconnectInProgress = true;
+        if (!reconnectController.tryBeginReconnect()) {
+          return;
+        }
+
         try {
           console.log('[P2P Core] All sampled connections appear stale; closing and reconnecting...');
           const staleConnections = node.getConnections();
@@ -503,19 +305,19 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
           );
 
           // Verify immediately after reconnect attempt so UI state is up to date.
-          const dhtAfterReconnect = await getDhtCapableConnections();
-          const aliveAfterReconnect = await probeAnyAliveConnection(dhtAfterReconnect, {
+          const dhtAfterReconnect = await networkHealth.getDhtCapableConnections();
+          const aliveAfterReconnect = await networkHealth.probeAnyAliveConnection(dhtAfterReconnect, {
             probeSource: 'dht',
           });
           const liveCount = aliveAfterReconnect ? dhtAfterReconnect.length : 0;
           emitDhtStatus(liveCount > 0, 'post_reconnect_dht_probe');
           if (liveCount > 0) {
-            consecutiveProbeFailures = 0;
+            reconnectController.resetProbeFailures();
             console.log(`[P2P Core] Network status: ${liveCount} DHT peer(s) connected after reconnect`);
           }
           return;
         } finally {
-          reconnectInProgress = false;
+          reconnectController.finishReconnect();
         }
       } catch (error) {
         console.error('[P2P Core] Failed to check peer count:', error);
@@ -532,20 +334,6 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
     })();
 
     return dhtStatusCheckInFlight;
-  };
-
-  const schedulePostRetryVerify = (mode: NetworkMode) => {
-    clearPostRetryVerifyTimeout();
-
-    const delayMs = getPostRetryVerifyDelayMs(mode);
-    console.log(
-      `[DHT-STATUS][CORE][VERIFY][SCHEDULE] source=post_retry_verify mode=${mode} delayMs=${delayMs}`,
-    );
-
-    postRetryVerifyTimeout = setTimeout(() => {
-      postRetryVerifyTimeout = null;
-      void checkDHTStatus('post_retry_verify');
-    }, delayMs);
   };
 
   // Send initial status immediately
@@ -671,7 +459,7 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
       return currentDhtConnected;
     },
     retryBootstrap: async () => {
-      if (reconnectInProgress) {
+      if (reconnectController.isReconnectInProgress()) {
         console.log('[P2P Core] Reconnect already in progress, ignoring manual retry');
         return {
           status: 'aborted',
@@ -686,8 +474,7 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
       const currentNetworkMode = database.getSessionNetworkMode();
       const retryBootstrapTimeoutMs = getBootstrapRetryTimeoutMs(currentNetworkMode);
       console.log('[P2P Core] Retrying bootstrap connection...');
-      clearPostRetryVerifyTimeout();
-      bootstrapRetryInProgress = true;
+      reconnectController.beginBootstrapRetry();
       emitDhtStatus(null, 'bootstrap_retry_in_progress');
 
       const retryAbortController = new AbortController();
@@ -698,14 +485,16 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
       } catch (error) {
         throw error;
       } finally {
-        bootstrapRetryInProgress = false;
+        reconnectController.endBootstrapRetry();
         clearTimeout(timeoutId);
       }
 
       if (bootstrapRetryResult.connectedCount > 0) {
         emitDhtStatus(null, 'bootstrap_retry_warmup');
         // Give fresh bootstrap connections time to complete identify/DHT warm-up before probing them.
-        schedulePostRetryVerify(currentNetworkMode);
+        reconnectController.schedulePostRetryVerify(currentNetworkMode, () => {
+          void checkDHTStatus('post_retry_verify');
+        });
       } else {
         emitDhtStatus(false, 'bootstrap_retry_failed');
       }
@@ -720,7 +509,7 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
       console.log('[P2P Core] Shutting down...');
       try {
         await messageHandler.cleanup();
-        clearPostRetryVerifyTimeout();
+        reconnectController.clearPostRetryVerifyTimeout();
         clearInterval(cleanupInterval);
         clearInterval(dhtStatusInterval);
         database.close();

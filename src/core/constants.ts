@@ -18,11 +18,6 @@ export const NETWORK_MODE_ONBOARDED_SETTING_KEY = 'network_mode_onboarded';
 export const FAST_RELAY_MULTIADDRS_SETTING_KEY = 'fast_relay_multiaddrs';
 export const FAST_RELAY_MULTIADDRS_INITIALIZED_SETTING_KEY = 'fast_relay_multiaddrs_initialized';
 
-export const NETWORK_MODE_BOOTSTRAP_ENV_KEYS: Record<NetworkMode, string> = {
-  fast: 'KNOWN_BOOTSTRAP_NODES_FAST',
-  anonymous: 'KNOWN_BOOTSTRAP_NODES',
-};
-
 export const NETWORK_MODE_RELAY_ENV_KEYS: Record<NetworkMode, string | null> = {
   fast: 'FAST_RELAY_MULTIADDRS',
   anonymous: null,
