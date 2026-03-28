@@ -166,36 +166,17 @@ export class UsernameRegistry {
 
     const targetUsername = this.currentUsername?.trim();
     if (!targetUsername) {
-      this.stopReregistration();
-      this.currentUsername = null;
+      this.clearLocalRegistrationState();
       return result;
     }
 
-    const myPeerId = this.node.peerId.toString();
-    const releaseRecord = this.#createReleasedRegistrationObject(targetUsername);
-    const valueBytes = UsernameRegistry.TEXT_ENCODER.encode(JSON.stringify(releaseRecord));
-
-    const publishReleaseRecord = async (key: Uint8Array): Promise<boolean> => {
-      const publish = await this.publishRecord(key, valueBytes);
-      if (publish.acceptedCount === 0 && publish.rejectedCount > 0) return false;
-      if (publish.errorCount > 0 && publish.acceptedCount === 0) return false;
-      return publish.acceptedCount > 0;
-    };
-
     try {
-      const [usernameRelease, peerRelease] = await Promise.allSettled([
-        publishReleaseRecord(this.buildUsernameByNameKey(targetUsername)),
-        publishReleaseRecord(this.buildUsernameByPeerIdKey(myPeerId)),
-      ]);
-
-      result.usernameUnregistered = usernameRelease.status === 'fulfilled' ? usernameRelease.value : false;
-      result.peerIdUnregistered = peerRelease.status === 'fulfilled' ? peerRelease.value : false;
+      Object.assign(result, await this.publishCurrentUsernameReleases(targetUsername));
     } catch (error: unknown) {
       generalErrorHandler(error, 'Failed to publish username release record');
     }
 
-    this.currentUsername = null;
-    this.stopReregistration();
+    this.clearLocalRegistrationState();
     return result;
   }
 
@@ -447,6 +428,11 @@ export class UsernameRegistry {
 
     this.currentUsername = previousUsername;
     this.startReregistration();
+  }
+
+  private clearLocalRegistrationState(): void {
+    this.currentUsername = null;
+    this.stopReregistration();
   }
 
   private getPublishFailureError(publish: UsernamePublishResult, label: string): Error | null {
@@ -739,13 +725,43 @@ export class UsernameRegistry {
     return { errorCount, acceptedCount, rejectedCount };
   }
 
-  private async releaseUsernameByName(username: string): Promise<boolean> {
-    const releaseRecord = this.#createReleasedRegistrationObject(username);
-    const valueBytes = UsernameRegistry.TEXT_ENCODER.encode(JSON.stringify(releaseRecord));
-    const publish = await this.publishRecord(this.buildUsernameByNameKey(username), valueBytes);
+  private wasPublishAccepted(publish: UsernamePublishResult): boolean {
     if (publish.acceptedCount === 0 && publish.rejectedCount > 0) return false;
     if (publish.errorCount > 0 && publish.acceptedCount === 0) return false;
     return publish.acceptedCount > 0;
+  }
+
+  private createReleasedRegistrationValueBytes(username: string): Uint8Array {
+    const releaseRecord = this.#createReleasedRegistrationObject(username);
+    return UsernameRegistry.TEXT_ENCODER.encode(JSON.stringify(releaseRecord));
+  }
+
+  private async publishReleasedRegistrationForKey(key: Uint8Array, valueBytes: Uint8Array): Promise<boolean> {
+    const publish = await this.publishRecord(key, valueBytes);
+    return this.wasPublishAccepted(publish);
+  }
+
+  private async publishCurrentUsernameReleases(
+    username: string,
+  ): Promise<{ usernameUnregistered: boolean; peerIdUnregistered: boolean }> {
+    const myPeerId = this.node.peerId.toString();
+    const valueBytes = this.createReleasedRegistrationValueBytes(username);
+    const [usernameRelease, peerRelease] = await Promise.allSettled([
+      this.publishReleasedRegistrationForKey(this.buildUsernameByNameKey(username), valueBytes),
+      this.publishReleasedRegistrationForKey(this.buildUsernameByPeerIdKey(myPeerId), valueBytes),
+    ]);
+
+    return {
+      usernameUnregistered: usernameRelease.status === 'fulfilled' ? usernameRelease.value : false,
+      peerIdUnregistered: peerRelease.status === 'fulfilled' ? peerRelease.value : false,
+    };
+  }
+
+  private async releaseUsernameByName(username: string): Promise<boolean> {
+    return this.publishReleasedRegistrationForKey(
+      this.buildUsernameByNameKey(username),
+      this.createReleasedRegistrationValueBytes(username),
+    );
   }
 
   private buildUsernameByNameKey(username: string): Uint8Array {

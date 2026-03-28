@@ -1887,6 +1887,61 @@ export class MessageHandler {
     return { user, session, peerId: targetPeerId, keyExchangeOccurred };
   }
 
+  private getSendMessageErrorText(error: unknown): string {
+    return String(error instanceof Error ? error.message : error).toLowerCase();
+  }
+
+  private shouldFallbackOfflineSend(errorText: string): boolean {
+    return /econnrefused|user is offline|all multiaddr dials failed|message timeout|socks|tor transport|enetunreach|no valid addresses|ehostunreach|etimedout|limited connection|no_reservation|no reservation|failed to connect via relay with status/.test(errorText);
+  }
+
+  private async storeOfflineMessageFallback(
+    targetUsernameOrPeerId: string,
+    message: string,
+    user: User | null,
+  ): Promise<SendMessageResponse> {
+    console.log(`Trying to send offline message to ${targetUsernameOrPeerId}`);
+
+    const fallbackUser = user ?? this.database.getUserByPeerIdThenUsername(targetUsernameOrPeerId) ?? null;
+    if (!fallbackUser) {
+      throw new Error('User not found in database');
+    }
+
+    const bucketSecret = this.database.getOfflineBucketSecretByPeerId(fallbackUser.peer_id);
+    if (!bucketSecret) {
+      const error = this.database.getChatByPeerId(fallbackUser.peer_id)
+        ? 'Offline fallback unavailable right now'
+        : 'Direct channel not established yet';
+      throw new Error(error);
+    }
+
+    const writeBucketKey = this.keyExchange.constructWriteBucketKey(bucketSecret);
+    const strippedMessage = await this.storeOfflineMessageDB(fallbackUser, writeBucketKey, message);
+    console.log(`Peer likely offline; stored message for ${targetUsernameOrPeerId} as offline.`);
+    return { success: true, messageSentStatus: 'offline', message: strippedMessage, error: null };
+  }
+
+  private async handleSendMessageFailure(
+    targetUsernameOrPeerId: string,
+    message: string,
+    user: User | null,
+    error: unknown,
+  ): Promise<SendMessageResponse> {
+    const errorText = this.getSendMessageErrorText(error);
+    console.log("errorText :>> ", errorText);
+
+    if (this.shouldFallbackOfflineSend(errorText)) {
+      return this.storeOfflineMessageFallback(targetUsernameOrPeerId, message, user);
+    }
+
+    if (errorText.includes("username not found")) {
+      return { success: false, messageSentStatus: null, error: `User ${targetUsernameOrPeerId} not found` };
+    }
+
+    console.log(`Offline message fallback failed`);
+    throw error;
+  }
+
   async sendMessage(targetUsernameOrPeerId: string, message: string): Promise<SendMessageResponse> {
     let user: User | null = null;
     try {
@@ -1980,34 +2035,7 @@ export class MessageHandler {
 
       console.error(`Failed to send message to ${targetUsernameOrPeerId}: ${err instanceof Error ? err.message : String(err)}`);
       try {
-        const errorText = String(err instanceof Error ? err.message : err).toLowerCase();
-        console.log("errorText :>> ", errorText);
-
-        const shouldFallbackOffline = /econnrefused|user is offline|all multiaddr dials failed|message timeout|socks|tor transport|enetunreach|no valid addresses|ehostunreach|etimedout|limited connection|no_reservation|no reservation|failed to connect via relay with status/.test(errorText);
-        if (shouldFallbackOffline) {
-          console.log(`Trying to send offline message to ${targetUsernameOrPeerId}`);
-
-          // Use user from key exchange if available, otherwise query database
-          user ||= this.database.getUserByPeerIdThenUsername(targetUsernameOrPeerId) ?? null;
-          if (!user) throw new Error('User not found in database');
-
-          const bucketSecret = this.database.getOfflineBucketSecretByPeerId(user.peer_id);
-          if (!bucketSecret) {
-            const error = !!this.database.getChatByPeerId(user.peer_id)
-              ? 'Offline fallback unavailable right now' : 'Direct channel not established yet'
-            throw new Error(error);
-          }
-          const writeBucketKey = this.keyExchange.constructWriteBucketKey(bucketSecret);
-
-          const strippedMessage = await this.storeOfflineMessageDB(user, writeBucketKey, message);
-          console.log(`Peer likely offline; stored message for ${targetUsernameOrPeerId} as offline.`);
-          return { success: true, messageSentStatus: 'offline', message: strippedMessage, error: null };
-        } else if (errorText.includes("username not found")) {
-          return { success: false, messageSentStatus: null, error: `User ${targetUsernameOrPeerId} not found` };
-        }
-
-        console.log(`Offline message fallback failed`);
-        throw err;
+        return await this.handleSendMessageFailure(targetUsernameOrPeerId, message, user, err);
       } catch (offlineErr: unknown) {
         generalErrorHandler(offlineErr, `Failed to send message`);
         return {
