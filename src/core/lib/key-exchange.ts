@@ -179,6 +179,15 @@ export class KeyExchange {
     }
   }
 
+  cancelPendingContact(senderPeerId: string): void {
+    const promise = this.pendingAcceptances.get(senderPeerId);
+    if (promise) {
+      promise.reject(new Error('KEY_EXCHANGE_CANCELLED_BY_INITIATOR'));
+      this.pendingAcceptances.delete(senderPeerId);
+    }
+    this.database.deleteContactAttemptsByPeerId(senderPeerId);
+  }
+
   private rejectRotationPromise(remoteId: string, error: Error): void {
     const promise = this.rotationPromises.get(remoteId);
     if (promise) {
@@ -661,6 +670,8 @@ export class KeyExchange {
           userIdentity,
           myUsername,
         });
+      } else if (message.content === 'key_exchange_cancelled') {
+        await this.handleInboundCancelledKeyExchange(remoteId, message);
       } else if (message.content === 'key_exchange_rejected') {
         await this.handleInboundRejectedKeyExchangeResponse(remoteId, message);
       } else if (message.content === 'key_rotation') {
@@ -821,13 +832,23 @@ export class KeyExchange {
         );
       }
     }
-    const result = await this.waitForContactRequestDecision(
-      remoteId,
-      senderUsername,
-      initialMessageBody,
-      receivedAt,
-      this.getKeyExchangeDecisionExpiresAt(message.timestamp),
-    );
+    let result: boolean | null;
+    try {
+      result = await this.waitForContactRequestDecision(
+        remoteId,
+        senderUsername,
+        initialMessageBody,
+        receivedAt,
+        this.getKeyExchangeDecisionExpiresAt(message.timestamp),
+      );
+    } catch (error) {
+      this.database.deleteContactAttempt(contactAttemptId);
+      if (error instanceof Error && error.message === 'KEY_EXCHANGE_CANCELLED_BY_INITIATOR') {
+        console.log(`Contact request from ${senderUsername} cancelled by initiator`);
+      }
+      throw error;
+    }
+
     this.database.deleteContactAttempt(contactAttemptId);
     if (result === null) {
       console.log(`Contact request from ${senderUsername} expired`);
@@ -1200,10 +1221,25 @@ export class KeyExchange {
     await this.sendSignedKeyExchangeStreamResult(stream, remoteId, message, 'key_exchange_cancelled');
   }
 
+  private async sendFreshKeyExchangeCancelled(
+    remoteId: string,
+    initiatorEphemeralPublicKey: string,
+    myUsername: string,
+    userIdentity: EncryptedUserIdentity,
+  ): Promise<void> {
+    const message = this.createSignedKeyExchangeStreamResultMessage(
+      'key_exchange_cancelled',
+      initiatorEphemeralPublicKey,
+      myUsername,
+      userIdentity,
+    );
+    await this.sendFreshKeyExchangeFollowup(remoteId, message, 'key_exchange_cancelled');
+  }
+
   private async sendFreshKeyExchangeFollowup(
     remoteId: string,
     message: AuthenticatedEncryptedMessage,
-    context: 'key_exchange_response' | 'key_exchange_rejected',
+    context: 'key_exchange_response' | 'key_exchange_rejected' | 'key_exchange_cancelled',
   ): Promise<void> {
     const startedAt = Date.now();
     const activeConnections = this.node
@@ -1468,6 +1504,10 @@ export class KeyExchange {
         return;
       }
 
+      if (error instanceof Error && error.message === 'KEY_EXCHANGE_CANCELLED_BY_INITIATOR') {
+        return;
+      }
+
       // Fire key exchange failed event
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       this.onKeyExchangeFailed({
@@ -1696,6 +1736,45 @@ export class KeyExchange {
     } finally {
       await this.closeStreamQuietly(streamSettlement.stream);
     }
+  }
+
+  private async handleInboundCancelledKeyExchange(
+    peerId: string,
+    message: AuthenticatedEncryptedMessage,
+  ): Promise<void> {
+    const hasPendingAcceptance = this.getPendingAcceptanceByPeerId(peerId) !== null;
+    const hasContactAttempt = this.database.getContactAttemptsByPeerId(peerId).length > 0;
+    if (!hasPendingAcceptance && !hasContactAttempt) {
+      console.log(`[KEY-EXCHANGE][CANCELLED][STALE] ts=${new Date().toISOString()} peer=${peerId}`);
+      return;
+    }
+
+    if (!message.signature || !message.senderUsername || !message.ephemeralPublicKey) {
+      console.warn(`[KEY-EXCHANGE][CANCELLED][INVALID] peer=${peerId} reason=missing_required_fields`);
+      return;
+    }
+
+    const messageToVerify = this.buildKeyExchangeMessageToVerify({
+      content: 'key_exchange_cancelled',
+      ephemeralPublicKey: message.ephemeralPublicKey,
+      senderUsername: message.senderUsername,
+      timestamp: message.timestamp,
+    });
+
+    const { valid } = await this.verifySignatureWithFallback(
+      message.signature,
+      messageToVerify,
+      message.senderUsername,
+      peerId,
+    );
+
+    if (!valid) {
+      console.warn(`[KEY-EXCHANGE][CANCELLED][INVALID] peer=${peerId} reason=signature_verification_failed`);
+      return;
+    }
+
+    this.cancelPendingContact(peerId);
+    console.log(`[KEY-EXCHANGE][CANCELLED][APPLY] ts=${new Date().toISOString()} peer=${peerId}`);
   }
 
   private async handleInboundRejectedKeyExchangeResponse(
@@ -2443,6 +2522,13 @@ export class KeyExchange {
     const abortController = this.keyExchangeAbortControllers.get(peerId);
     const stream = this.keyExchangeStreams.get(peerId);
     if (abortController) {
+      const pendingKeyExchange = this.sessionManager.getPendingKeyExchange(peerId);
+      const initiatorEphemeralPublicKey = pendingKeyExchange
+        ? Buffer.from(pendingKeyExchange.ephemeralPublicKey).toString('base64')
+        : null;
+      const userIdentity = this.usernameRegistry.getUserIdentity();
+      const myUsername = this.getInitiatorUsername();
+
       if (stream) {
         console.log("closing stream", stream);
         try {
@@ -2456,6 +2542,21 @@ export class KeyExchange {
       abortController();
       this.keyExchangeAbortControllers.delete(peerId);
       this.sessionManager.removePendingKeyExchange(peerId);
+      if (initiatorEphemeralPublicKey && userIdentity) {
+        try {
+          await this.sendFreshKeyExchangeCancelled(
+            peerId,
+            initiatorEphemeralPublicKey,
+            myUsername,
+            userIdentity,
+          );
+        } catch (error) {
+          console.warn(
+            `[KEY-EXCHANGE][CANCELLED][SEND][FAIL] ts=${new Date().toISOString()} ` +
+            `peer=${peerId} error=${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
       console.log(`Cancelled pending key exchange with ${peerId.slice(0, 8)}...`);
       return true;
     }
