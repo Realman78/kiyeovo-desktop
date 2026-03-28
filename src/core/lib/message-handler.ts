@@ -1766,6 +1766,45 @@ export class MessageHandler {
     peerId: PeerId
     keyExchangeOccurred: boolean
   }> {
+    const { user, targetPeerId, keyExchangeOccurred: initialKeyExchangeOccurred } =
+      await this.resolveUserAndPeerForSession(targetUsernameOrPeerId, message, isFileTransfer, initialUser);
+    let resolvedUser = user;
+    let keyExchangeOccurred = initialKeyExchangeOccurred;
+
+    const upgradedUser = await this.maybeUpgradeTrustedOutOfBandChat(
+      targetPeerId,
+      targetUsernameOrPeerId,
+      message,
+    );
+    if (upgradedUser) {
+      resolvedUser = upgradedUser;
+      keyExchangeOccurred = true;
+    }
+
+    if (this.database.isBlocked(targetPeerId.toString())) {
+      throw new Error('User is blocked. Cannot send messages.');
+    }
+
+    const {
+      session: ensuredSession,
+      keyExchangeOccurred: sessionKeyExchangeOccurred,
+    } = await this.ensureConversationSession(targetPeerId, targetUsernameOrPeerId, message);
+    let session = ensuredSession;
+    if (sessionKeyExchangeOccurred) {
+      keyExchangeOccurred = true;
+    }
+    this.assertNoPendingSessionRotation(targetPeerId);
+    session = await this.rotateSessionIfNeeded(session, targetPeerId, targetUsernameOrPeerId);
+
+    return { user: resolvedUser, session, peerId: targetPeerId, keyExchangeOccurred };
+  }
+
+  private async resolveUserAndPeerForSession(
+    targetUsernameOrPeerId: string,
+    message: string,
+    isFileTransfer: boolean,
+    initialUser?: User | null,
+  ): Promise<{ user: User; targetPeerId: PeerId; keyExchangeOccurred: boolean }> {
     const initialUserProvided = initialUser !== undefined;
     let user: User | null;
     if (initialUserProvided) {
@@ -1774,117 +1813,145 @@ export class MessageHandler {
       const dbUser = this.database.getUserByPeerIdThenUsername(targetUsernameOrPeerId);
       user = dbUser && this.database.getChatByPeerId(dbUser.peer_id) ? dbUser : null;
     }
-    let targetPeerId: PeerId;
-    let keyExchangeOccurred = false;
-    let resolvedOfflinePublicKey: string | undefined;
 
-    if (!user) {
-      if (isFileTransfer) {
-        throw new Error('Cannot send file as first message. Send a text message first.');
+    if (user) {
+      return {
+        user,
+        targetPeerId: peerIdFromString(user.peer_id),
+        keyExchangeOccurred: false,
+      };
+    }
+
+    if (isFileTransfer) {
+      throw new Error('Cannot send file as first message. Send a text message first.');
+    }
+
+    const { targetPeerId, resolvedOfflinePublicKey } = await this.resolveUserRegistrationForSession(targetUsernameOrPeerId);
+    const exchangedUser = await this.keyExchange.initiateKeyExchange(targetPeerId, targetUsernameOrPeerId, message, {
+      recipientOfflinePublicKey: resolvedOfflinePublicKey,
+    });
+    if (!exchangedUser) {
+      throw new Error('Key exchange failed');
+    }
+
+    return {
+      user: exchangedUser,
+      targetPeerId,
+      keyExchangeOccurred: true,
+    };
+  }
+
+  private async resolveUserRegistrationForSession(
+    targetUsernameOrPeerId: string,
+  ): Promise<{ targetPeerId: PeerId; resolvedOfflinePublicKey: string }> {
+    try {
+      let isPeerId = false;
+      try { peerIdFromString(targetUsernameOrPeerId); isPeerId = true; } catch { /* username */ }
+      const userRegistration = isPeerId
+        ? await this.usernameRegistry.lookupByPeerId(targetUsernameOrPeerId)
+        : await this.usernameRegistry.lookup(targetUsernameOrPeerId);
+      return {
+        targetPeerId: peerIdFromString(userRegistration.peerID),
+        resolvedOfflinePublicKey: userRegistration.offlinePublicKey,
+      };
+    } catch (lookupErr: unknown) {
+      const lookupErrorText = lookupErr instanceof Error ? lookupErr.message : String(lookupErr);
+      if (lookupErrorText === ERRORS.USERNAME_NOT_FOUND || lookupErrorText === 'Peer ID not found in DHT') {
+        throw new Error(`User '${targetUsernameOrPeerId}' not found`);
+      }
+      throw new Error(`Failed to resolve user '${targetUsernameOrPeerId}': ${lookupErrorText}`);
+    }
+  }
+
+  private async maybeUpgradeTrustedOutOfBandChat(
+    targetPeerId: PeerId,
+    targetUsernameOrPeerId: string,
+    message: string,
+  ): Promise<User | null> {
+    const chat = this.database.getChatByPeerId(targetPeerId.toString());
+    if (!chat?.trusted_out_of_band) return null;
+
+    try {
+      console.log(`Chat with ${targetUsernameOrPeerId} was established out-of-band. Upgrading to full key exchange if user is online...`);
+      const exchangedUser = await this.keyExchange.initiateKeyExchange(targetPeerId, targetUsernameOrPeerId, message);
+      if (exchangedUser) {
+        console.log(`✓ Upgraded to stronger encryption with ECDH-derived keys`);
+        return exchangedUser;
       }
 
-      try {
-        let isPeerId = false;
-        try { peerIdFromString(targetUsernameOrPeerId); isPeerId = true; } catch { /* username */ }
-        const userRegistration = isPeerId
-          ? await this.usernameRegistry.lookupByPeerId(targetUsernameOrPeerId)
-          : await this.usernameRegistry.lookup(targetUsernameOrPeerId);
-        targetPeerId = peerIdFromString(userRegistration.peerID);
-        resolvedOfflinePublicKey = userRegistration.offlinePublicKey;
-      } catch (lookupErr: unknown) {
-        const lookupErrorText = lookupErr instanceof Error ? lookupErr.message : String(lookupErr);
-        if (lookupErrorText === ERRORS.USERNAME_NOT_FOUND || lookupErrorText === 'Peer ID not found in DHT') {
-          throw new Error(`User '${targetUsernameOrPeerId}' not found`);
-        }
-        throw new Error(`Failed to resolve user '${targetUsernameOrPeerId}': ${lookupErrorText}`);
+      console.warn(`Key exchange upgrade failed, falling back to out-of-band keys`);
+      return null;
+    } catch (err: unknown) {
+      const errorText = String(err instanceof Error ? err.message : err).toLowerCase();
+      console.log(errorText);
+      if (errorText.includes('all multiaddr dials failed')) {
+        throw new Error('Trusted user is offline. Cannot upgrade. Sending offline message.');
       }
+      throw err;
+    }
+  }
 
-      user = await this.keyExchange.initiateKeyExchange(targetPeerId, targetUsernameOrPeerId, message, {
-        recipientOfflinePublicKey: resolvedOfflinePublicKey,
-      });
-      if (!user) {
+  private async ensureConversationSession(
+    targetPeerId: PeerId,
+    targetUsernameOrPeerId: string,
+    message: string,
+  ): Promise<{ session: ConversationSession; keyExchangeOccurred: boolean }> {
+    const targetPeerIdStr = targetPeerId.toString();
+    let session = this.sessionManager.getSession(targetPeerIdStr);
+    if (session) {
+      return { session, keyExchangeOccurred: false };
+    }
+
+    console.log(`No session found, initiating key exchange with ${targetUsernameOrPeerId}`);
+
+    try {
+      const exchangedUser = await this.keyExchange.initiateKeyExchange(targetPeerId, targetUsernameOrPeerId, message);
+      if (!exchangedUser) {
         throw new Error('Key exchange failed');
       }
-      keyExchangeOccurred = true;
-    } else {
-      targetPeerId = peerIdFromString(user.peer_id);
 
-      // Check if we need to upgrade from out-of-band trust to full key exchange
-      const chat = this.database.getChatByPeerId(targetPeerId.toString());
-      if (chat?.trusted_out_of_band) {
-        try {
-          console.log(`Chat with ${targetUsernameOrPeerId} was established out-of-band.
-            Upgrading to full key exchange if user is online...`);
-          const exchangedUser = await this.keyExchange.initiateKeyExchange(targetPeerId, targetUsernameOrPeerId, message);
-          if (exchangedUser) {
-            user = exchangedUser;
-            keyExchangeOccurred = true;
-            console.log(`✓ Upgraded to stronger encryption with ECDH-derived keys`);
-          } else {
-            console.warn(`Key exchange upgrade failed, falling back to out-of-band keys`);
-          }
-        } catch (err: unknown) {
-          const errorText = String(err instanceof Error ? err.message : err).toLowerCase();
-          console.log(errorText);
-          if (errorText.includes('all multiaddr dials failed')) {
-            throw new Error('Trusted user is offline. Cannot upgrade. Sending offline message.')
-          }
-          throw err;
-        }
+      session = this.sessionManager.getSession(targetPeerIdStr);
+      if (!session) {
+        throw new Error('Key exchange succeeded but session not created');
       }
-    }
 
-    if (this.database.isBlocked(targetPeerId.toString())) {
-      throw new Error('User is blocked. Cannot send messages.');
-    }
-
-    // Get or create session
-    let session = this.sessionManager.getSession(targetPeerId.toString());
-    if (!session) {
-      console.log(`No session found, initiating key exchange with ${targetUsernameOrPeerId}`);
-
-      try {
-        const exchangedUser = await this.keyExchange.initiateKeyExchange(targetPeerId, targetUsernameOrPeerId, message);
-        if (!exchangedUser) {
-          throw new Error('Key exchange failed');
-        }
-        keyExchangeOccurred = true;
-
-        session = this.sessionManager.getSession(targetPeerId.toString());
-        if (!session) {
-          throw new Error('Key exchange succeeded but session not created');
-        }
-      } catch (error: unknown) {
-        // Silently abort if user cancelled - don't show error
-        if (error instanceof Error && error.message === 'KEY_EXCHANGE_CANCELLED') {
-          throw error; // Propagate to sendMessage for silent handling
-        }
-        throw error; // Re-throw other errors normally
+      return { session, keyExchangeOccurred: true };
+    } catch (error: unknown) {
+      if (error instanceof Error && error.message === 'KEY_EXCHANGE_CANCELLED') {
+        throw error;
       }
+      throw error;
     }
+  }
 
-    // Block message sending if rotation is in progress
+  private assertNoPendingSessionRotation(targetPeerId: PeerId): void {
     const hasPendingRotation = this.sessionManager.getPendingKeyExchange(targetPeerId.toString());
     if (hasPendingRotation) {
       throw new Error('Key rotation in progress - please wait and try again');
     }
+  }
 
-    // Check if we need to rotate keys
-    if (session.messageCount >= this.keyExchange.getKeyRotationThreshold()) {
-      console.log(`Rotating keys for ${targetUsernameOrPeerId} (${session.messageCount} messages sent)`);
-      const succeeded = await this.keyExchange.rotateSessionKeys(targetPeerId);
-      if (succeeded) {
-        session = this.sessionManager.getSession(targetPeerId.toString());
-        if (!session) {
-          throw new Error('Key rotation succeeded but session not found');
-        }
-      } else {
-        this.sessionManager.clearSession(targetPeerId.toString());
-        throw new Error('Key rotation failed - session cleared. Please try sending your message again.');
-      }
+  private async rotateSessionIfNeeded(
+    session: ConversationSession,
+    targetPeerId: PeerId,
+    targetUsernameOrPeerId: string,
+  ): Promise<ConversationSession> {
+    if (session.messageCount < this.keyExchange.getKeyRotationThreshold()) {
+      return session;
     }
 
-    return { user, session, peerId: targetPeerId, keyExchangeOccurred };
+    console.log(`Rotating keys for ${targetUsernameOrPeerId} (${session.messageCount} messages sent)`);
+    const succeeded = await this.keyExchange.rotateSessionKeys(targetPeerId);
+    if (succeeded) {
+      const rotatedSession = this.sessionManager.getSession(targetPeerId.toString());
+      if (!rotatedSession) {
+        throw new Error('Key rotation succeeded but session not found');
+      }
+      return rotatedSession;
+    }
+
+    this.sessionManager.clearSession(targetPeerId.toString());
+    throw new Error('Key rotation failed - session cleared. Please try sending your message again.');
   }
 
   private getSendMessageErrorText(error: unknown): string {

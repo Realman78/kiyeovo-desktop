@@ -338,106 +338,33 @@ export class KeyExchange {
       throw new Error('No user identity available');
     }
 
-    // Get my own username from database (last registered username) or generate fallback
-    const myPeerId = this.node.peerId.toString();
-    const myUser = this.database.getUserByPeerId(myPeerId);
-    const myUsername = myUser?.username || `user_${myPeerId.slice(-8)}`;
-
     const peerIdStr = targetPeerId.toString();
+    const myUsername = this.getInitiatorUsername();
     const linkIntent = options?.linkIntent ?? this.resolveLinkIntent(peerIdStr);
+    this.assertCanInitiateKeyExchange(peerIdStr, targetUsername);
 
-    // Check if already waiting for response from this user
-    if (this.keyExchangeAbortControllers.has(peerIdStr)) {
-      throw new Error(`Already waiting for ${targetUsername} to accept your message request`);
-    }
-
-    if (this.sessionManager.getPendingKeyExchange(peerIdStr)) {
-      throw new Error(`Already waiting for ${targetUsername} to accept your message request`);
-    }
-
-    // Check for recent failed attempts (sender-side rate limiting)
-    const recentFailure = this.database.getRecentFailedKeyExchange(peerIdStr, 5);
-    if (recentFailure) {
-      throw new Error(`Rate limit: You must wait before contacting ${targetUsername} again`);
-    }
-
-    let recipientOfflinePublicKeyBase64 = options?.recipientOfflinePublicKey;
-    if (!recipientOfflinePublicKeyBase64) {
-      recipientOfflinePublicKeyBase64 = this.database.getUserByPeerId(peerIdStr)?.offline_public_key;
-    }
-    if (!recipientOfflinePublicKeyBase64) {
-      const registration = await this.usernameRegistry.lookupByPeerId(peerIdStr);
-      recipientOfflinePublicKeyBase64 = registration.offlinePublicKey;
-    }
-    if (!recipientOfflinePublicKeyBase64) {
-      throw new Error(`Missing offline public key for ${targetUsername}`);
-    }
-    const recipientOfflinePublicKeyPem = Buffer.from(recipientOfflinePublicKeyBase64, 'base64').toString('utf8');
-    const encryptedInitialMessage = MessageEncryption.encryptForRecipientOffline(
-      message,
-      recipientOfflinePublicKeyPem
+    const recipientOfflinePublicKeyBase64 = await this.resolveRecipientOfflinePublicKeyBase64(
+      targetPeerId,
+      targetUsername,
+      options?.recipientOfflinePublicKey,
     );
-
-    const ephemeralPrivateKey = x25519.utils.randomSecretKey();
-    const ephemeralPublicKey = x25519.getPublicKey(ephemeralPrivateKey);
-
-    const timestamp = Date.now();
-    const signFields = {
-      type: 'key_exchange' as const,
-      content: 'key_exchange_init' as const,
-      ephemeralPublicKey: Buffer.from(ephemeralPublicKey).toString('base64'),
-      senderUsername: myUsername,
+    const {
       timestamp,
-      encryptedMessageBody: encryptedInitialMessage.content,
-      encryptedMessageBodyType: encryptedInitialMessage.messageType,
-      ...(encryptedInitialMessage.encryptedAesKey !== undefined && { encryptedMessageBodyKey: encryptedInitialMessage.encryptedAesKey }),
-      ...(encryptedInitialMessage.aesIv !== undefined && { encryptedMessageBodyIv: encryptedInitialMessage.aesIv }),
+      keyExchangeMessage,
+      pendingKeyExchange,
+    } = this.createInitiatorKeyExchangeRequest(
+      userIdentity,
+      myUsername,
+      message,
+      recipientOfflinePublicKeyBase64,
       linkIntent,
-    };
-
-    const stringifiedSignFields = JSON.stringify(signFields);
-
-    const signature = userIdentity.sign(stringifiedSignFields);
-    const signatureBase64 = Buffer.from(signature).toString('base64');
-
-    const keyExchangeMessage: AuthenticatedEncryptedMessage = {
-      signature: signatureBase64,
-      ...signFields
-    };
-
-    await this.logPeerDialDiagnostics(targetPeerId, 'key_exchange_init');
-      const stream = await dialProtocolWithRelayFallback({
-        node: this.node,
-        database: this.database,
-        targetPeerId,
-        protocol: this.chatProtocol,
-        context: 'key_exchange_init',
-      });
-    const messageJson = JSON.stringify(keyExchangeMessage);
-
-    const encoder = new TextEncoder();
-    await stream.sink([encoder.encode(messageJson)]);
-
-    // Store stream so we can close it on cancel
-    this.keyExchangeStreams.set(peerIdStr, stream);
-
-    this.sessionManager.storePendingKeyExchange(peerIdStr, {
-      timestamp: timestamp,
-      ephemeralPrivateKey,
-      ephemeralPublicKey
-    });
-
-    // Wait for response (2 minutes for user to accept)
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => { reject(new Error('Key exchange timeout')); }, PENDING_KEY_EXCHANGE_EXPIRATION)
     );
 
-    // Create cancellable promise for key exchange
-    const cancelPromise = new Promise<never>((_, reject) => {
-      this.keyExchangeAbortControllers.set(peerIdStr, () => {
-        reject(new Error('KEY_EXCHANGE_CANCELLED'));
-      });
-    });
+    const stream = await this.openKeyExchangeInitStream(targetPeerId);
+    await this.sendInitiatorKeyExchangeRequest(stream, keyExchangeMessage);
+    this.storeOutgoingKeyExchangeState(peerIdStr, stream, pendingKeyExchange);
+    const timeoutPromise = this.createKeyExchangeTimeoutPromise();
+    const cancelPromise = this.createKeyExchangeCancelPromise(peerIdStr);
 
     // Key exchange request successfully sent - notify frontend (dialog can close now)
     this.onKeyExchangeSent({
@@ -488,6 +415,137 @@ export class KeyExchange {
 
       throw error;
     }
+  }
+
+  private getInitiatorUsername(): string {
+    const myPeerId = this.node.peerId.toString();
+    const myUser = this.database.getUserByPeerId(myPeerId);
+    return myUser?.username || `user_${myPeerId.slice(-8)}`;
+  }
+
+  private assertCanInitiateKeyExchange(peerIdStr: string, targetUsername: string): void {
+    if (this.keyExchangeAbortControllers.has(peerIdStr)) {
+      throw new Error(`Already waiting for ${targetUsername} to accept your message request`);
+    }
+
+    if (this.sessionManager.getPendingKeyExchange(peerIdStr)) {
+      throw new Error(`Already waiting for ${targetUsername} to accept your message request`);
+    }
+
+    const recentFailure = this.database.getRecentFailedKeyExchange(peerIdStr, 5);
+    if (recentFailure) {
+      throw new Error(`Rate limit: You must wait before contacting ${targetUsername} again`);
+    }
+  }
+
+  private async resolveRecipientOfflinePublicKeyBase64(
+    targetPeerId: PeerId,
+    targetUsername: string,
+    candidate?: string,
+  ): Promise<string> {
+    const peerIdStr = targetPeerId.toString();
+    let recipientOfflinePublicKeyBase64 = candidate;
+    if (!recipientOfflinePublicKeyBase64) {
+      recipientOfflinePublicKeyBase64 = this.database.getUserByPeerId(peerIdStr)?.offline_public_key;
+    }
+    if (!recipientOfflinePublicKeyBase64) {
+      const registration = await this.usernameRegistry.lookupByPeerId(peerIdStr);
+      recipientOfflinePublicKeyBase64 = registration.offlinePublicKey;
+    }
+    if (!recipientOfflinePublicKeyBase64) {
+      throw new Error(`Missing offline public key for ${targetUsername}`);
+    }
+    return recipientOfflinePublicKeyBase64;
+  }
+
+  private createInitiatorKeyExchangeRequest(
+    userIdentity: EncryptedUserIdentity,
+    myUsername: string,
+    message: string,
+    recipientOfflinePublicKeyBase64: string,
+    linkIntent: 'initial' | 'resume',
+  ): {
+    timestamp: number;
+    keyExchangeMessage: AuthenticatedEncryptedMessage;
+    pendingKeyExchange: { timestamp: number; ephemeralPrivateKey: Uint8Array; ephemeralPublicKey: Uint8Array };
+  } {
+    const recipientOfflinePublicKeyPem = Buffer.from(recipientOfflinePublicKeyBase64, 'base64').toString('utf8');
+    const encryptedInitialMessage = MessageEncryption.encryptForRecipientOffline(
+      message,
+      recipientOfflinePublicKeyPem
+    );
+
+    const ephemeralPrivateKey = x25519.utils.randomSecretKey();
+    const ephemeralPublicKey = x25519.getPublicKey(ephemeralPrivateKey);
+    const timestamp = Date.now();
+    const signFields = {
+      type: 'key_exchange' as const,
+      content: 'key_exchange_init' as const,
+      ephemeralPublicKey: Buffer.from(ephemeralPublicKey).toString('base64'),
+      senderUsername: myUsername,
+      timestamp,
+      encryptedMessageBody: encryptedInitialMessage.content,
+      encryptedMessageBodyType: encryptedInitialMessage.messageType,
+      ...(encryptedInitialMessage.encryptedAesKey !== undefined && { encryptedMessageBodyKey: encryptedInitialMessage.encryptedAesKey }),
+      ...(encryptedInitialMessage.aesIv !== undefined && { encryptedMessageBodyIv: encryptedInitialMessage.aesIv }),
+      linkIntent,
+    };
+    const signature = userIdentity.sign(JSON.stringify(signFields));
+
+    return {
+      timestamp,
+      keyExchangeMessage: {
+        signature: Buffer.from(signature).toString('base64'),
+        ...signFields
+      },
+      pendingKeyExchange: {
+        timestamp,
+        ephemeralPrivateKey,
+        ephemeralPublicKey
+      }
+    };
+  }
+
+  private async openKeyExchangeInitStream(targetPeerId: PeerId): Promise<Stream> {
+    await this.logPeerDialDiagnostics(targetPeerId, 'key_exchange_init');
+    return dialProtocolWithRelayFallback({
+      node: this.node,
+      database: this.database,
+      targetPeerId,
+      protocol: this.chatProtocol,
+      context: 'key_exchange_init',
+    });
+  }
+
+  private async sendInitiatorKeyExchangeRequest(
+    stream: Stream,
+    keyExchangeMessage: AuthenticatedEncryptedMessage,
+  ): Promise<void> {
+    const encoder = new TextEncoder();
+    await stream.sink([encoder.encode(JSON.stringify(keyExchangeMessage))]);
+  }
+
+  private storeOutgoingKeyExchangeState(
+    peerIdStr: string,
+    stream: Stream,
+    pendingKeyExchange: { timestamp: number; ephemeralPrivateKey: Uint8Array; ephemeralPublicKey: Uint8Array },
+  ): void {
+    this.keyExchangeStreams.set(peerIdStr, stream);
+    this.sessionManager.storePendingKeyExchange(peerIdStr, pendingKeyExchange);
+  }
+
+  private createKeyExchangeTimeoutPromise(): Promise<never> {
+    return new Promise<never>((_, reject) =>
+      setTimeout(() => { reject(new Error('Key exchange timeout')); }, PENDING_KEY_EXCHANGE_EXPIRATION)
+    );
+  }
+
+  private createKeyExchangeCancelPromise(peerIdStr: string): Promise<never> {
+    return new Promise<never>((_, reject) => {
+      this.keyExchangeAbortControllers.set(peerIdStr, () => {
+        reject(new Error('KEY_EXCHANGE_CANCELLED'));
+      });
+    });
   }
 
   /**
@@ -657,8 +715,30 @@ export class KeyExchange {
       throw new Error('Key exchange missing signature or ephemeral public key - this should never happen');
     }
 
-    const now = Date.now()
+    this.emitIncomingContactRequest(remoteId, message, initialMessageBody);
+    const result = await this.waitForContactRequestDecision(remoteId, senderUsername, initialMessageBody);
+    this.database.deleteContactAttempt(contactAttemptId);
+    if (result === null) {
+      console.log(`Contact request from ${senderUsername} expired`);
+      throw new Error('REJECTION_TIMEOUT');
+    }
 
+    if (!result) {
+      console.log(`Contact request from ${senderUsername} rejected`);
+      // Signal that rejection response needs to be sent
+      throw new Error('REJECTION_NEEDED');
+    }
+
+    return this.resolveAcceptedContactRequestSender(remoteId, senderUsername);
+  }
+
+  private emitIncomingContactRequest(
+    remoteId: string,
+    message: AuthenticatedEncryptedMessage,
+    initialMessageBody: string,
+  ): void {
+    const senderUsername = message.senderUsername;
+    const now = Date.now();
     const expiresAt = now + PENDING_KEY_EXCHANGE_EXPIRATION;
 
     this.onContactRequestReceived({
@@ -671,7 +751,13 @@ export class KeyExchange {
     });
 
     console.log(`Contact Request from ${senderUsername}`);
+  }
 
+  private async waitForContactRequestDecision(
+    remoteId: string,
+    senderUsername: string,
+    initialMessageBody: string,
+  ): Promise<boolean | null> {
     const acceptancePromise = new Promise<boolean>((resolve, reject) => {
       this.pendingAcceptances.set(remoteId, { resolve, reject, timestamp: Date.now(), username: senderUsername, messageBody: initialMessageBody });
     });
@@ -685,25 +771,18 @@ export class KeyExchange {
     });
 
     const result = await Promise.race([acceptancePromise, timeoutPromise]);
-
     if (result !== null && timeoutId) {
       clearTimeout(timeoutId);
     }
 
     this.pendingAcceptances.delete(remoteId);
-    this.database.deleteContactAttempt(contactAttemptId);
-    if (result === null) {
-      console.log(`Contact request from ${senderUsername} expired`);
-      throw new Error('REJECTION_TIMEOUT');
-    }
+    return result;
+  }
 
-    if (!result) {
-      console.log(`Contact request from ${senderUsername} rejected`);
-      // Signal that rejection response needs to be sent
-      throw new Error('REJECTION_NEEDED');
-    }
-
-    // User accepted - get sender info (prefer DB, fallback to DHT)
+  private async resolveAcceptedContactRequestSender(
+    remoteId: string,
+    senderUsername: string,
+  ): Promise<UserRegistration | User> {
     const existingAcceptedUser = this.database.getUserByPeerId(remoteId);
     if (
       existingAcceptedUser?.signing_public_key &&
@@ -716,7 +795,6 @@ export class KeyExchange {
       return existingAcceptedUser;
     }
 
-    // Need to fetch from DHT
     try {
       const sender = await this.usernameRegistry.lookupByPeerId(remoteId);
       if (sender.peerID !== remoteId) {
@@ -997,102 +1075,43 @@ export class KeyExchange {
     myUsername: string
   ): Promise<void> {
     try {
-      const existingDirectChat = this.database.getChatByPeerId(remoteId);
-      const incomingLinkIntent = message.linkIntent ?? 'resume';
-      const shouldForceResetLocalDirectChat = Boolean(existingDirectChat) && incomingLinkIntent === 'initial';
-      const shouldTriggerRelinkCatchup = !existingDirectChat && incomingLinkIntent !== 'initial';
-      const responseLinkDecision: 'accepted' | 'reset_required' =
-        !existingDirectChat && incomingLinkIntent !== 'initial'
-          ? 'reset_required'
-          : 'accepted';
-
-      const ourPendingKeyExchange = this.sessionManager.getPendingKeyExchange(remoteId);
-      if (ourPendingKeyExchange) {
-        const weWin = this.node.peerId.toString() < remoteId;
-        if (weWin) {
-          console.log(
-            `Simultaneous key exchange init detected with ${remoteId.slice(0, 8)}... - keeping our outgoing request (local peerId wins)`,
-          );
-          return;
-        }
-
-        console.log(
-          `Simultaneous key exchange init detected with ${remoteId.slice(0, 8)}... - remote request wins, cancelling ours`,
-        );
-        await this.cancelPendingKeyExchange(remoteId);
-      }
-
-      // Clean up any existing session - handles case where sender cancelled but we accepted
-      const existingSession = this.sessionManager.getSession(remoteId);
-      if (existingSession) {
-        console.log(`Cleaning up existing session with ${remoteId.slice(0, 8)}... - they initiated a new key exchange`);
-        this.sessionManager.clearSession(remoteId);
-      }
-
-      // Validate input and check if sender is blocked
-      this.validateKeyExchangeInit(message);
-      const initialMessageBody = this.decryptInitialMessageBody(message, userIdentity.offlinePrivateKey);
-
-      // Authorize contact request
-      const authResult = await this.authorizeContactRequest(remoteId, message, initialMessageBody);
-
-      if (!authResult) {
+      const linkHandling = this.getIncomingKeyExchangeLinkHandling(remoteId, message);
+      const shouldContinue = await this.reconcileIncomingKeyExchangeInit(remoteId);
+      if (!shouldContinue) {
         return;
       }
 
-      const sender = authResult;
-      const { valid, keys } = await this.verifyKeyExchangeInitSignature(message, sender, remoteId);
-
-      if (!valid) {
-        console.error('Key exchange init signature verification failed');
-        this.onKeyExchangeFailed({
-          peerId: remoteId,
-          username: sender.username,
-          error: 'Signature verification failed'
-        });
-        return;
-      }
-
-      // Ensure user exists in database with proper cryptographic keys
-      await this.ensureUserExistsWithKeys(
+      const verifiedInitiator = await this.authorizeAndVerifyIncomingInitiator(
         remoteId,
-        sender.username,
-        keys.signingPublicKey,
-        keys.offlinePublicKey,
-        keys.signature
+        message,
+        userIdentity,
       );
+      if (!verifiedInitiator) {
+        return;
+      }
 
-      // Create session with ephemeral keys and derive encryption keys
-      const { session, ephemeralPublicKey, offlineBucketSecret, notificationsBucketKey } =
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-        this.createResponderSession(remoteId, message.ephemeralPublicKey!);
+      const responderSession = this.createAndStoreResponderSession(remoteId, message);
 
-      this.sessionManager.storeSession(remoteId, session);
-
-      // Send signed response to initiator
       await this.sendKeyExchangeResponse(
         stream,
-        ephemeralPublicKey,
+        responderSession.ephemeralPublicKey,
         myUsername,
         userIdentity,
         remoteId,
-        responseLinkDecision
+        linkHandling.responseLinkDecision
       );
 
-      // Create chat record in database
-      await this._createUserAndChat(
+      await this.finalizeAcceptedKeyExchangeInit(
         remoteId,
-        sender.username,
-        offlineBucketSecret,
-        notificationsBucketKey,
-        keys.signingPublicKey,
-        keys.offlinePublicKey,
-        keys.signature,
-        shouldForceResetLocalDirectChat
+        verifiedInitiator.sender.username,
+        responderSession.offlineBucketSecret,
+        responderSession.notificationsBucketKey,
+        verifiedInitiator.keys.signingPublicKey,
+        verifiedInitiator.keys.offlinePublicKey,
+        verifiedInitiator.keys.signature,
+        linkHandling.shouldForceResetLocalDirectChat,
+        linkHandling.shouldTriggerRelinkCatchup,
       );
-      if (shouldForceResetLocalDirectChat || shouldTriggerRelinkCatchup) {
-        this.onDirectLinkReset(remoteId);
-      }
     } catch (error: unknown) {
       if (error instanceof Error && error.message === 'REJECTION_NEEDED') {
         await this.sendRejectionResponse(
@@ -1119,146 +1138,309 @@ export class KeyExchange {
     }
   }
 
-  private async waitForKeyExchangeResponse(peerId: string, stream: Stream): Promise<User | null> {
-    let message: AuthenticatedEncryptedMessage;
+  private getIncomingKeyExchangeLinkHandling(
+    remoteId: string,
+    message: AuthenticatedEncryptedMessage,
+  ): {
+    shouldForceResetLocalDirectChat: boolean;
+    shouldTriggerRelinkCatchup: boolean;
+    responseLinkDecision: 'accepted' | 'reset_required';
+  } {
+    const existingDirectChat = this.database.getChatByPeerId(remoteId);
+    const incomingLinkIntent = message.linkIntent ?? 'resume';
+    const shouldForceResetLocalDirectChat = Boolean(existingDirectChat) && incomingLinkIntent === 'initial';
+    const shouldTriggerRelinkCatchup = !existingDirectChat && incomingLinkIntent !== 'initial';
+    const responseLinkDecision: 'accepted' | 'reset_required' =
+      !existingDirectChat && incomingLinkIntent !== 'initial'
+        ? 'reset_required'
+        : 'accepted';
 
-    try {
-      message = await StreamHandler.readMessageFromStream<AuthenticatedEncryptedMessage>(stream);
-      if (!this.sessionManager.getPendingKeyExchange(peerId)) {
-        // this means that it was removed by the user in the UI
-        throw new Error('Pending key exchange was cancelled by the user');
+    return {
+      shouldForceResetLocalDirectChat,
+      shouldTriggerRelinkCatchup,
+      responseLinkDecision,
+    };
+  }
+
+  private async reconcileIncomingKeyExchangeInit(remoteId: string): Promise<boolean> {
+    const ourPendingKeyExchange = this.sessionManager.getPendingKeyExchange(remoteId);
+    if (ourPendingKeyExchange) {
+      const weWin = this.node.peerId.toString() < remoteId;
+      if (weWin) {
+        console.log(`Simultaneous KX detected - keeping ours`);
+        return false;
       }
-    } catch (streamError: unknown) {
-      // Stream died - cleanup and propagate error
-      this.sessionManager.removePendingKeyExchange(peerId);
-      // NOTE: Don't clear session here! It might belong to a different key exchange attempt
-      // if user cancelled this one and started a new one. Session cleanup happens in initiateKeyExchange catch block.
-      const errorMsg = streamError instanceof Error ? streamError.message : String(streamError);
-      throw new Error(`Connection lost during key exchange: ${errorMsg}`);
+
+      console.log(`Simultaneous KX detected - cancelling ours`);
+      await this.cancelPendingKeyExchange(remoteId);
     }
 
+    const existingSession = this.sessionManager.getSession(remoteId);
+    if (existingSession) {
+      console.log(`Cleaning up existing session with ${remoteId.slice(0, 8)}... - they initiated a new KX`);
+      this.sessionManager.clearSession(remoteId);
+    }
+
+    return true;
+  }
+
+  private async authorizeAndVerifyIncomingInitiator(
+    remoteId: string,
+    message: AuthenticatedEncryptedMessage,
+    userIdentity: EncryptedUserIdentity,
+  ): Promise<{
+    sender: UserRegistration | User;
+    keys: { signingPublicKey: string; offlinePublicKey: string; signature: string };
+  } | null> {
+    this.validateKeyExchangeInit(message);
+    const initialMessageBody = this.decryptInitialMessageBody(message, userIdentity.offlinePrivateKey);
+    const authResult = await this.authorizeContactRequest(remoteId, message, initialMessageBody);
+    if (!authResult) return null;
+
+    const sender = authResult;
+    const { valid, keys } = await this.verifyKeyExchangeInitSignature(message, sender, remoteId);
+    if (!valid) {
+      console.error('Key exchange init signature verification failed');
+      this.onKeyExchangeFailed({
+        peerId: remoteId,
+        username: sender.username,
+        error: 'Signature verification failed'
+      });
+      return null;
+    }
+
+    await this.ensureUserExistsWithKeys(
+      remoteId,
+      sender.username,
+      keys.signingPublicKey,
+      keys.offlinePublicKey,
+      keys.signature
+    );
+
+    return { sender, keys };
+  }
+
+  private createAndStoreResponderSession(
+    remoteId: string,
+    message: AuthenticatedEncryptedMessage,
+  ): {
+    session: ConversationSession;
+    ephemeralPublicKey: Uint8Array;
+    offlineBucketSecret: string;
+    notificationsBucketKey: Uint8Array;
+  } {
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const responderSession = this.createResponderSession(remoteId, message.ephemeralPublicKey!);
+
+    this.sessionManager.storeSession(remoteId, responderSession.session);
+    return responderSession;
+  }
+
+  private async finalizeAcceptedKeyExchangeInit(
+    remoteId: string,
+    username: string,
+    offlineBucketSecret: string,
+    notificationsBucketKey: Uint8Array,
+    signingPublicKey: string,
+    offlinePublicKey: string,
+    signature: string,
+    shouldForceResetLocalDirectChat: boolean,
+    shouldTriggerRelinkCatchup: boolean,
+  ): Promise<void> {
+    await this._createUserAndChat(
+      remoteId,
+      username,
+      offlineBucketSecret,
+      notificationsBucketKey,
+      signingPublicKey,
+      offlinePublicKey,
+      signature,
+      shouldForceResetLocalDirectChat
+    );
+    if (shouldForceResetLocalDirectChat || shouldTriggerRelinkCatchup) {
+      this.onDirectLinkReset(remoteId);
+    }
+  }
+
+  private async waitForKeyExchangeResponse(peerId: string, stream: Stream): Promise<User | null> {
+    const message = await this.readKeyExchangeResponseMessage(peerId, stream);
+
     try {
-
       if (message.type === 'key_exchange' && message.content === 'key_exchange_rejected') {
-        // Verify rejection signature - if invalid, ignore and let timeout handle it
-        if (!message.signature || !message.senderUsername || !message.ephemeralPublicKey) {
-          throw new Error('Rejection message missing signature, sender username or ephemeral public key');
-        }
-
-        const messageToVerify = this.buildKeyExchangeMessageToVerify({
-          content: 'key_exchange_rejected',
-          ephemeralPublicKey: message.ephemeralPublicKey,
-          senderUsername: message.senderUsername,
-          timestamp: message.timestamp,
-        });
-
-        const { valid } = await this.verifySignatureWithFallback(
-          message.signature,
-          messageToVerify,
-          message.senderUsername,
-          peerId
-        );
-
-        // TODO test
-        if (!valid) {
-          console.log('Rejection signature verification failed.');
-          console.log('User may be compromised.');
-          console.log('If you want to block them, run `block-user <username> [reason]`');
-        }
-
-        throw new Error(`Contact request rejected by ${message.senderUsername}`);
+        await this.handleRejectedKeyExchangeResponse(message, peerId);
       }
 
-      if (message.type !== 'key_exchange' || message.content !== 'key_exchange_response') {
-        throw new Error('Unexpected message type during key exchange');
-      }
+      await this.assertAcceptedKeyExchangeResponse(message, peerId);
+      const { sharedSecret } = this.createAndStoreInitiatorSessionFromResponse(peerId, message);
 
-      if (!message.signature || !message.senderUsername || !message.ephemeralPublicKey) {
-        throw new Error('Key exchange response missing signature, sender username or ephemeral public key');
-      }
-
-      const verifyPayload: Pick<AuthenticatedEncryptedMessage,
-        'content' |
-        'ephemeralPublicKey' |
-        'senderUsername' |
-        'timestamp' |
-        'encryptedMessageBody' |
-        'encryptedMessageBodyType' |
-        'encryptedMessageBodyKey' |
-        'encryptedMessageBodyIv' |
-        'linkIntent' |
-        'linkDecision'> = {
-        content: 'key_exchange_response',
-        ephemeralPublicKey: message.ephemeralPublicKey,
-        senderUsername: message.senderUsername,
-        timestamp: message.timestamp,
-      };
-      if (message.linkDecision !== undefined) verifyPayload.linkDecision = message.linkDecision;
-      const messageToVerify = this.buildKeyExchangeMessageToVerify(verifyPayload);
-
-      const { valid } = await this.verifySignatureWithFallback(
-        message.signature,
-        messageToVerify,
-        message.senderUsername,
-        peerId
-      );
-
-      if (!valid) {
-        throw new Error('Key exchange response signature verification failed');
-      }
-
-      const pending = this.sessionManager.getPendingKeyExchange(peerId);
-      if (!pending) {
-        throw new Error('No pending key exchange found');
-      }
-
-      const { sendingKey, receivingKey, sharedSecret } = this.deriveDirectionalKeys(
-        pending.ephemeralPublicKey,
-        pending.ephemeralPrivateKey,
-        message.ephemeralPublicKey,
-        'initiator'
-      );
-
-      const session: ConversationSession = {
-        peerId: peerId,
-        ephemeralPrivateKey: pending.ephemeralPrivateKey,
-        ephemeralPublicKey: pending.ephemeralPublicKey,
-        sendingKey,
-        receivingKey,
-        messageCount: 0,
-        lastUsed: Date.now()
-      };
-
-      console.log("storing session", session);
-
-      this.sessionManager.storeSession(peerId, session);
-      this.sessionManager.removePendingKeyExchange(peerId);
-
-      const myPeerId = this.node.peerId.toString();
-      const offlineBucketSecret = this.deriveOfflineBucketSecret(sharedSecret, myPeerId, peerId);
-      const notificationsBucketKey = this.deriveNotificationsBucketKey(sharedSecret, myPeerId, peerId);
-      const forceResetDirectChat = message.linkDecision === 'reset_required';
-
-      const userFromDb = this.database.getUserByPeerId(peerId);
-      await this._createUserAndChat(
+      await this.finalizeAcceptedKeyExchangeResponse(
         peerId,
         message.senderUsername,
-        offlineBucketSecret,
-        notificationsBucketKey,
-        userFromDb?.signing_public_key,
-        userFromDb?.offline_public_key,
-        userFromDb?.signature,
-        forceResetDirectChat
+        sharedSecret,
+        message.linkDecision === 'reset_required',
       );
-      if (forceResetDirectChat) {
-        this.onDirectLinkReset(peerId);
-      }
 
       // Return the user object we just created/updated
       return this.database.getUserByPeerId(peerId);
     } catch (error: unknown) {
       generalErrorHandler(error);
       return null;
+    }
+  }
+
+  private async readKeyExchangeResponseMessage(
+    peerId: string,
+    stream: Stream,
+  ): Promise<AuthenticatedEncryptedMessage> {
+    try {
+      const message = await StreamHandler.readMessageFromStream<AuthenticatedEncryptedMessage>(stream);
+      if (!this.sessionManager.getPendingKeyExchange(peerId)) {
+        throw new Error('Pending key exchange was cancelled by the user');
+      }
+      return message;
+    } catch (streamError: unknown) {
+      this.sessionManager.removePendingKeyExchange(peerId);
+      const errorMsg = streamError instanceof Error ? streamError.message : String(streamError);
+      throw new Error(`Connection lost during key exchange: ${errorMsg}`);
+    }
+  }
+
+  private async handleRejectedKeyExchangeResponse(
+    message: AuthenticatedEncryptedMessage,
+    peerId: string,
+  ): Promise<never> {
+    if (!message.signature || !message.senderUsername || !message.ephemeralPublicKey) {
+      throw new Error('Rejection message missing signature, sender username or ephemeral public key');
+    }
+
+    const messageToVerify = this.buildKeyExchangeMessageToVerify({
+      content: 'key_exchange_rejected',
+      ephemeralPublicKey: message.ephemeralPublicKey,
+      senderUsername: message.senderUsername,
+      timestamp: message.timestamp,
+    });
+
+    const { valid } = await this.verifySignatureWithFallback(
+      message.signature,
+      messageToVerify,
+      message.senderUsername,
+      peerId
+    );
+
+    if (!valid) {
+      console.log('Rejection signature verification failed.');
+      console.log('User may be compromised.');
+      console.log('If you want to block them, run `block-user <username> [reason]`');
+    }
+
+    throw new Error(`Contact request rejected by ${message.senderUsername}`);
+  }
+
+  private async assertAcceptedKeyExchangeResponse(
+    message: AuthenticatedEncryptedMessage,
+    peerId: string,
+  ): Promise<void> {
+    if (message.type !== 'key_exchange' || message.content !== 'key_exchange_response') {
+      throw new Error('Unexpected message type during key exchange');
+    }
+
+    if (!message.signature || !message.senderUsername || !message.ephemeralPublicKey) {
+      throw new Error('Key exchange response missing signature, sender username or ephemeral public key');
+    }
+
+    const verifyPayload: Pick<AuthenticatedEncryptedMessage,
+      'content' |
+      'ephemeralPublicKey' |
+      'senderUsername' |
+      'timestamp' |
+      'encryptedMessageBody' |
+      'encryptedMessageBodyType' |
+      'encryptedMessageBodyKey' |
+      'encryptedMessageBodyIv' |
+      'linkIntent' |
+      'linkDecision'> = {
+      content: 'key_exchange_response',
+      ephemeralPublicKey: message.ephemeralPublicKey,
+      senderUsername: message.senderUsername,
+      timestamp: message.timestamp,
+    };
+    if (message.linkDecision !== undefined) verifyPayload.linkDecision = message.linkDecision;
+    const messageToVerify = this.buildKeyExchangeMessageToVerify(verifyPayload);
+
+    const { valid } = await this.verifySignatureWithFallback(
+      message.signature,
+      messageToVerify,
+      message.senderUsername,
+      peerId
+    );
+
+    if (!valid) {
+      throw new Error('Key exchange response signature verification failed');
+    }
+  }
+
+  private createAndStoreInitiatorSessionFromResponse(
+    peerId: string,
+    message: AuthenticatedEncryptedMessage,
+  ): { session: ConversationSession; sharedSecret: Uint8Array } {
+    const pending = this.sessionManager.getPendingKeyExchange(peerId);
+    if (!pending) {
+      throw new Error('No pending key exchange found');
+    }
+
+    const remoteEphemeralPublicKey = message.ephemeralPublicKey;
+    if (!remoteEphemeralPublicKey) {
+      throw new Error('Key exchange response missing ephemeral public key');
+    }
+
+    const { sendingKey, receivingKey, sharedSecret } = this.deriveDirectionalKeys(
+      pending.ephemeralPublicKey,
+      pending.ephemeralPrivateKey,
+      remoteEphemeralPublicKey,
+      'initiator'
+    );
+
+    const session: ConversationSession = {
+      peerId: peerId,
+      ephemeralPrivateKey: pending.ephemeralPrivateKey,
+      ephemeralPublicKey: pending.ephemeralPublicKey,
+      sendingKey,
+      receivingKey,
+      messageCount: 0,
+      lastUsed: Date.now()
+    };
+
+    console.log("storing session", session);
+
+    this.sessionManager.storeSession(peerId, session);
+    this.sessionManager.removePendingKeyExchange(peerId);
+
+    return { session, sharedSecret };
+  }
+
+  private async finalizeAcceptedKeyExchangeResponse(
+    peerId: string,
+    senderUsername: string,
+    sharedSecret: Uint8Array,
+    forceResetDirectChat: boolean,
+  ): Promise<void> {
+    const myPeerId = this.node.peerId.toString();
+    const offlineBucketSecret = this.deriveOfflineBucketSecret(sharedSecret, myPeerId, peerId);
+    const notificationsBucketKey = this.deriveNotificationsBucketKey(sharedSecret, myPeerId, peerId);
+
+    const userFromDb = this.database.getUserByPeerId(peerId);
+    await this._createUserAndChat(
+      peerId,
+      senderUsername,
+      offlineBucketSecret,
+      notificationsBucketKey,
+      userFromDb?.signing_public_key,
+      userFromDb?.offline_public_key,
+      userFromDb?.signature,
+      forceResetDirectChat
+    );
+    if (forceResetDirectChat) {
+      this.onDirectLinkReset(peerId);
     }
   }
 
@@ -1279,62 +1461,19 @@ export class KeyExchange {
       return;
     }
 
-    if (!message.ephemeralPublicKey || !message.signature || !message.senderUsername) {
-      console.error('Key rotation missing required fields');
+    if (!this.hasValidIncomingRotationMessage(message)) {
       return;
     }
 
-    // Timestamp freshness check (replay attack prevention)
-    const messageAge = Date.now() - (message.timestamp || 0);
-    if (messageAge > MAX_KEY_EXCHANGE_AGE || messageAge < -KEY_EXCHANGE_MAX_FUTURE_SKEW_MS) {
-      console.error('Key rotation message too old or future-dated');
+    if (!this.isValidRotationTimestamp(message.timestamp, 'kr_msg')) {
       return;
     }
 
-    // Why do I have this cooldown??
-    // Rate limit rotations (max 1 per 30 seconds per peer)
-    const lastRotation = session.lastRotated ?? 0;
-    if (Date.now() - lastRotation < ROTATION_COOLDOWN) {
-      console.log(`Key rotation from ${message.senderUsername} too frequent - rate limited`);
-      this.sessionManager.clearSession(remoteId);
-      console.log(`Cleared session for ${remoteId.slice(0, 8)}... due to rate-limited rotation`);
+    if (!await this.reconcileIncomingRotation(remoteId, message.senderUsername, session)) {
       return;
     }
 
-    // Check for simultaneous rotation (both peers trying to rotate at same time)
-    const ourPendingRotation = this.sessionManager.getPendingKeyExchange(remoteId);
-    if (ourPendingRotation) {
-      // Tie-breaking: lexicographic comparison of peer IDs
-      const weWin = this.node.peerId.toString() < remoteId;
-
-      if (weWin) {
-        // We initiated first - ignore remote's rotation request, wait for our response
-        console.log(`Simultaneous rotation detected with ${remoteId.slice(0, 8)}... - we initiated first, ignoring remote request`);
-        return; // Stop processing remote's rotation
-      }
-
-      // Remote wins - cancel OUR rotation and process THEIRS instead
-      console.log(`Simultaneous rotation detected with ${remoteId.slice(0, 8)}... - remote initiated first, canceling ours`);
-      this.sessionManager.removePendingKeyExchange(remoteId);
-      this.rejectRotationPromise(remoteId, new Error('Simultaneous rotation - remote wins'));
-    }
-
-    const messageToVerify: MessageToVerify = {
-      type: 'key_exchange',
-      content: 'key_rotation',
-      ephemeralPublicKey: message.ephemeralPublicKey,
-      senderUsername: message.senderUsername,
-      timestamp: message.timestamp,
-    };
-
-    const { valid } = await this.verifySignatureWithFallback(
-      message.signature ?? '',
-      messageToVerify,
-      message.senderUsername,
-      remoteId
-    );
-
-    if (!valid) {
+    if (!await this.verifyIncomingRotationRequest(message, remoteId)) {
       console.log('Key rotation signature verification failed');
       this.sessionManager.clearSession(remoteId);
       console.log(`Cleared session for ${remoteId.slice(0, 8)}... due to signature verification failure`);
@@ -1343,57 +1482,11 @@ export class KeyExchange {
 
     console.log(`Verified authentic key rotation from ${message.senderUsername}`);
 
-    // Generate new ephemeral key pair
-    const newEphemeralPrivateKey = x25519.utils.randomSecretKey();
-    const newEphemeralPublicKey = x25519.getPublicKey(newEphemeralPrivateKey);
-
-    const { sendingKey, receivingKey } = this.deriveDirectionalKeys(
-      newEphemeralPublicKey,
-      newEphemeralPrivateKey,
-      message.ephemeralPublicKey,
-      'responder'
-    );
-
-    // Create and sign the key rotation response
-    const responseTimestamp = Date.now();
-    const responseMessageToSign = {
-      type: 'key_exchange' as const,
-      content: 'key_rotation_response' as const,
-      ephemeralPublicKey: Buffer.from(newEphemeralPublicKey).toString('base64'),
-      senderUsername: myUsername,
-      timestamp: responseTimestamp,
-    };
-
-    const responseSignature = userIdentity.sign(JSON.stringify(responseMessageToSign));
-
-    const rotationResponse: AuthenticatedEncryptedMessage = {
-      signature: Buffer.from(responseSignature).toString('base64'),
-      ...responseMessageToSign
-    };
+    const responderRotation = this.createResponderRotation(message, userIdentity, myUsername);
 
     try {
-      const targetPeerId = peerIdFromString(remoteId);
-      await this.logPeerDialDiagnostics(targetPeerId, 'key_rotation_response');
-      const responseStream = await dialProtocolWithRelayFallback({
-        node: this.node,
-        database: this.database,
-        targetPeerId,
-        protocol: this.chatProtocol,
-        context: 'key_rotation_response',
-      });
-      const responseJson = JSON.stringify(rotationResponse);
-      const encoder = new TextEncoder();
-      await responseStream.sink([encoder.encode(responseJson)]);
-      console.log(`Key rotation response sent to ${remoteId.slice(0, 8)}...`);
-
-      session.ephemeralPrivateKey = newEphemeralPrivateKey;
-      session.ephemeralPublicKey = newEphemeralPublicKey;
-      session.sendingKey = sendingKey;
-      session.receivingKey = receivingKey;
-      session.messageCount = 0;
-      session.lastUsed = Date.now();
-      session.lastRotated = Date.now();
-
+      await this.sendRotationResponse(remoteId, responderRotation.rotationResponse);
+      this.applyCompletedResponderRotation(session, responderRotation);
       console.log(`Key rotation completed with ${remoteId.slice(0, 8)}...`);
     } catch (error: unknown) {
       generalErrorHandler(error, 'Failed to send key rotation response');
@@ -1417,36 +1510,17 @@ export class KeyExchange {
       return;
     }
 
-    if (!message.ephemeralPublicKey || !message.signature || !message.senderUsername) {
-      console.error('Key rotation response missing required fields');
+    if (!this.hasValidIncomingRotationMessage(message, 'kr_resp')) {
       this.rejectRotationPromise(remoteId, new Error('Key rotation response missing required fields'));
       return;
     }
 
-    // Timestamp freshness check (replay attack prevention)
-    const responseAge = Date.now() - (message.timestamp || 0);
-    if (responseAge > MAX_KEY_EXCHANGE_AGE || responseAge < -KEY_EXCHANGE_MAX_FUTURE_SKEW_MS) {
-      console.error('Key rotation response too old or future-dated');
+    if (!this.isValidRotationTimestamp(message.timestamp, 'kr_resp')) {
       this.rejectRotationPromise(remoteId, new Error('Key rotation response timestamp invalid'));
       return;
     }
 
-    const messageToVerify: MessageToVerify = {
-      type: 'key_exchange',
-      content: 'key_rotation_response',
-      ephemeralPublicKey: message.ephemeralPublicKey,
-      senderUsername: message.senderUsername,
-      timestamp: message.timestamp,
-    };
-
-    const { valid } = await this.verifySignatureWithFallback(
-      message.signature,
-      messageToVerify,
-      message.senderUsername,
-      remoteId
-    );
-
-    if (!valid) {
+    if (!await this.verifyIncomingRotationResponse(message, remoteId)) {
       console.error('Key rotation response signature verification failed');
       // Clear session since receiver may have already rotated keys
       this.sessionManager.clearSession(remoteId);
@@ -1467,28 +1541,8 @@ export class KeyExchange {
     }
 
     try {
-      const { sendingKey, receivingKey } = this.deriveDirectionalKeys(
-        pendingRotation.ephemeralPublicKey,
-        pendingRotation.ephemeralPrivateKey,
-        message.ephemeralPublicKey,
-        'initiator'
-      );
-
-      // Update session with new keys and shared secret
-      session.ephemeralPrivateKey = pendingRotation.ephemeralPrivateKey;
-      session.ephemeralPublicKey = pendingRotation.ephemeralPublicKey;
-      session.sendingKey = sendingKey;
-      session.receivingKey = receivingKey;
-      session.messageCount = 0;
-      session.lastUsed = Date.now();
-      session.lastRotated = Date.now();
-
-      // Clean up pending rotation
-      this.sessionManager.removePendingKeyExchange(remoteId);
-
+      this.applyCompletedInitiatorRotation(remoteId, session, pendingRotation, message);
       console.log(`Key rotation completed with ${remoteId.slice(0, 8)}...`);
-
-      // Resolve the promise
       this.resolveRotationPromise(remoteId, true);
     } catch (error: unknown) {
       generalErrorHandler(error, 'Error completing key rotation');
@@ -1515,54 +1569,14 @@ export class KeyExchange {
       throw new Error('User identity not available');
     }
 
-    // Get my own username from database (last registered username) or generate fallback
-    const myPeerId = this.node.peerId.toString();
-    const myUser = this.database.getUserByPeerId(myPeerId);
-    const myUsername = myUser?.username || `user_${myPeerId.slice(-8)}`;
+    const myUsername = this.getInitiatorUsername();
+    const outgoingRotation = this.createOutgoingRotation(userIdentity, myUsername);
 
-    const newEphemeralPrivateKey = x25519.utils.randomSecretKey();
-    const newEphemeralPublicKey = x25519.getPublicKey(newEphemeralPrivateKey);
-    const timestamp = Date.now();
-
-    this.sessionManager.storePendingKeyExchange(peerIdStr, {
-      timestamp: timestamp,
-      ephemeralPrivateKey: newEphemeralPrivateKey,
-      ephemeralPublicKey: newEphemeralPublicKey
-    });
-
-    const rotationPromise = new Promise<boolean>((resolve) => {
-      this.rotationPromises.set(peerIdStr,
-        { resolve: () => { resolve(true); }, reject: (_error: Error) => { resolve(false); } }
-      );
-    });
-
-    const messageToSign = {
-      type: 'key_exchange' as const,
-      content: 'key_rotation' as const,
-      ephemeralPublicKey: Buffer.from(newEphemeralPublicKey).toString('base64'),
-      senderUsername: myUsername,
-      timestamp,
-    };
-
-    const signature = userIdentity.sign(JSON.stringify(messageToSign));
-
-    const rotationMessage: AuthenticatedEncryptedMessage = {
-      signature: Buffer.from(signature).toString('base64'),
-      ...messageToSign
-    };
+    this.sessionManager.storePendingKeyExchange(peerIdStr, outgoingRotation.pendingRotation);
+    const rotationPromise = this.createRotationPromise(peerIdStr);
 
     try {
-      await this.logPeerDialDiagnostics(targetPeerId, 'key_rotation');
-      const stream = await dialProtocolWithRelayFallback({
-        node: this.node,
-        database: this.database,
-        targetPeerId,
-        protocol: this.chatProtocol,
-        context: 'key_rotation',
-      });
-      const messageJson = JSON.stringify(rotationMessage);
-      const encoder = new TextEncoder();
-      await stream.sink([encoder.encode(messageJson)]);
+      await this.sendOutgoingRotation(targetPeerId, outgoingRotation.rotationMessage);
       console.log(`Key rotation message sent to ${peerIdStr.slice(0, 8)}...`);
     } catch (sendError: unknown) {
       // Send failed - clean up state immediately
@@ -1572,6 +1586,285 @@ export class KeyExchange {
       return false;
     }
 
+    return this.waitForRotationCompletion(peerIdStr, rotationPromise);
+  }
+
+  private hasValidIncomingRotationMessage(
+    message: AuthenticatedEncryptedMessage,
+    context: 'kr_msg' | 'kr_resp' = 'kr_msg',
+  ): boolean {
+    const valid = Boolean(message.ephemeralPublicKey && message.signature && message.senderUsername);
+    if (!valid) {
+      console.error(
+        context === 'kr_resp'
+          ? 'Key rotation response missing required fields'
+          : 'Key rotation missing required fields'
+      );
+    }
+    return valid;
+  }
+
+  private isValidRotationTimestamp(timestamp: number | undefined, context: 'kr_msg' | 'kr_resp' = 'kr_msg'): boolean {
+    const messageAge = Date.now() - (timestamp || 0);
+    const valid = messageAge <= MAX_KEY_EXCHANGE_AGE && messageAge >= -KEY_EXCHANGE_MAX_FUTURE_SKEW_MS;
+    if (!valid) {
+      console.error(
+        context === 'kr_resp'
+          ? 'Key rotation response too old or future-dated'
+          : 'Key rotation message too old or future-dated'
+      );
+    }
+    return valid;
+  }
+
+  private async reconcileIncomingRotation(
+    remoteId: string,
+    senderUsername: string,
+    session: ConversationSession,
+  ): Promise<boolean> {
+    const lastRotation = session.lastRotated ?? 0;
+    if (Date.now() - lastRotation < ROTATION_COOLDOWN) {
+      console.log(`Key rotation from ${senderUsername} too frequent - rate limited`);
+      this.sessionManager.clearSession(remoteId);
+      console.log(`Cleared session for ${remoteId.slice(0, 8)}... due to rate-limited rotation`);
+      return false;
+    }
+
+    const ourPendingRotation = this.sessionManager.getPendingKeyExchange(remoteId);
+    if (!ourPendingRotation) {
+      return true;
+    }
+
+    const weWin = this.node.peerId.toString() < remoteId;
+    if (weWin) {
+      console.log(`Simultaneous rotation detected with ${remoteId.slice(0, 8)}... - we initiated first, ignoring remote request`);
+      return false;
+    }
+
+    console.log(`Simultaneous rotation detected with ${remoteId.slice(0, 8)}... - remote initiated first, canceling ours`);
+    this.sessionManager.removePendingKeyExchange(remoteId);
+    this.rejectRotationPromise(remoteId, new Error('Simultaneous rotation - remote wins'));
+    return true;
+  }
+
+  private async verifyIncomingRotationRequest(
+    message: AuthenticatedEncryptedMessage,
+    remoteId: string,
+  ): Promise<boolean> {
+    const messageToVerify: MessageToVerify = {
+      type: 'key_exchange',
+      content: 'key_rotation',
+      ephemeralPublicKey: message.ephemeralPublicKey ?? '',
+      senderUsername: message.senderUsername ?? '',
+      timestamp: message.timestamp,
+    };
+
+    const { valid } = await this.verifySignatureWithFallback(
+      message.signature ?? '',
+      messageToVerify,
+      message.senderUsername ?? '',
+      remoteId
+    );
+
+    return valid;
+  }
+
+  private createResponderRotation(
+    message: AuthenticatedEncryptedMessage,
+    userIdentity: EncryptedUserIdentity,
+    myUsername: string,
+  ): {
+    newEphemeralPrivateKey: Uint8Array;
+    newEphemeralPublicKey: Uint8Array;
+    sendingKey: Uint8Array;
+    receivingKey: Uint8Array;
+    rotationResponse: AuthenticatedEncryptedMessage;
+  } {
+    const remoteEphemeralPublicKey = message.ephemeralPublicKey;
+    if (!remoteEphemeralPublicKey) {
+      throw new Error('Key rotation missing required fields');
+    }
+
+    const newEphemeralPrivateKey = x25519.utils.randomSecretKey();
+    const newEphemeralPublicKey = x25519.getPublicKey(newEphemeralPrivateKey);
+
+    const { sendingKey, receivingKey } = this.deriveDirectionalKeys(
+      newEphemeralPublicKey,
+      newEphemeralPrivateKey,
+      remoteEphemeralPublicKey,
+      'responder'
+    );
+
+    const responseTimestamp = Date.now();
+    const responseMessageToSign = {
+      type: 'key_exchange' as const,
+      content: 'key_rotation_response' as const,
+      ephemeralPublicKey: Buffer.from(newEphemeralPublicKey).toString('base64'),
+      senderUsername: myUsername,
+      timestamp: responseTimestamp,
+    };
+
+    const responseSignature = userIdentity.sign(JSON.stringify(responseMessageToSign));
+
+    return {
+      newEphemeralPrivateKey,
+      newEphemeralPublicKey,
+      sendingKey,
+      receivingKey,
+      rotationResponse: {
+        signature: Buffer.from(responseSignature).toString('base64'),
+        ...responseMessageToSign
+      }
+    };
+  }
+
+  private async sendRotationResponse(
+    remoteId: string,
+    rotationResponse: AuthenticatedEncryptedMessage,
+  ): Promise<void> {
+    const targetPeerId = peerIdFromString(remoteId);
+    await this.logPeerDialDiagnostics(targetPeerId, 'key_rotation_response');
+    const responseStream = await dialProtocolWithRelayFallback({
+      node: this.node,
+      database: this.database,
+      targetPeerId,
+      protocol: this.chatProtocol,
+      context: 'key_rotation_response',
+    });
+    const encoder = new TextEncoder();
+    await responseStream.sink([encoder.encode(JSON.stringify(rotationResponse))]);
+    console.log(`Key rotation response sent to ${remoteId.slice(0, 8)}...`);
+  }
+
+  private applyCompletedResponderRotation(
+    session: ConversationSession,
+    responderRotation: {
+      newEphemeralPrivateKey: Uint8Array;
+      newEphemeralPublicKey: Uint8Array;
+      sendingKey: Uint8Array;
+      receivingKey: Uint8Array;
+    },
+  ): void {
+    session.ephemeralPrivateKey = responderRotation.newEphemeralPrivateKey;
+    session.ephemeralPublicKey = responderRotation.newEphemeralPublicKey;
+    session.sendingKey = responderRotation.sendingKey;
+    session.receivingKey = responderRotation.receivingKey;
+    session.messageCount = 0;
+    session.lastUsed = Date.now();
+    session.lastRotated = Date.now();
+  }
+
+  private async verifyIncomingRotationResponse(
+    message: AuthenticatedEncryptedMessage,
+    remoteId: string,
+  ): Promise<boolean> {
+    const messageToVerify: MessageToVerify = {
+      type: 'key_exchange',
+      content: 'key_rotation_response',
+      ephemeralPublicKey: message.ephemeralPublicKey ?? '',
+      senderUsername: message.senderUsername ?? '',
+      timestamp: message.timestamp,
+    };
+
+    const { valid } = await this.verifySignatureWithFallback(
+      message.signature ?? '',
+      messageToVerify,
+      message.senderUsername ?? '',
+      remoteId
+    );
+
+    return valid;
+  }
+
+  private applyCompletedInitiatorRotation(
+    remoteId: string,
+    session: ConversationSession,
+    pendingRotation: { ephemeralPrivateKey: Uint8Array; ephemeralPublicKey: Uint8Array },
+    message: AuthenticatedEncryptedMessage,
+  ): void {
+    const remoteEphemeralPublicKey = message.ephemeralPublicKey;
+    if (!remoteEphemeralPublicKey) {
+      throw new Error('Key rotation response missing required fields');
+    }
+
+    const { sendingKey, receivingKey } = this.deriveDirectionalKeys(
+      pendingRotation.ephemeralPublicKey,
+      pendingRotation.ephemeralPrivateKey,
+      remoteEphemeralPublicKey,
+      'initiator'
+    );
+
+    session.ephemeralPrivateKey = pendingRotation.ephemeralPrivateKey;
+    session.ephemeralPublicKey = pendingRotation.ephemeralPublicKey;
+    session.sendingKey = sendingKey;
+    session.receivingKey = receivingKey;
+    session.messageCount = 0;
+    session.lastUsed = Date.now();
+    session.lastRotated = Date.now();
+    this.sessionManager.removePendingKeyExchange(remoteId);
+  }
+
+  private createOutgoingRotation(
+    userIdentity: EncryptedUserIdentity,
+    myUsername: string,
+  ): {
+    pendingRotation: { timestamp: number; ephemeralPrivateKey: Uint8Array; ephemeralPublicKey: Uint8Array };
+    rotationMessage: AuthenticatedEncryptedMessage;
+  } {
+    const newEphemeralPrivateKey = x25519.utils.randomSecretKey();
+    const newEphemeralPublicKey = x25519.getPublicKey(newEphemeralPrivateKey);
+    const timestamp = Date.now();
+
+    const messageToSign = {
+      type: 'key_exchange' as const,
+      content: 'key_rotation' as const,
+      ephemeralPublicKey: Buffer.from(newEphemeralPublicKey).toString('base64'),
+      senderUsername: myUsername,
+      timestamp,
+    };
+    const signature = userIdentity.sign(JSON.stringify(messageToSign));
+
+    return {
+      pendingRotation: {
+        timestamp,
+        ephemeralPrivateKey: newEphemeralPrivateKey,
+        ephemeralPublicKey: newEphemeralPublicKey
+      },
+      rotationMessage: {
+        signature: Buffer.from(signature).toString('base64'),
+        ...messageToSign
+      }
+    };
+  }
+
+  private createRotationPromise(peerIdStr: string): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      this.rotationPromises.set(peerIdStr,
+        { resolve: () => { resolve(true); }, reject: (_error: Error) => { resolve(false); } }
+      );
+    });
+  }
+
+  private async sendOutgoingRotation(
+    targetPeerId: PeerId,
+    rotationMessage: AuthenticatedEncryptedMessage,
+  ): Promise<void> {
+    await this.logPeerDialDiagnostics(targetPeerId, 'key_rotation');
+    const stream = await dialProtocolWithRelayFallback({
+      node: this.node,
+      database: this.database,
+      targetPeerId,
+      protocol: this.chatProtocol,
+      context: 'key_rotation',
+    });
+    const encoder = new TextEncoder();
+    await stream.sink([encoder.encode(JSON.stringify(rotationMessage))]);
+  }
+
+  private waitForRotationCompletion(
+    peerIdStr: string,
+    rotationPromise: Promise<boolean>,
+  ): Promise<boolean> {
     const timeoutPromise = new Promise<boolean>((resolve) => {
       const timeoutId = setTimeout(() => {
         this.rotationPromises.delete(peerIdStr);
@@ -1584,10 +1877,7 @@ export class KeyExchange {
       this.rotationTimeouts.set(peerIdStr, timeoutId);
     });
 
-    try {
-      const result = await Promise.race([rotationPromise, timeoutPromise]);
-      return result;
-    } catch (error: unknown) {
+    return Promise.race([rotationPromise, timeoutPromise]).catch((error: unknown) => {
       generalErrorHandler(error);
       this.sessionManager.removePendingKeyExchange(peerIdStr);
       this.rotationPromises.delete(peerIdStr);
@@ -1599,7 +1889,7 @@ export class KeyExchange {
       }
 
       return false;
-    }
+    });
   }
 
 

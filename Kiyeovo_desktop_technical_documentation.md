@@ -18,7 +18,7 @@ Its goal is to provide complete context quickly in new AI conversations without 
   - mode-specific DHT namespaces/prefixes
   - mode-specific pubsub topic prefixes
   - mode-aware DB queries
-- First-run startup can require explicit mode selection (`network_mode_onboarded`).
+- First-run startup requires explicit mode selection (`network_mode_onboarded`).
 - Direct chat uses:
   - key exchange (X25519 + Ed25519 signatures)
   - session symmetric keys (HKDF)
