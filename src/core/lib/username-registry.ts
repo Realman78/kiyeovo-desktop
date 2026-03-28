@@ -567,10 +567,6 @@ export class UsernameRegistry {
     } as UserRegistration;
   }
 
-  #createUserRegistrationObject(username: string): UserRegistration {
-    return this.#createRegistrationObject(username, 'active');
-  }
-
   #createReleasedRegistrationObject(username: string): UserRegistration {
     return this.#createRegistrationObject(username, 'released');
   }
@@ -578,6 +574,64 @@ export class UsernameRegistry {
 
   private isValidUserRegistration(registration: unknown): registration is UserRegistration {
     return isUsernameRegistrationRecord(registration);
+  }
+
+  private readLookupCandidate(
+    value: Uint8Array,
+    keyLabel: string,
+    currentTime: number,
+    extraValidation?: (reg: UserRegistration) => boolean,
+  ): UserRegistration | null {
+    const rawData = UsernameRegistry.TEXT_DECODER.decode(value).trim();
+
+    // Skip empty garbage records
+    if (!rawData || rawData === '{}') return null;
+
+    const registration = JSON.parse(rawData) as unknown;
+    if (!this.isValidUserRegistration(registration)) return null;
+    if (!verifyUsernameRegistrationSignature(registration)) return null;
+
+    // Check if registration is too old (replay attack prevention)
+    const age = currentTime - registration.timestamp;
+    if (age > UsernameRegistry.MAX_REGISTRATION_AGE) {
+      console.log(`Discarding old registration for ${keyLabel} (age: ${Math.round(age / 1000)}s)`);
+      return null;
+    }
+
+    if (extraValidation && !extraValidation(registration)) return null;
+
+    return registration;
+  }
+
+  private choosePreferredLookupRegistration(
+    current: UserRegistration | null,
+    candidate: UserRegistration,
+  ): UserRegistration {
+    if (current == null || candidate.timestamp > current.timestamp) {
+      return candidate;
+    }
+
+    // Deterministic tie-break: prefer active over released on same timestamp.
+    if (
+      current.timestamp === candidate.timestamp &&
+      (current.kind ?? 'active') === 'released' &&
+      (candidate.kind ?? 'active') !== 'released'
+    ) {
+      return candidate;
+    }
+
+    return current;
+  }
+
+  private throwLookupReadFailure(keyLabel: string, dhtErr: unknown): never {
+    console.log(`DHT get failed for ${keyLabel}:`, dhtErr instanceof Error ? dhtErr.message : String(dhtErr));
+    const dhtErrMessage = dhtErr instanceof Error ? dhtErr.message : String(dhtErr);
+    if (this.isRetryableLookupFailure(dhtErrMessage)) {
+      throw new Error(`${ERRORS.USERNAME_LOOKUP_FAILED}: ${dhtErrMessage}`);
+    }
+    throw dhtErr instanceof Error
+      ? dhtErr
+      : new Error(`${ERRORS.USERNAME_LOOKUP_FAILED}: ${dhtErrMessage}`);
   }
 
   private async readRegistrationForKey(
@@ -592,54 +646,23 @@ export class UsernameRegistry {
       for await (const event of this.node.services.dht.get(key) as AsyncIterable<QueryEvent>) {
         if (event.name !== 'VALUE' || !event.value) continue;
         try {
-          const rawData = UsernameRegistry.TEXT_DECODER.decode(event.value).trim();
-
-          // Skip empty garbage records
-          if (!rawData || rawData === '{}') continue;
-
-          const registration = JSON.parse(rawData) as unknown;
-          if (!this.isValidUserRegistration(registration)) continue;
-          if (!verifyUsernameRegistrationSignature(registration)) {
+          const lookupCandidate = this.readLookupCandidate(
+            event.value,
+            keyLabel,
+            currentTime,
+            extraValidation,
+          );
+          if (!lookupCandidate) {
             continue;
           }
 
-          // Check if registration is too old (replay attack prevention)
-          const age = currentTime - registration.timestamp;
-          if (age > UsernameRegistry.MAX_REGISTRATION_AGE) {
-            console.log(`Discarding old registration for ${keyLabel} (age: ${Math.round(age / 1000)}s)`);
-            continue;
-          }
-
-          if (extraValidation && !extraValidation(registration)) {
-            continue;
-          }
-
-          if (newestRecord == null || registration.timestamp > newestRecord.timestamp) {
-            newestRecord = registration;
-            continue;
-          }
-
-          // Deterministic tie-break: prefer active over released on same timestamp.
-          if (
-            newestRecord.timestamp === registration.timestamp &&
-            (newestRecord.kind ?? 'active') === 'released' &&
-            (registration.kind ?? 'active') !== 'released'
-          ) {
-            newestRecord = registration;
-          }
+          newestRecord = this.choosePreferredLookupRegistration(newestRecord, lookupCandidate);
         } catch (parseErr: unknown) {
           generalErrorHandler(parseErr, `Failed to parse DHT value for ${keyLabel}`);
         }
       }
     } catch (dhtErr: unknown) {
-      console.log(`DHT get failed for ${keyLabel}:`, dhtErr instanceof Error ? dhtErr.message : String(dhtErr));
-      const dhtErrMessage = dhtErr instanceof Error ? dhtErr.message : String(dhtErr);
-      if (this.isRetryableLookupFailure(dhtErrMessage)) {
-        throw new Error(`${ERRORS.USERNAME_LOOKUP_FAILED}: ${dhtErrMessage}`);
-      }
-      throw dhtErr instanceof Error
-        ? dhtErr
-        : new Error(`${ERRORS.USERNAME_LOOKUP_FAILED}: ${dhtErrMessage}`);
+      this.throwLookupReadFailure(keyLabel, dhtErr);
     }
 
     if (!newestRecord) {
