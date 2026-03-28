@@ -6,6 +6,8 @@ import { NETWORK_MODES, getNetworkModeConfig } from '../constants.js';
 import type { ChatDatabase } from './db/database.js';
 import { getConfiguredFastRelayAddrs } from './node-relays.js';
 
+const PRIVATE_ONLY_DIRECT_DIAL_TIMEOUT_MS = 2_000;
+
 type DialProtocolWithRelayFallbackParams = {
   node: ChatNode;
   database: ChatDatabase;
@@ -13,6 +15,56 @@ type DialProtocolWithRelayFallbackParams = {
   protocol: string;
   context: string;
 };
+
+function isPrivateHost(host: string): boolean {
+  return /^(::f{4}:)?10\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$/i.test(host) ||
+    /^(::f{4}:)?192\.168\.([0-9]{1,3})\.([0-9]{1,3})$/i.test(host) ||
+    /^(::f{4}:)?172\.(1[6-9]|2\d|30|31)\.([0-9]{1,3})\.([0-9]{1,3})$/i.test(host) ||
+    /^(::f{4}:)?127\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$/i.test(host) ||
+    /^(::f{4}:)?169\.254\.([0-9]{1,3})\.([0-9]{1,3})$/i.test(host) ||
+    /^f[cd][0-9a-f]{2}:/i.test(host) ||
+    /^fe80:/i.test(host) ||
+    /^::1$/i.test(host);
+}
+
+function extractIpHost(address: string): string | null {
+  const matched = address.match(/\/(?:ip4|ip6)\/([^/]+)/);
+  return matched?.[1] ?? null;
+}
+
+function isDirectAddressPrivateOnly(address: string): boolean {
+  if (address.includes('/p2p-circuit')) {
+    return false;
+  }
+
+  const host = extractIpHost(address);
+  if (host === null) {
+    return false;
+  }
+
+  return isPrivateHost(host);
+}
+
+async function shouldUseShortDirectTimeout(node: ChatNode, targetPeerId: PeerId): Promise<boolean> {
+  const targetPeer = targetPeerId.toString();
+  const hasActiveConnection = node.getConnections().some((connection) => connection.remotePeer.toString() === targetPeer);
+  if (hasActiveConnection) {
+    return false;
+  }
+
+  try {
+    const peerData = await node.peerStore.get(targetPeerId);
+    const knownAddresses = (peerData.addresses ?? []).map((entry) => entry.multiaddr.toString());
+    const directAddresses = knownAddresses.filter((address) => !address.includes('/p2p-circuit'));
+    if (directAddresses.length === 0) {
+      return false;
+    }
+
+    return directAddresses.every(isDirectAddressPrivateOnly);
+  } catch {
+    return false;
+  }
+}
 
 export async function dialProtocolWithRelayFallback(
   params: DialProtocolWithRelayFallbackParams
@@ -37,9 +89,22 @@ export async function dialProtocolWithRelayFallback(
   }
 
   const dialOptions = { runOnLimitedConnection: true };
+  const targetPeer = targetPeerId.toString();
+  const directDialOptions = {
+    ...dialOptions,
+    ...(networkMode === NETWORK_MODES.FAST && await shouldUseShortDirectTimeout(node, targetPeerId)
+      ? { signal: AbortSignal.timeout(PRIVATE_ONLY_DIRECT_DIAL_TIMEOUT_MS) }
+      : {}),
+  };
+
+  if ('signal' in directDialOptions) {
+    console.log(
+      `[DIAL][${context}] using short direct timeout target=${targetPeer} timeoutMs=${PRIVATE_ONLY_DIRECT_DIAL_TIMEOUT_MS} reason=private_only_known_addrs`,
+    );
+  }
 
   try {
-    return await node.dialProtocol(targetPeerId, protocol, dialOptions);
+    return await node.dialProtocol(targetPeerId, protocol, directDialOptions);
   } catch (directDialError: unknown) {
     if (networkMode !== NETWORK_MODES.FAST) {
       throw directDialError;
@@ -50,7 +115,6 @@ export async function dialProtocolWithRelayFallback(
       throw directDialError;
     }
 
-    const targetPeer = targetPeerId.toString();
     const directReason = directDialError instanceof Error ? directDialError.message : String(directDialError);
     console.warn(
       `[DIAL][${context}] direct dial failed target=${targetPeer} reason=${directReason}. trying relay fallback count=${relayAddrs.length}`

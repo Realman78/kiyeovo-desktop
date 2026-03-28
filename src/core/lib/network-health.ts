@@ -32,8 +32,6 @@ export function createNetworkHealthMonitor({
   pingProbeHardTimeoutMs,
   pingProbeTimeoutMs,
 }: CreateNetworkHealthMonitorOptions) {
-  let staleProbeCleanupInFlight = false;
-
   const formatProbeError = (error: unknown): string => (
     error instanceof Error ? error.message : String(error)
   );
@@ -61,12 +59,10 @@ export function createNetworkHealthMonitor({
   const probeAnyAliveConnection = async (
     connectionsToProbe: ChatConnection[],
     options: {
-      closeFailedConnections?: boolean;
       probeSource?: ProbeSource;
     } = {},
   ): Promise<boolean> => {
     const {
-      closeFailedConnections = true,
       probeSource = 'dht',
     } = options;
 
@@ -100,7 +96,7 @@ export function createNetworkHealthMonitor({
       }
     });
 
-    const cleanupPromise = (async () => {
+    const failureLogPromise = (async () => {
       const probeResults = await Promise.all(probeTasks);
       const deadResults = probeResults.filter((result) => !result.alive);
       if (deadResults.length === 0) {
@@ -112,34 +108,10 @@ export function createNetworkHealthMonitor({
           .map((result) => `${result.connection.remotePeer.toString()}:${formatProbeError(result.error)}`)
           .join('|')}`,
       );
-
-      if (!closeFailedConnections) {
-        console.log(
-          `[DHT-STATUS][CORE][PROBE][CLOSE_STALE][SKIP] reason=non_destructive source=${probeSource} count=${deadResults.length}`,
-        );
-        return;
-      }
-
-      const deadConnections = deadResults.map((result) => result.connection);
-
-      if (staleProbeCleanupInFlight) {
-        console.log('[DHT-STATUS][CORE][PROBE][CLOSE_STALE][SKIP] reason=cleanup_in_flight');
-        return;
-      }
-
-      staleProbeCleanupInFlight = true;
-      try {
-        console.log(
-          `[DHT-STATUS][CORE][PROBE][CLOSE_STALE] count=${deadConnections.length} peers=${deadConnections.map((connection) => connection.remotePeer.toString()).join(',')}`,
-        );
-        console.log(
-          `[DHT-STATUS][CORE][PROBE][CLOSE_STALE][DETAIL] source=${probeSource} ` +
-          `targets=${deadConnections.map((connection) => `${connection.remotePeer.toString()}@${connection.remoteAddr.toString()}`).join(',')}`,
-        );
-        await Promise.allSettled(deadConnections.map((connection) => connection.close()));
-      } finally {
-        staleProbeCleanupInFlight = false;
-      }
+      console.log(
+        `[DHT-STATUS][CORE][PROBE][CLOSE_STALE][SKIP] reason=non_destructive_policy source=${probeSource} ` +
+        `targets=${deadResults.map((result) => `${result.connection.remotePeer.toString()}@${result.connection.remoteAddr.toString()}`).join(',')}`,
+      );
     })();
 
     let anyAlive = false;
@@ -158,7 +130,7 @@ export function createNetworkHealthMonitor({
       anyAlive = false;
     }
 
-    void cleanupPromise.catch((error) => {
+    void failureLogPromise.catch((error) => {
       console.warn(
         '[DHT-STATUS][CORE][PROBE][CLOSE_STALE][ERROR] ' +
         formatProbeError(error),
@@ -218,10 +190,7 @@ export function createNetworkHealthMonitor({
       };
     }
 
-    const anyAlive = await probeAnyAliveConnection(connectionsToProbe, {
-      closeFailedConnections: probeSource === 'dht',
-      probeSource,
-    });
+    const anyAlive = await probeAnyAliveConnection(connectionsToProbe, { probeSource });
 
     if (anyAlive) {
       return {
