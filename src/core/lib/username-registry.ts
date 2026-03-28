@@ -181,6 +181,7 @@ export class UsernameRegistry {
   }
 
   async lookup(username: string): Promise<UserRegistration> {
+    console.log(`[USERNAME][LOOKUP][START] ts=${new Date().toISOString()} kind=username key=${username}`);
     return this.#lookupByKey(
       this.buildUsernameByNameKey(username),
       username,
@@ -190,6 +191,7 @@ export class UsernameRegistry {
   }
 
   async lookupByPeerId(peerId: string): Promise<UserRegistration> {
+    console.log(`[USERNAME][LOOKUP][START] ts=${new Date().toISOString()} kind=peer_id key=${peerId}`);
     return this.#lookupByKey(
       this.buildUsernameByPeerIdKey(peerId),
       peerId,
@@ -210,12 +212,15 @@ export class UsernameRegistry {
     notFoundError: string,
     extraValidation?: (reg: UserRegistration) => boolean,
   ): Promise<UserRegistration> {
+    const startedAt = Date.now();
     const currentTime = Date.now();
     const result = await this.readRegistrationForKey(key, keyLabel, currentTime, extraValidation);
     if (result) {
+      console.log(`[USERNAME][LOOKUP][DONE] ts=${new Date().toISOString()} key=${keyLabel} result=hit tookMs=${Date.now() - startedAt}`);
       return result;
     }
 
+    console.log(`[USERNAME][LOOKUP][DONE] ts=${new Date().toISOString()} key=${keyLabel} result=miss tookMs=${Date.now() - startedAt}`);
     throw new Error(notFoundError);
   }
 
@@ -626,11 +631,18 @@ export class UsernameRegistry {
     currentTime: number,
     extraValidation?: (reg: UserRegistration) => boolean,
   ): Promise<UserRegistration | null> {
+    const startedAt = Date.now();
     let newestRecord: UserRegistration | null = null;
+    let eventCount = 0;
+    let valueCount = 0;
+    let firstValueAt: number | null = null;
 
     try {
       for await (const event of this.node.services.dht.get(key) as AsyncIterable<QueryEvent>) {
+        eventCount++;
         if (event.name !== 'VALUE' || !event.value) continue;
+        valueCount++;
+        firstValueAt ??= Date.now();
         try {
           const lookupCandidate = this.readLookupCandidate(
             event.value,
@@ -650,6 +662,13 @@ export class UsernameRegistry {
     } catch (dhtErr: unknown) {
       this.throwLookupReadFailure(keyLabel, dhtErr);
     }
+
+    console.log(
+      `[USERNAME][LOOKUP][READ] ts=${new Date().toISOString()} key=${keyLabel} ` +
+      `events=${eventCount} values=${valueCount} ` +
+      `firstValueMs=${firstValueAt === null ? 'none' : String(firstValueAt - startedAt)} ` +
+      `tookMs=${Date.now() - startedAt} found=${newestRecord ? 'yes' : 'no'}`,
+    );
 
     if (!newestRecord) {
       return null;
