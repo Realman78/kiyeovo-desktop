@@ -45,3 +45,21 @@
 
 14. izgleda da se dugi register i fetch dese kada je jedan peer dostupan unutar connections-a, ali nedostupan za kontakt. pretpostavljan da je zbog toga ca je DHT promet preko limited connection-a zabranjen. obavezno cu probat overrideat taj parametar u libp2p kako bi dokazal hipotezu
   - I was wrong... ali neznan ca se onda dogada. ovo je crna kutija a nesmi bit... morat cu jos dublje istrazit kasnije
+
+15.
+New protocol (v3)                                                                                                                                                                                                                                     
+                                                                                                                                                                                                                                                        
+  INITIATOR                                 RECEIVER                                                                                                                                                                                                    
+      |--- key_exchange_init ------------->|  (init stream)                                                                                                                                                                                             
+      |<-- key_exchange_ack --------------|  (init stream → close)                                                                                                                                                                                      
+      |                                   |  [user sees dialog]                                                                                                                                                                                         
+      |                                   |                                                                                                                                                                                                             
+      | ACCEPT:                           |                                                                                                                                                                                                             
+      |<-- key_exchange_response ---------|  (fresh stream, receiver keeps it open)                                                                                                                                                                     
+      |    [process, commit session]      |                                                                                                                                                                                                             
+      |--- key_exchange_confirmed ------->|  (same stream) → receiver commits                                                                                                                                                                           
+      |    OR                             |                                                                                                                                                                                                             
+      |--- key_exchange_cancelled ------->|  (same stream) → receiver discards
+      |                                   |                                                                                                                                                                                                             
+      | REJECT:                           |
+      |<-- key_exchange_rejected ---------|  (fresh stream, fire-and-forget)

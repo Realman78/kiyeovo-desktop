@@ -69,6 +69,10 @@ export class KeyExchange {
     return this.getKeyExchangeDecisionExpiresAt(timestamp) + this.getKeyExchangeResponseGraceMs();
   }
 
+  private getKeyExchangeFollowupTimeoutMs(): number {
+    return this.database.getSessionNetworkMode() === NETWORK_MODES.ANONYMOUS ? 10_000 : 5_000;
+  }
+
   private buildKeyExchangeMessageToVerify(
     message: Pick<AuthenticatedEncryptedMessage,
       'content' |
@@ -608,6 +612,26 @@ export class KeyExchange {
     });
   }
 
+  private async writeSingleMessageToStream(stream: Stream, message: AuthenticatedEncryptedMessage): Promise<void> {
+    const encoder = new TextEncoder();
+    await stream.sink([encoder.encode(JSON.stringify(message))]);
+    if (stream.closeWrite != null) {
+      try {
+        await stream.closeWrite();
+      } catch {
+        // Some stream implementations may already consider the write side closed.
+      }
+    }
+  }
+
+  private async closeStreamQuietly(stream: Stream): Promise<void> {
+    try {
+      await stream.close();
+    } catch {
+      // Stream may already be reset/closed remotely.
+    }
+  }
+
   /**
    * Handle incoming key exchange messages
    */
@@ -632,7 +656,11 @@ export class KeyExchange {
       if (message.content === 'key_exchange_init') {
         await this.handleKeyExchangeInit(remoteId, message, stream, userIdentity, myUsername);
       } else if (message.content === 'key_exchange_response') {
-        await this.handleInboundAcceptedKeyExchangeResponse(remoteId, message);
+        await this.handleInboundAcceptedKeyExchangeResponse(remoteId, message, {
+          stream,
+          userIdentity,
+          myUsername,
+        });
       } else if (message.content === 'key_exchange_rejected') {
         await this.handleInboundRejectedKeyExchangeResponse(remoteId, message);
       } else if (message.content === 'key_rotation') {
@@ -1077,6 +1105,12 @@ export class KeyExchange {
     return { session, ephemeralPublicKey, offlineBucketSecret, notificationsBucketKey };
   }
 
+  private discardUncommittedSession(session: ConversationSession): void {
+    session.ephemeralPrivateKey.fill(0);
+    session.sendingKey.fill(0);
+    session.receivingKey.fill(0);
+  }
+
   private async sendKeyExchangeAck(
     stream: Stream,
     remoteId: string,
@@ -1091,10 +1125,79 @@ export class KeyExchange {
       timestamp: Date.now(),
     };
 
-    const encoder = new TextEncoder();
-    await stream.sink([encoder.encode(JSON.stringify(ackMessage))]);
-    await stream.close();
+    await this.writeSingleMessageToStream(stream, ackMessage);
+    await this.closeStreamQuietly(stream);
     console.log(`[KEY-EXCHANGE][ACK][SENT] ts=${new Date().toISOString()} peer=${remoteId}`);
+  }
+
+  private createSignedKeyExchangeStreamResultMessage(
+    content: 'key_exchange_confirmed' | 'key_exchange_cancelled',
+    ephemeralPublicKey: string,
+    myUsername: string,
+    userIdentity: EncryptedUserIdentity,
+  ): AuthenticatedEncryptedMessage {
+    const messageToSign = {
+      type: 'key_exchange' as const,
+      content,
+      ephemeralPublicKey,
+      senderUsername: myUsername,
+      timestamp: Date.now(),
+    };
+
+    const signature = userIdentity.sign(JSON.stringify(messageToSign));
+    return {
+      signature: Buffer.from(signature).toString('base64'),
+      ...messageToSign,
+    };
+  }
+
+  private async sendSignedKeyExchangeStreamResult(
+    stream: Stream,
+    remoteId: string,
+    message: AuthenticatedEncryptedMessage,
+    context: 'key_exchange_confirmed' | 'key_exchange_cancelled',
+  ): Promise<void> {
+    console.log(
+      `[KEY-EXCHANGE][STREAM_RESULT][SEND][START] ts=${new Date().toISOString()} ` +
+      `peer=${remoteId} context=${context}`,
+    );
+    await this.writeSingleMessageToStream(stream, message);
+    console.log(
+      `[KEY-EXCHANGE][STREAM_RESULT][SEND][DONE] ts=${new Date().toISOString()} ` +
+      `peer=${remoteId} context=${context}`,
+    );
+  }
+
+  private async sendKeyExchangeConfirmed(
+    stream: Stream,
+    remoteId: string,
+    responderEphemeralPublicKey: string,
+    myUsername: string,
+    userIdentity: EncryptedUserIdentity,
+  ): Promise<void> {
+    const message = this.createSignedKeyExchangeStreamResultMessage(
+      'key_exchange_confirmed',
+      responderEphemeralPublicKey,
+      myUsername,
+      userIdentity,
+    );
+    await this.sendSignedKeyExchangeStreamResult(stream, remoteId, message, 'key_exchange_confirmed');
+  }
+
+  private async sendKeyExchangeCancelled(
+    stream: Stream,
+    remoteId: string,
+    responderEphemeralPublicKey: string,
+    myUsername: string,
+    userIdentity: EncryptedUserIdentity,
+  ): Promise<void> {
+    const message = this.createSignedKeyExchangeStreamResultMessage(
+      'key_exchange_cancelled',
+      responderEphemeralPublicKey,
+      myUsername,
+      userIdentity,
+    );
+    await this.sendSignedKeyExchangeStreamResult(stream, remoteId, message, 'key_exchange_cancelled');
   }
 
   private async sendFreshKeyExchangeFollowup(
@@ -1123,17 +1226,96 @@ export class KeyExchange {
       context,
     });
 
-    const encoder = new TextEncoder();
-    await stream.sink([encoder.encode(JSON.stringify(message))]);
-    await stream.close();
-    console.log(
-      `[KEY-EXCHANGE][FOLLOWUP][SEND][DONE] ts=${new Date().toISOString()} ` +
-      `context=${context} peer=${remoteId} durationMs=${Date.now() - startedAt}`,
-    );
+    try {
+      await this.writeSingleMessageToStream(stream, message);
+      console.log(
+        `[KEY-EXCHANGE][FOLLOWUP][SEND][DONE] ts=${new Date().toISOString()} ` +
+        `context=${context} peer=${remoteId} durationMs=${Date.now() - startedAt}`,
+      );
+    } finally {
+      await this.closeStreamQuietly(stream);
+    }
   }
 
-  // Send key exchange response to initiator
-  private async sendKeyExchangeResponse(
+  private async assertKeyExchangeStreamResult(
+    message: AuthenticatedEncryptedMessage,
+    remoteId: string,
+    expectedContent: 'key_exchange_confirmed' | 'key_exchange_cancelled',
+    expectedEphemeralPublicKey: string,
+  ): Promise<void> {
+    if (message.type !== 'key_exchange' || message.content !== expectedContent) {
+      throw new Error(`Unexpected key exchange stream result: ${message.content}`);
+    }
+
+    if (!message.signature || !message.senderUsername || !message.ephemeralPublicKey) {
+      throw new Error(`Key exchange stream result missing signature, sender username or ephemeral public key`);
+    }
+
+    if (message.ephemeralPublicKey !== expectedEphemeralPublicKey) {
+      throw new Error(`Key exchange stream result did not match the pending response`);
+    }
+
+    const messageToVerify = this.buildKeyExchangeMessageToVerify({
+      content: expectedContent,
+      ephemeralPublicKey: message.ephemeralPublicKey,
+      senderUsername: message.senderUsername,
+      timestamp: message.timestamp,
+    });
+
+    const { valid } = await this.verifySignatureWithFallback(
+      message.signature,
+      messageToVerify,
+      message.senderUsername,
+      remoteId,
+    );
+
+    if (!valid) {
+      throw new Error(`Key exchange ${expectedContent} signature verification failed`);
+    }
+  }
+
+  private async waitForKeyExchangeFinalization(
+    stream: Stream,
+    remoteId: string,
+    responderEphemeralPublicKey: string,
+  ): Promise<void> {
+    const startedAt = Date.now();
+    console.log(
+      `[KEY-EXCHANGE][FINALIZE][WAIT][START] ts=${new Date(startedAt).toISOString()} ` +
+      `peer=${remoteId}`,
+    );
+
+    let timeoutId: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => {
+        reject(new Error('Key exchange follow-up timeout'));
+      }, this.getKeyExchangeFollowupTimeoutMs());
+    });
+
+    const message = await Promise.race([
+      StreamHandler.readMessageFromStream<AuthenticatedEncryptedMessage>(stream),
+      timeoutPromise,
+    ]);
+
+    console.log(
+      `[KEY-EXCHANGE][FINALIZE][WAIT][MESSAGE] ts=${new Date().toISOString()} ` +
+      `peer=${remoteId} durationMs=${Date.now() - startedAt} content=${message.content}`,
+    );
+
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+
+    if (message.content === 'key_exchange_cancelled') {
+      await this.assertKeyExchangeStreamResult(message, remoteId, 'key_exchange_cancelled', responderEphemeralPublicKey);
+      throw new Error('Key exchange was cancelled by the initiator');
+    }
+
+    await this.assertKeyExchangeStreamResult(message, remoteId, 'key_exchange_confirmed', responderEphemeralPublicKey);
+  }
+
+  // Send key exchange response to initiator and wait for explicit initiator confirmation
+  private async sendKeyExchangeResponseAndAwaitConfirmation(
     remoteId: string,
     ephemeralPublicKey: Uint8Array,
     myUsername: string,
@@ -1155,7 +1337,27 @@ export class KeyExchange {
       ...responseMessageToSign
     };
 
-    await this.sendFreshKeyExchangeFollowup(remoteId, responseMessage, 'key_exchange_response');
+    const startedAt = Date.now();
+    const targetPeerId = peerIdFromString(remoteId);
+    await this.logPeerDialDiagnostics(targetPeerId, 'key_exchange_response');
+    const stream = await dialProtocolWithRelayFallback({
+      node: this.node,
+      database: this.database,
+      targetPeerId,
+      protocol: this.chatProtocol,
+      context: 'key_exchange_response',
+    });
+
+    try {
+      await this.writeSingleMessageToStream(stream, responseMessage);
+      console.log(
+        `[KEY-EXCHANGE][FOLLOWUP][SEND][DONE] ts=${new Date().toISOString()} ` +
+        `context=key_exchange_response peer=${remoteId} durationMs=${Date.now() - startedAt}`,
+      );
+      await this.waitForKeyExchangeFinalization(stream, remoteId, responseMessageToSign.ephemeralPublicKey);
+    } finally {
+      await this.closeStreamQuietly(stream);
+    }
   }
 
   // Send rejection response to initiator
@@ -1225,16 +1427,24 @@ export class KeyExchange {
 
       await sendAckIfNeeded();
 
-      const responderSession = this.createAndStoreResponderSession(remoteId, message);
+      // validated in authorizeAndVerifyIncomingInitiator
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      const responderSession = this.createResponderSession(remoteId, message.ephemeralPublicKey!);
 
-      await this.sendKeyExchangeResponse(
-        remoteId,
-        responderSession.ephemeralPublicKey,
-        myUsername,
-        userIdentity,
-        linkHandling.responseLinkDecision
-      );
+      try {
+        await this.sendKeyExchangeResponseAndAwaitConfirmation(
+          remoteId,
+          responderSession.ephemeralPublicKey,
+          myUsername,
+          userIdentity,
+          linkHandling.responseLinkDecision
+        );
+      } catch (error) {
+        this.discardUncommittedSession(responderSession.session);
+        throw error;
+      }
 
+      this.sessionManager.storeSession(remoteId, responderSession.session);
       await this.finalizeAcceptedKeyExchangeInit(
         remoteId,
         verifiedInitiator.sender.username,
@@ -1354,22 +1564,6 @@ export class KeyExchange {
     return { sender, keys };
   }
 
-  private createAndStoreResponderSession(
-    remoteId: string,
-    message: AuthenticatedEncryptedMessage,
-  ): {
-    session: ConversationSession;
-    ephemeralPublicKey: Uint8Array;
-    offlineBucketSecret: string;
-    notificationsBucketKey: Uint8Array;
-  } {
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    const responderSession = this.createResponderSession(remoteId, message.ephemeralPublicKey!);
-
-    this.sessionManager.storeSession(remoteId, responderSession.session);
-    return responderSession;
-  }
-
   private async finalizeAcceptedKeyExchangeInit(
     remoteId: string,
     username: string,
@@ -1428,16 +1622,6 @@ export class KeyExchange {
         return;
       }
 
-      if (message.content === 'key_exchange_response') {
-        await this.handleInboundAcceptedKeyExchangeResponse(peerId, message);
-        return;
-      }
-
-      if (message.content === 'key_exchange_rejected') {
-        await this.handleInboundRejectedKeyExchangeResponse(peerId, message);
-        return;
-      }
-
       console.warn(`[KEY-EXCHANGE][INIT_STREAM][UNEXPECTED] peer=${peerId} content=${message.content}`);
     } catch (streamError: unknown) {
       const activeConnections = this.node
@@ -1464,25 +1648,53 @@ export class KeyExchange {
   private async handleInboundAcceptedKeyExchangeResponse(
     peerId: string,
     message: AuthenticatedEncryptedMessage,
+    streamSettlement: {
+      stream: Stream;
+      userIdentity: EncryptedUserIdentity;
+      myUsername: string;
+    },
   ): Promise<void> {
-    if (!this.pendingKeyExchangeResults.has(peerId) || !this.sessionManager.getPendingKeyExchange(peerId)) {
-      console.log(`[KEY-EXCHANGE][RESPONSE][STALE] ts=${new Date().toISOString()} peer=${peerId}`);
-      return;
-    }
+    const responderEphemeralPublicKey = message.ephemeralPublicKey;
 
     try {
-      await this.assertAcceptedKeyExchangeResponse(message, peerId);
-      const { sharedSecret } = this.createAndStoreInitiatorSessionFromResponse(peerId, message);
+      if (!this.pendingKeyExchangeResults.has(peerId) || !this.sessionManager.getPendingKeyExchange(peerId)) {
+        console.log(`[KEY-EXCHANGE][RESPONSE][STALE] ts=${new Date().toISOString()} peer=${peerId}`);
+        if (responderEphemeralPublicKey) {
+          await this.sendKeyExchangeCancelled(
+            streamSettlement.stream,
+            peerId,
+            responderEphemeralPublicKey,
+            streamSettlement.myUsername,
+            streamSettlement.userIdentity,
+          );
+        }
+        return;
+      }
+
+      const confirmedResponderEphemeralPublicKey = await this.assertAcceptedKeyExchangeResponse(message, peerId);
+      const { sharedSecret } = this.createAndStoreInitiatorSessionFromResponse(
+        peerId,
+        confirmedResponderEphemeralPublicKey,
+      );
       await this.finalizeAcceptedKeyExchangeResponse(
         peerId,
         message.senderUsername,
         sharedSecret,
         message.linkDecision === 'reset_required',
       );
+      await this.sendKeyExchangeConfirmed(
+        streamSettlement.stream,
+        peerId,
+        confirmedResponderEphemeralPublicKey,
+        streamSettlement.myUsername,
+        streamSettlement.userIdentity,
+      );
       this.resolvePendingKeyExchangeResult(peerId, this.database.getUserByPeerId(peerId));
     } catch (error: unknown) {
       const resolvedError = error instanceof Error ? error : new Error(String(error));
       this.rejectPendingKeyExchangeResult(peerId, resolvedError);
+    } finally {
+      await this.closeStreamQuietly(streamSettlement.stream);
     }
   }
 
@@ -1537,7 +1749,7 @@ export class KeyExchange {
   private async assertAcceptedKeyExchangeResponse(
     message: AuthenticatedEncryptedMessage,
     peerId: string,
-  ): Promise<void> {
+  ): Promise<string> {
     if (message.type !== 'key_exchange' || message.content !== 'key_exchange_response') {
       throw new Error('Unexpected message type during key exchange');
     }
@@ -1575,20 +1787,17 @@ export class KeyExchange {
     if (!valid) {
       throw new Error('Key exchange response signature verification failed');
     }
+
+    return message.ephemeralPublicKey;
   }
 
   private createAndStoreInitiatorSessionFromResponse(
     peerId: string,
-    message: AuthenticatedEncryptedMessage,
+    remoteEphemeralPublicKey: string,
   ): { session: ConversationSession; sharedSecret: Uint8Array } {
     const pending = this.sessionManager.getPendingKeyExchange(peerId);
     if (!pending) {
       throw new Error('No pending key exchange found');
-    }
-
-    const remoteEphemeralPublicKey = message.ephemeralPublicKey;
-    if (!remoteEphemeralPublicKey) {
-      throw new Error('Key exchange response missing ephemeral public key');
     }
 
     const { sendingKey, receivingKey, sharedSecret } = this.deriveDirectionalKeys(

@@ -309,7 +309,14 @@ export type ContactMode = 'active' | 'silent' | 'block'
 
 export type MessageToVerify = {
   type: 'key_exchange';
-  content: 'key_exchange_init' | 'key_exchange_response' | 'key_exchange_rejected' | 'key_rotation' | 'key_rotation_response';
+  content:
+    'key_exchange_init' |
+    'key_exchange_response' |
+    'key_exchange_rejected' |
+    'key_exchange_confirmed' |
+    'key_exchange_cancelled' |
+    'key_rotation' |
+    'key_rotation_response';
   ephemeralPublicKey: string;
   senderUsername: string;
   timestamp: number;
