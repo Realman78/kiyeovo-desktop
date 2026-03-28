@@ -48,7 +48,7 @@ async function createRelayNode() {
 
   const maxReservations = parseOptionalPositiveInt(process.env.RELAY_MAX_RESERVATIONS);
   const reservationTtl = parseOptionalPositiveInt(process.env.RELAY_RESERVATION_TTL_MS);
-  const defaultDurationLimit = parseOptionalPositiveInt(process.env.RELAY_DEFAULT_DURATION_LIMIT_MS);
+  const defaultDurationLimit = parseOptionalPositiveInt(process.env.RELAY_DEFAULT_DURATION_LIMIT_MS || String(5 * 60 * 1000));
   const defaultDataLimit = parseOptionalPositiveInt(process.env.RELAY_DEFAULT_DATA_LIMIT_BYTES);
 
   const { privateKey } = await PeerIdManager.loadOrCreate(peerIdFile);

@@ -187,6 +187,8 @@ export interface PendingAcceptance {
   resolve: (accepted: boolean) => void
   reject: (error: Error) => void
   timestamp: number
+  receivedAt: number
+  expiresAt: number
   username: string
   peerId?: string
   messageBody: string

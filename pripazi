@@ -4,6 +4,8 @@
 
 2. We made the DHT health monitor non-destructive because it was closing live peer connections during background ping probes and breaking real flows like key exchange. The downside is that unresponsive peers may linger a bit longer, which can add some noise or slightly worsen probe sampling, but reconnect decisions still work because they are based on probe results rather than raw connection count. The safer long-term refinement is to keep the monitor observational while deprioritizing repeatedly failing peers instead of force-closing them.
 
+3. BUG: px timeout i contact attempt timeout nisu isti -> neka sender posalje do kad traje request pa da ovaj more to iskoristit umisto svoj 5-minutni pokrenut (naravno, ako je vise od 5 minuta u buducnosti, odbaci ga i koristi svoj 5min)
+
 4. DHT put error for /kiyeovo-fast-group-info-v/71e3f6bb-c60e-4dc7-b9cf-f16ad07b42a3/F9ntCrDHH8x8pdhLMgUsrJsjXyF-hCUE0M1TPylpiEo/29:
   from: PeerId(12D3KooWBEmK9VyRzDPpkhVdfH1LhpMTz4DH8NhA6e7pdi6AXstV),
   error: LimitedConnectionError: Cannot open protocol stream on limited connection

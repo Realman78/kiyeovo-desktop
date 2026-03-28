@@ -803,8 +803,8 @@ function setupContactAttemptHandlers(
         username: attempt.username,
         message: "Contact request",
         messageBody: attempt.messageBody,
-        receivedAt: attempt.timestamp,
-        expiresAt: attempt.timestamp + PENDING_KEY_EXCHANGE_EXPIRATION
+        receivedAt: attempt.receivedAt,
+        expiresAt: attempt.expiresAt
       }));
 
       console.log(`[IPC] Found ${contactAttempts.length} contact attempts`);
