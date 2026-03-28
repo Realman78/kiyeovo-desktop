@@ -11,6 +11,28 @@ import {
   verifyUsernameRegistrationSignature,
 } from './username-record.js';
 
+type UsernamePublishResult = {
+  errorCount: number;
+  acceptedCount: number;
+  rejectedCount: number;
+};
+
+type UsernameRegistrationContext = {
+  username: string;
+  myPeerId: string;
+  usernameKey: Uint8Array;
+  peerIdKey: Uint8Array;
+  registrationJson: string;
+  valueBytes: Uint8Array;
+  previousUsername: string | null;
+};
+
+type StoredUsernameState = {
+  autoRegister: string | null;
+  userDb: User | null;
+  lastUsername: string | null;
+};
+
 export class UsernameRegistry {
   private static readonly USERNAME_REGEX = /^[A-Za-z0-9_]+$/;
   private static readonly TEXT_ENCODER = new TextEncoder();
@@ -47,19 +69,20 @@ export class UsernameRegistry {
 
   async initialize(userIdentity: EncryptedUserIdentity, onRestoreUsername: (username: string) => void): Promise<void> {
     this.userIdentity = userIdentity;
-
     const autoRegister = this.database.getSetting(this.autoRegisterSettingKey);
 
     if (autoRegister === 'never') {
       console.log('Auto-registration is disabled. Use "register <username>" to register a username.');
       return;
     }
-    const userDb = this.database.getUserByPeerId(this.node.peerId.toString());
-    const lastUsername = this.database.getLastUsername(this.node.peerId.toString());
 
-    if (lastUsername && userDb && autoRegister === 'true') {
-      console.log(`Auto-registering as '${lastUsername}' in background...`);
-      void this.tryRestoreLastUsername(userDb, onRestoreUsername).catch((error: unknown) => {
+    const storedUsernameState = this.readStoredUsernameState(autoRegister);
+
+    if (storedUsernameState.autoRegister === 'true'
+      && storedUsernameState.lastUsername
+      && storedUsernameState.userDb) {
+      console.log(`Auto-registering as '${storedUsernameState.lastUsername}' in background...`);
+      void this.restoreStoredUsername(storedUsernameState.userDb, onRestoreUsername).catch((error: unknown) => {
         generalErrorHandler(error);
       });
     }
@@ -83,213 +106,49 @@ export class UsernameRegistry {
 
   private async registerInternal(username: string, isRenewal: boolean = false, rememberMe: boolean = false): Promise<boolean> {
     console.log(`Registering username: ${username} with rememberMe: ${rememberMe}`);
-    if (!this.userIdentity) {
-      throw new Error('User identity not initialized');
-    }
-
-    if (username.length < 3) {
-      throw new Error('Username must be at least 3 characters');
-    }
-
-    if (username.length > 32) {
-      throw new Error('Username must be less than 32 characters');
-    }
-
-    if (!UsernameRegistry.USERNAME_REGEX.test(username)) {
-      throw new Error('Username can only contain alphanumerics and underscores');
-    }
-
-    if (this.currentUsername === username && !isRenewal) {
-      console.log(`Username ${username} is already registered`);
+    if (!this.proceedWithRegistration(username, isRenewal)) {
       return true;
     }
 
-    const myPeerId = this.node.peerId.toString();
-    const usernameKey = this.buildUsernameByNameKey(username);
-    const peerIdKey = this.buildUsernameByPeerIdKey(myPeerId);
-    const userRegistration = this.#createUserRegistrationObject(username);
-    const userRegistrationJson = JSON.stringify(userRegistration);
-    const valueBytes = UsernameRegistry.TEXT_ENCODER.encode(userRegistrationJson);
+    const registrationContext = this.createRegistrationContext(username);
 
-    // Check if username is already taken by someone else
+    await this.ensureUsernameAvailableForRegistration(
+      registrationContext.usernameKey,
+      registrationContext.myPeerId,
+    );
+
+    this.pausePreviousRegistration(registrationContext.previousUsername, username);
     try {
-      for await (const event of this.node.services.dht.get(usernameKey) as AsyncIterable<QueryEvent>) {
-        if (event.name === 'VALUE' && event.value) {
-          const rawData = UsernameRegistry.TEXT_DECODER.decode(event.value).trim();
-          
-          // If data is empty or invalid, skip it (username is available)
-          if (!rawData || rawData === '{}') continue;
-
-          let existingRegistration: UserRegistration | null = null;
-          try {
-            const parsed = JSON.parse(rawData) as unknown;
-            if (!isUsernameRegistrationRecord(parsed) || !verifyUsernameRegistrationSignature(parsed)) {
-              continue;
-            }
-            existingRegistration = parsed;
-          } catch (e) {
-            // Invalid JSON means we can't verify ownership, treat as garbage/available
-            continue;
-          }
-          if (!existingRegistration) {
-            continue;
-          }
-          if ((existingRegistration.kind ?? 'active') === 'released') {
-            // Username was explicitly released; allow claim.
-            continue;
-          }
-          const age = Date.now() - existingRegistration.timestamp;
-          if (age > UsernameRegistry.MAX_REGISTRATION_AGE) {
-            // Stale record can be reclaimed.
-            continue;
-          }
-          if (existingRegistration && existingRegistration.peerID && existingRegistration.peerID !== myPeerId) {
-            throw new Error(ERRORS.USERNAME_TAKEN);
-          }
-          break;
-        }
-      }
-    } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : '';
-      const isExpectedError = errMsg.includes('not found')
-        || errMsg.includes('No peers found')
-        || errMsg.includes('Could not send correction');
-      if (!isExpectedError) {
-        generalErrorHandler(err, 'Failed to register username');
-        throw err;
-      }
-    }
-
-
-    // If changing username, stop re-registration first to prevent race conditions
-    const oldUsername = this.currentUsername;
-    if (oldUsername) {
-      console.log(`Changing username from ${oldUsername} to ${username}`);
-      this.stopReregistration();
-    }
-
-    // Store username -> user data record (for username lookups)
-    const usernamePublish = await this.publishRecord(usernameKey, valueBytes);
-    if (usernamePublish.acceptedCount === 0 && usernamePublish.rejectedCount > 0) {
-      if (oldUsername) {
-        this.currentUsername = oldUsername;
-        this.startReregistration();
-      }
-      throw new Error(`Username registration rejected by DHT validators (${usernamePublish.rejectedCount} peer(s) rejected)`);
-    }
-
-    if (usernamePublish.errorCount > 0 && usernamePublish.acceptedCount === 0) {
-      if (oldUsername) {
-        this.currentUsername = oldUsername;
-        this.startReregistration();
-      }
-      throw new Error(`Username registration failed: all ${usernamePublish.errorCount} peers unreachable`);
-    }
-
-    const rollbackUsernameOnPeerWriteFailure = async (): Promise<void> => {
-      try {
-        const released = await this.releaseUsernameByName(username);
-        if (!released) {
-          console.warn(`Peer ID write failed and rollback release for '${username}' did not fully propagate.`);
-        }
-      } catch (rollbackError: unknown) {
-        generalErrorHandler(rollbackError, `Failed rollback release for partially committed username '${username}'`);
-      }
-    };
-
-    // Store peerID -> user data record (contains all info)
-    const peerPublish = await this.publishRecord(peerIdKey, valueBytes);
-    if (peerPublish.acceptedCount === 0 && peerPublish.rejectedCount > 0) {
-      await rollbackUsernameOnPeerWriteFailure();
-      if (oldUsername) {
-        this.currentUsername = oldUsername;
-        this.startReregistration();
-      }
-      throw new Error(`Peer ID registration rejected by DHT validators (${peerPublish.rejectedCount} peer(s) rejected)`);
-    }
-
-    if (peerPublish.errorCount > 0 && peerPublish.acceptedCount === 0) {
-      await rollbackUsernameOnPeerWriteFailure();
-      if (oldUsername) {
-        this.currentUsername = oldUsername;
-        this.startReregistration();
-      }
-      throw new Error(`Peer ID registration failed: all ${peerPublish.errorCount} peers unreachable`);
-    }
-
-    console.log(`Stored records: username:${username} → peerID:${myPeerId} → full user data`);
-
-    // After new username is committed, release the old username explicitly.
-    if (oldUsername && oldUsername !== username) {
-      const released = await this.releaseUsernameByName(oldUsername);
-      if (!released) {
-        console.warn(`Failed to release old username '${oldUsername}'. It may remain reserved until stale.`);
-      }
-    }
-
-    // Update in-memory username
-    this.currentUsername = username;
-
-    // Update or create user in database
-    try {
-      const existingUser = this.database.getUserByPeerId(myPeerId);
-      if (existingUser) {
-        console.log(`User already exists in database with ID: ${existingUser.peer_id}`);
-        if (existingUser.username !== username) {
-          this.database.updateUsername(myPeerId, username);
-          console.log(`Updated username in database: ${username}`);
-        }
-      } else {
-        const peerId = await this.database.createUser({
-          peer_id: myPeerId,
-          username,
-          signing_public_key: this.userIdentity.signingPublicKey.toString(),
-          offline_public_key: Buffer.from(this.userIdentity.offlinePublicKey).toString('base64'),
-          signature: this.userIdentity.sign(userRegistrationJson).toString()
-        });
-        console.log(peerId ? `User registered in database with peerId: ${peerId}` : `User may already exist in database`);
-      }
+      await this.publishRegistrationPair(registrationContext);
     } catch (error: unknown) {
-      generalErrorHandler(error, 'Failed to save user to database');
-      // Don't fail the registration if database save fails
-      // The DHT registration is the primary storage
+      this.restorePreviousRegistrationState(registrationContext.previousUsername);
+      throw error;
     }
 
-    if (rememberMe) {
-      this.database.setSetting(this.autoRegisterSettingKey, 'true');
-      console.log(`Registered username: ${username} and will auto-register on startup`);
-    }
-
-    // Start re-registration with new username
-    this.startReregistration();
-
+    await this.finalizeRegistration(registrationContext, rememberMe);
     return true;
   }
 
   async attemptAutoRegister(): Promise<string | null> {
-    const autoRegister = this.database.getSetting(this.autoRegisterSettingKey);
-    if (autoRegister !== 'true') {
+    const storedUsernameState = this.readStoredUsernameState();
+    if (storedUsernameState.autoRegister !== 'true') {
       return null;
     }
 
-    const userDb = this.database.getUserByPeerId(this.node.peerId.toString());
-    const lastUsername = this.database.getLastUsername(this.node.peerId.toString());
-
-    if (!lastUsername || !userDb) {
+    if (!storedUsernameState.lastUsername || !storedUsernameState.userDb) {
       return null;
     }
 
-    if (this.currentUsername === lastUsername) {
-      return lastUsername;
+    if (this.currentUsername === storedUsernameState.lastUsername) {
+      return storedUsernameState.lastUsername;
     }
 
-    const peers = this.node.getConnections();
-    if (peers.length === 0) {
+    if (!this.hasConnectedPeersForRegistration()) {
       return null;
     }
 
-    const success = await this.register(lastUsername, true);
-    return success ? lastUsername : null;
+    const success = await this.renewUsername(storedUsernameState.lastUsername);
+    return success ? storedUsernameState.lastUsername : null;
   }
 
   // Use this when you want to release your current username and stop being reachable by it.
@@ -403,7 +262,23 @@ export class UsernameRegistry {
     }
   }
 
-  private async tryRestoreLastUsername(userDb?: User, onRestoreUsername?: (username: string) => void): Promise<void> {
+  private readStoredUsernameState(autoRegister: string | null = this.database.getSetting(this.autoRegisterSettingKey)): StoredUsernameState {
+    return {
+      autoRegister,
+      userDb: this.database.getUserByPeerId(this.node.peerId.toString()),
+      lastUsername: this.database.getLastUsername(this.node.peerId.toString()),
+    };
+  }
+
+  private hasConnectedPeersForRegistration(): boolean {
+    return this.node.getConnections().length > 0;
+  }
+
+  private async renewUsername(username: string): Promise<boolean> {
+    return this.register(username, true);
+  }
+
+  private async restoreStoredUsername(userDb?: User, onRestoreUsername?: (username: string) => void): Promise<void> {
     if (!userDb?.username || !userDb.peer_id || userDb.peer_id !== this.node.peerId.toString()) {
       return;
     }
@@ -411,16 +286,14 @@ export class UsernameRegistry {
     const { username } = userDb;
     console.log(`Attempting to restore username: ${username}`);
 
-    // Check if we have any peers before attempting registration
-    const peers = this.node.getConnections();
-    if (peers.length === 0) {
+    if (!this.hasConnectedPeersForRegistration()) {
       console.log(`Skipping auto-registration for '${username}' - no DHT peers connected`);
       console.log(`Registration will be available once connected to the network`);
       return;
     }
 
     try {
-      await this.register(username, true);
+      await this.renewUsername(username);
       console.log(`Successfully restored username: ${username}`);
       onRestoreUsername?.(username);
     } catch (err: unknown) {
@@ -432,6 +305,21 @@ export class UsernameRegistry {
     }
   }
 
+  private async reregisterCurrentUsername(): Promise<void> {
+    try {
+      console.log(`Re-registering username: ${this.currentUsername}`);
+
+      if (!this.currentUsername) {
+        console.error('Current username not set');
+        return;
+      }
+
+      await this.renewUsername(this.currentUsername);
+    } catch (err: unknown) {
+      generalErrorHandler(err, 'Failed to re-register username');
+    }
+  }
+
   private startReregistration(): void {
     if (!this.currentUsername) {
       return;
@@ -439,24 +327,9 @@ export class UsernameRegistry {
     if (this.reregistrationInterval) {
       clearInterval(this.reregistrationInterval);
     }
-
-    const reregister = async (): Promise<void> => {
-      try {
-        console.log(`Re-registering username: ${this.currentUsername}`);
-    
-        if (!this.currentUsername) {
-          console.error('Current username not set');
-          return;
-        }
-    
-        await this.register(this.currentUsername, true);
-      } catch (err: unknown) {
-        generalErrorHandler(err, 'Failed to re-register username');
-      }
-    };
     
     this.reregistrationInterval = setInterval(() => {
-      void reregister();
+      void this.reregisterCurrentUsername();
     }, REREGISTRATION_INTERVAL);    
   }
 
@@ -467,7 +340,209 @@ export class UsernameRegistry {
     }
   }
 
-  #createUserRegistrationObject(username: string): UserRegistration {
+  private proceedWithRegistration(username: string, isRenewal: boolean): boolean {
+    if (!this.userIdentity) {
+      throw new Error('User identity not initialized');
+    }
+
+    if (username.length < 3) {
+      throw new Error('Username must be at least 3 characters');
+    }
+
+    if (username.length > 32) {
+      throw new Error('Username must be less than 32 characters');
+    }
+
+    if (!UsernameRegistry.USERNAME_REGEX.test(username)) {
+      throw new Error('Username can only contain alphanumerics and underscores');
+    }
+
+    if (this.currentUsername === username && !isRenewal) {
+      console.log(`Username ${username} is already registered`);
+      return false;
+    }
+
+    return true;
+  }
+
+  private createRegistrationContext(username: string): UsernameRegistrationContext {
+    const myPeerId = this.node.peerId.toString();
+    const registration = this.#createRegistrationObject(username, 'active');
+    const registrationJson = JSON.stringify(registration);
+
+    return {
+      username,
+      myPeerId,
+      usernameKey: this.buildUsernameByNameKey(username),
+      peerIdKey: this.buildUsernameByPeerIdKey(myPeerId),
+      registrationJson,
+      valueBytes: UsernameRegistry.TEXT_ENCODER.encode(registrationJson),
+      previousUsername: this.currentUsername,
+    };
+  }
+
+  private async ensureUsernameAvailableForRegistration(usernameKey: Uint8Array, myPeerId: string): Promise<void> {
+    try {
+      for await (const event of this.node.services.dht.get(usernameKey) as AsyncIterable<QueryEvent>) {
+        if (event.name !== 'VALUE' || !event.value) {
+          continue;
+        }
+
+        const rawData = UsernameRegistry.TEXT_DECODER.decode(event.value).trim();
+        if (!rawData || rawData === '{}') {
+          continue;
+        }
+
+        let existingRegistration: UserRegistration | null = null;
+        try {
+          const parsed = JSON.parse(rawData) as unknown;
+          if (!isUsernameRegistrationRecord(parsed) || !verifyUsernameRegistrationSignature(parsed)) {
+            continue;
+          }
+          existingRegistration = parsed;
+        } catch {
+          continue;
+        }
+
+        if (!existingRegistration) {
+          continue;
+        }
+
+        if ((existingRegistration.kind ?? 'active') === 'released') {
+          continue;
+        }
+
+        const age = Date.now() - existingRegistration.timestamp;
+        if (age > UsernameRegistry.MAX_REGISTRATION_AGE) {
+          continue;
+        }
+
+        if (existingRegistration.peerID && existingRegistration.peerID !== myPeerId) {
+          throw new Error(ERRORS.USERNAME_TAKEN);
+        }
+
+        return;
+      }
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : '';
+      const isExpectedError = errMsg.includes('not found')
+        || errMsg.includes('No peers found')
+        || errMsg.includes('Could not send correction');
+      if (!isExpectedError) {
+        generalErrorHandler(err, 'Failed to register username');
+        throw err;
+      }
+    }
+  }
+
+  private pausePreviousRegistration(previousUsername: string | null, nextUsername: string): void {
+    if (!previousUsername) return;
+
+    console.log(`Changing username from ${previousUsername} to ${nextUsername}`);
+    this.stopReregistration();
+  }
+
+  private restorePreviousRegistrationState(previousUsername: string | null): void {
+    if (!previousUsername) return;
+
+    this.currentUsername = previousUsername;
+    this.startReregistration();
+  }
+
+  private getPublishFailureError(publish: UsernamePublishResult, label: string): Error | null {
+    if (publish.acceptedCount === 0 && publish.rejectedCount > 0) {
+      return new Error(`${label} rejected by DHT validators (${publish.rejectedCount} peer(s) rejected)`);
+    }
+
+    if (publish.errorCount > 0 && publish.acceptedCount === 0) {
+      return new Error(`${label} failed: all ${publish.errorCount} peers unreachable`);
+    }
+
+    return null;
+  }
+
+  private async rollbackPartiallyPublishedUsername(username: string): Promise<void> {
+    try {
+      const released = await this.releaseUsernameByName(username);
+      if (!released) {
+        console.warn(`Peer ID write failed and rollback release for '${username}' did not fully propagate.`);
+      }
+    } catch (rollbackError: unknown) {
+      generalErrorHandler(rollbackError, `Failed rollback release for partially committed username '${username}'`);
+    }
+  }
+
+  private async publishRegistrationPair(context: UsernameRegistrationContext): Promise<void> {
+    const usernamePublish = await this.publishRecord(context.usernameKey, context.valueBytes);
+    const usernamePublishError = this.getPublishFailureError(usernamePublish, 'Username registration');
+    if (usernamePublishError) {
+      throw usernamePublishError;
+    }
+
+    const peerPublish = await this.publishRecord(context.peerIdKey, context.valueBytes);
+    const peerPublishError = this.getPublishFailureError(peerPublish, 'Peer ID registration');
+    if (peerPublishError) {
+      await this.rollbackPartiallyPublishedUsername(context.username);
+      throw peerPublishError;
+    }
+
+    console.log(`Stored records: username:${context.username} → peerID:${context.myPeerId} → full user data`);
+  }
+
+  private async finalizeRegistration(
+    context: UsernameRegistrationContext,
+    rememberMe: boolean,
+  ): Promise<void> {
+    if (context.previousUsername && context.previousUsername !== context.username) {
+      const released = await this.releaseUsernameByName(context.previousUsername);
+      if (!released) {
+        console.warn(`Failed to release old username '${context.previousUsername}'. It may remain reserved until stale.`);
+      }
+    }
+
+    this.currentUsername = context.username;
+    await this.persistRegisteredUser(context);
+
+    if (rememberMe) {
+      this.database.setSetting(this.autoRegisterSettingKey, 'true');
+      console.log(`Registered username: ${context.username} and will auto-register on startup`);
+    }
+
+    this.startReregistration();
+  }
+
+  private async persistRegisteredUser(context: UsernameRegistrationContext): Promise<void> {
+    if (!this.userIdentity) {
+      throw new Error('User identity not initialized');
+    }
+
+    try {
+      const existingUser = this.database.getUserByPeerId(context.myPeerId);
+      if (existingUser) {
+        console.log(`User already exists in database with ID: ${existingUser.peer_id}`);
+        if (existingUser.username !== context.username) {
+          this.database.updateUsername(context.myPeerId, context.username);
+          console.log(`Updated username in database: ${context.username}`);
+        }
+        return;
+      }
+
+      const peerId = await this.database.createUser({
+        peer_id: context.myPeerId,
+        username: context.username,
+        signing_public_key: this.userIdentity.signingPublicKey.toString(),
+        offline_public_key: Buffer.from(this.userIdentity.offlinePublicKey).toString('base64'),
+        signature: this.userIdentity.sign(context.registrationJson).toString(),
+      });
+      console.log(peerId ? `User registered in database with peerId: ${peerId}` : 'User may already exist in database');
+    } catch (error: unknown) {
+      generalErrorHandler(error, 'Failed to save user to database');
+      // Don't fail the registration if database save fails
+      // The DHT registration is the primary storage
+    }
+  }
+
+  #createRegistrationObject(username: string, kind: 'active' | 'released'): UserRegistration {
     if (!this.userIdentity) {
       throw new Error('User identity not initialized');
     }
@@ -476,7 +551,7 @@ export class UsernameRegistry {
     const registrationData: Omit<UserRegistration, 'signature'> = {
       peerID: this.node.peerId.toString(),
       username,
-      kind: 'active',
+      kind,
       signingPublicKey: Buffer.from(identity.signingPublicKey).toString('base64'),
       offlinePublicKey: Buffer.from(identity.offlinePublicKey).toString('base64'),
       timestamp: Date.now(),
@@ -492,29 +567,12 @@ export class UsernameRegistry {
     } as UserRegistration;
   }
 
+  #createUserRegistrationObject(username: string): UserRegistration {
+    return this.#createRegistrationObject(username, 'active');
+  }
+
   #createReleasedRegistrationObject(username: string): UserRegistration {
-    if (!this.userIdentity) {
-      throw new Error('User identity not initialized');
-    }
-    const identity = this.userIdentity;
-
-    const registrationData: Omit<UserRegistration, 'signature'> = {
-      peerID: this.node.peerId.toString(),
-      username,
-      kind: 'released',
-      signingPublicKey: Buffer.from(identity.signingPublicKey).toString('base64'),
-      offlinePublicKey: Buffer.from(identity.offlinePublicKey).toString('base64'),
-      timestamp: Date.now(),
-    };
-
-    const signature = signUsernameRegistrationPayload(registrationData, (payload) =>
-      identity.sign(payload),
-    );
-
-    return {
-      ...registrationData,
-      signature,
-    } as UserRegistration;
+    return this.#createRegistrationObject(username, 'released');
   }
 
 
@@ -604,7 +662,7 @@ export class UsernameRegistry {
   private async publishRecord(
     key: Uint8Array,
     valueBytes: Uint8Array,
-  ): Promise<{ errorCount: number; acceptedCount: number; rejectedCount: number }> {
+  ): Promise<UsernamePublishResult> {
     const startedAt = Date.now();
     let errorCount = 0;
     let acceptedCount = 0;

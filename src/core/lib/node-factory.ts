@@ -11,7 +11,7 @@ import { multiaddr } from '@multiformats/multiaddr';
 import { tcp, type TCPComponents } from '@libp2p/tcp';
 import type { Transport } from '@libp2p/interface';
 
-import type { ChatNode, NetworkMode } from '../types.js';
+import type { BootstrapAddressResolution, ChatNode, NetworkMode } from '../types.js';
 
 import { EncryptedUserIdentity } from './encrypted-user-identity.js';
 import { offlineMessageValidator, offlineMessageSelector, offlineMessageValidateUpdate } from './offline-message-validator.js';
@@ -39,11 +39,28 @@ import { createConnectionGater } from './connection-gater.js';
 import { ChatDatabase } from './db/database.js';
 import { torTransport, validateTorConnection, type TorTransportComponents } from './tor-transport.js';
 import { resolveBootstrapAddressesForCurrentMode, extractTorBootstrapTargets } from './node-bootstrap.js';
-import { getConfiguredFastRelayAddrs } from './node-relays.js';
+import { getConfiguredFastRelayAddrs, type FastRelayConfig } from './node-relays.js';
 
 type RelayRuntime = {
   relayTransportFactory: ReturnType<typeof circuitRelayTransport> | null;
   dcutrFactory: ((components: unknown) => unknown) | null;
+};
+
+type ChatNodeRelayConfig = FastRelayConfig | {
+  addresses: [];
+  source: 'none';
+};
+
+type ChatNodeRuntimeConfig = {
+  port: number;
+  networkMode: NetworkMode;
+  isAnonymousMode: boolean;
+  modeConfig: ReturnType<typeof getNetworkModeConfig>;
+  modeRuntime: ReturnType<typeof getNetworkModeRuntime>;
+  bootstrapResolution: BootstrapAddressResolution;
+  relayConfig: ChatNodeRelayConfig;
+  relayRuntime: RelayRuntime;
+  torConfig: ReturnType<typeof getTorConfig>;
 };
 
 export function createTransportArray(params: {
@@ -81,6 +98,17 @@ function getFastModeListenAddrs(port: number): string[] {
   return [`/ip4/0.0.0.0/tcp/${port}`, '/p2p-circuit'];
 }
 
+function getRelayRuntime(networkMode: NetworkMode): RelayRuntime {
+  if (networkMode !== NETWORK_MODES.FAST) {
+    return { relayTransportFactory: null, dcutrFactory: null };
+  }
+
+  return {
+    relayTransportFactory: circuitRelayTransport(),
+    dcutrFactory: dcutr() as unknown as (components: unknown) => unknown,
+  };
+}
+
 function getTorConfigFromSettings(database: ChatDatabase): ReturnType<typeof getTorConfig> {
   const base = getTorConfig();
   const get = (key: string) => database.getSetting(key);
@@ -104,17 +132,16 @@ function getTorConfigFromSettings(database: ChatDatabase): ReturnType<typeof get
   };
 }
 
-function getAnnounceAddresses(
+function getConfiguredAnnounceAddresses(
   database: ChatDatabase,
-  networkMode: NetworkMode,
-  port: number,
+  runtimeConfig: ChatNodeRuntimeConfig,
 ): string[] {
   const announceAddrs: string[] = [];
   const onionAddress = database.getSetting('tor_onion_address');
 
-  if (networkMode === NETWORK_MODES.ANONYMOUS && onionAddress) {
+  if (runtimeConfig.networkMode === NETWORK_MODES.ANONYMOUS && onionAddress) {
     const onionHost = onionAddress.replace('.onion', '');
-    const announceAddr = `/onion3/${onionHost}:${port}`;
+    const announceAddr = `/onion3/${onionHost}:${runtimeConfig.port}`;
     try {
       multiaddr(announceAddr);
       announceAddrs.push(announceAddr);
@@ -141,6 +168,158 @@ function getAnnounceAddresses(
   return announceAddrs;
 }
 
+function readChatNodeRuntimeConfig(port: number, database: ChatDatabase): ChatNodeRuntimeConfig {
+  const networkMode = database.getSessionNetworkMode();
+
+  return {
+    port,
+    networkMode,
+    isAnonymousMode: networkMode === NETWORK_MODES.ANONYMOUS,
+    modeConfig: getNetworkModeConfig(networkMode),
+    modeRuntime: getNetworkModeRuntime(networkMode),
+    bootstrapResolution: resolveBootstrapAddressesForCurrentMode(database),
+    relayConfig: networkMode === NETWORK_MODES.FAST
+      ? getConfiguredFastRelayAddrs(database)
+      : { addresses: [], source: 'none' },
+    relayRuntime: getRelayRuntime(networkMode),
+    torConfig: getTorConfigFromSettings(database),
+  };
+}
+
+function logChatNodeRuntimeConfig(runtimeConfig: ChatNodeRuntimeConfig): void {
+  console.log(`[STACK] mode=${runtimeConfig.networkMode}`);
+  console.log(
+    `[STACK] protocol=${runtimeConfig.modeConfig.protocolName} dhtProtocol=${runtimeConfig.modeConfig.dhtProtocol}`
+  );
+  console.log(`[STACK] bootstrapConfigured=${runtimeConfig.bootstrapResolution.addresses.length}`);
+  console.log(
+    `[STACK] transport=${runtimeConfig.isAnonymousMode ? 'tcp+tor-socks' : 'tcp+relay(+dcutr)'}`
+  );
+  console.log(
+    `[STACK] relaySource=${runtimeConfig.relayConfig.source} relayConfigured=${runtimeConfig.relayConfig.addresses.length}`
+  );
+
+  if (!runtimeConfig.isAnonymousMode) {
+    console.log('[STACK][FAST] relay runtime loaded');
+  }
+}
+
+async function runNodeModePreflight(runtimeConfig: ChatNodeRuntimeConfig): Promise<void> {
+  if (!runtimeConfig.isAnonymousMode) {
+    console.log('Fast mode selected: using direct TCP + relay/DCUtR path');
+    return;
+  }
+
+  console.log('Tor transport enabled - routing through SOCKS5 proxy');
+  console.log(`  Initial Proxy: ${runtimeConfig.torConfig.socksHost}:${runtimeConfig.torConfig.socksPort}`);
+
+  const bootstrapTargets = extractTorBootstrapTargets(runtimeConfig.bootstrapResolution.addresses);
+  console.log('Validating Tor connectivity...');
+  const { available: torAvailable } = await validateTorConnection({
+    socksProxy: {
+      host: runtimeConfig.torConfig.socksHost,
+      port: runtimeConfig.torConfig.socksPort,
+    },
+    connectionTimeout: runtimeConfig.torConfig.connectionTimeout,
+    maxRetries: runtimeConfig.torConfig.maxRetries,
+  }, bootstrapTargets);
+
+  if (!torAvailable) {
+    console.error('WARNING: Tor connectivity check failed!');
+    console.error(
+      `  Make sure Tor is running and accessible via ${runtimeConfig.torConfig.socksHost}:${runtimeConfig.torConfig.socksPort}`
+    );
+    console.error('  Continuing anyway, but connections may fail...');
+    return;
+  }
+
+  console.log('Tor connectivity validated');
+}
+
+function getChatNodeAddresses(
+  database: ChatDatabase,
+  runtimeConfig: ChatNodeRuntimeConfig,
+): {
+  listen: string[];
+  announce: string[];
+} {
+  const announceAddrs = getConfiguredAnnounceAddresses(database, runtimeConfig);
+
+  return {
+    listen: runtimeConfig.isAnonymousMode
+      ? [`/ip4/0.0.0.0/tcp/${runtimeConfig.port}`]
+      : getFastModeListenAddrs(runtimeConfig.port),
+    announce: runtimeConfig.isAnonymousMode ? announceAddrs : [],
+  };
+}
+
+function createDhtValidateUpdate(runtimeConfig: ChatNodeRuntimeConfig) {
+  return async (key: Uint8Array, existing: Uint8Array, incoming: Uint8Array) => {
+    const keyStr = new TextDecoder().decode(key);
+    if (keyStr.startsWith(runtimeConfig.modeRuntime.dhtKeyPrefixes.offline)) {
+      return offlineMessageValidateUpdate(key, existing, incoming);
+    }
+    if (keyStr.startsWith(runtimeConfig.modeRuntime.dhtKeyPrefixes.username)) {
+      return usernameRegistrationValidateUpdate(key, existing, incoming);
+    }
+    if (keyStr.startsWith(runtimeConfig.modeRuntime.dhtKeyPrefixes.groupOffline)) {
+      return groupOfflineValidateUpdate(key, existing, incoming);
+    }
+    if (keyStr.startsWith(runtimeConfig.modeRuntime.dhtKeyPrefixes.groupInfoLatest)) {
+      return groupInfoLatestValidateUpdate(key, existing, incoming);
+    }
+    if (keyStr.startsWith(runtimeConfig.modeRuntime.dhtKeyPrefixes.groupInfoVersion)) {
+      return groupInfoVersionedValidateUpdate(key, existing, incoming);
+    }
+    console.warn(
+      `[MODE-GUARD][REJECT][dht_validate_update] mode=${runtimeConfig.networkMode} reason=unknown_namespace key=${keyStr}`
+    );
+    throw new Error('cross_mode_dht_key_rejected');
+  };
+}
+
+function createChatNodeServices(runtimeConfig: ChatNodeRuntimeConfig) {
+  return {
+    pubsub: gossipsub({
+      emitSelf: false,
+      runOnLimitedConnection: true,
+      fallbackToFloodsub: false,
+      allowPublishToZeroTopicPeers: false,
+    }),
+    dht: kadDHT({
+      protocol: runtimeConfig.modeConfig.dhtProtocol,
+      peerInfoMapper: runtimeConfig.isAnonymousMode ? filterOnionAddressesMapper : passthroughMapper,
+      clientMode: false,
+      kBucketSize: K_BUCKET_SIZE,
+      prefixLength: PREFIX_LENGTH,
+      validators: {
+        [runtimeConfig.modeRuntime.dhtNamespaceNames.offline]: offlineMessageValidator,
+        [runtimeConfig.modeRuntime.dhtNamespaceNames.username]: usernameRegistrationValidator,
+        [runtimeConfig.modeRuntime.dhtNamespaceNames.groupOffline]: groupOfflineMessageValidator,
+        [runtimeConfig.modeRuntime.dhtNamespaceNames.groupInfoLatest]: groupInfoLatestValidator,
+        [runtimeConfig.modeRuntime.dhtNamespaceNames.groupInfoVersion]: groupInfoVersionedValidator,
+      },
+      selectors: {
+        [runtimeConfig.modeRuntime.dhtNamespaceNames.offline]: offlineMessageSelector,
+        [runtimeConfig.modeRuntime.dhtNamespaceNames.username]: usernameRegistrationSelector,
+        [runtimeConfig.modeRuntime.dhtNamespaceNames.groupOffline]: groupOfflineMessageSelector,
+        [runtimeConfig.modeRuntime.dhtNamespaceNames.groupInfoLatest]: groupInfoLatestSelector,
+        [runtimeConfig.modeRuntime.dhtNamespaceNames.groupInfoVersion]: groupInfoVersionedSelector,
+      },
+      validateUpdate: createDhtValidateUpdate(runtimeConfig),
+    }),
+    identify: identify({
+      runOnConnectionOpen: true,
+    }),
+    ping: ping({
+      timeout: runtimeConfig.isAnonymousMode ? 60000 : 10000,
+    }),
+    ...(runtimeConfig.networkMode === NETWORK_MODES.FAST && runtimeConfig.relayRuntime.dcutrFactory
+      ? { dcutr: runtimeConfig.relayRuntime.dcutrFactory }
+      : {}),
+  };
+}
+
 export async function createChatNode(
   port: number,
   userIdentity: EncryptedUserIdentity,
@@ -152,71 +331,21 @@ export async function createChatNode(
     }
 
     const privateKey = userIdentity.getLibp2pPrivateKey();
-    const networkMode = database.getSessionNetworkMode();
-    const isAnonymousMode = networkMode === NETWORK_MODES.ANONYMOUS;
-    const modeConfig = getNetworkModeConfig(networkMode);
-    const modeRuntime = getNetworkModeRuntime(networkMode);
-    const bootstrapResolution = resolveBootstrapAddressesForCurrentMode(database);
-    const relayConfig = networkMode === NETWORK_MODES.FAST
-      ? getConfiguredFastRelayAddrs(database)
-      : { addresses: [], source: 'none' as const };
-    const relayRuntime: RelayRuntime = networkMode === NETWORK_MODES.FAST
-      ? {
-          relayTransportFactory: circuitRelayTransport(),
-          dcutrFactory: dcutr() as unknown as (components: unknown) => unknown,
-        }
-      : { relayTransportFactory: null, dcutrFactory: null };
-    const torConfig = getTorConfigFromSettings(database);
+    const runtimeConfig = readChatNodeRuntimeConfig(port, database);
 
-    console.log(`[STACK] mode=${networkMode}`);
-    console.log(`[STACK] protocol=${modeConfig.protocolName} dhtProtocol=${modeConfig.dhtProtocol}`);
-    console.log(`[STACK] bootstrapConfigured=${bootstrapResolution.addresses.length}`);
-    console.log(`[STACK] transport=${isAnonymousMode ? 'tcp+tor-socks' : 'tcp+relay(+dcutr)'}`);
-    console.log(`[STACK] relaySource=${relayConfig.source} relayConfigured=${relayConfig.addresses.length}`);
-    if (!isAnonymousMode) {
-      console.log('[STACK][FAST] relay runtime loaded');
-    }
-
-    if (isAnonymousMode) {
-      console.log('Tor transport enabled - routing through SOCKS5 proxy');
-      console.log(`  Initial Proxy: ${torConfig.socksHost}:${torConfig.socksPort}`);
-
-      const bootstrapTargets = extractTorBootstrapTargets(bootstrapResolution.addresses);
-      console.log('Validating Tor connectivity...');
-      const { available: torAvailable } = await validateTorConnection({
-        socksProxy: {
-          host: torConfig.socksHost,
-          port: torConfig.socksPort,
-        },
-        connectionTimeout: torConfig.connectionTimeout,
-        maxRetries: torConfig.maxRetries,
-      }, bootstrapTargets);
-
-      if (!torAvailable) {
-        console.error('WARNING: Tor connectivity check failed!');
-        console.error(`  Make sure Tor is running and accessible via ${torConfig.socksHost}:${torConfig.socksPort}`);
-        console.error('  Continuing anyway, but connections may fail...');
-      } else {
-        console.log('Tor connectivity validated');
-      }
-    } else {
-      console.log('Fast mode selected: using direct TCP + relay/DCUtR path');
-    }
+    logChatNodeRuntimeConfig(runtimeConfig);
+    await runNodeModePreflight(runtimeConfig);
 
     const transports = createTransportArray({
-      networkMode,
-      torConfig,
-      relayTransportFactory: relayRuntime.relayTransportFactory,
+      networkMode: runtimeConfig.networkMode,
+      torConfig: runtimeConfig.torConfig,
+      relayTransportFactory: runtimeConfig.relayRuntime.relayTransportFactory,
     });
-    const announceAddrs = getAnnounceAddresses(database, networkMode, port);
-    const listenAddrs = isAnonymousMode ? [`/ip4/0.0.0.0/tcp/${port}`] : getFastModeListenAddrs(port);
+    const addresses = getChatNodeAddresses(database, runtimeConfig);
 
     const node = await createLibp2p({
       privateKey,
-      addresses: {
-        listen: listenAddrs,
-        announce: isAnonymousMode ? announceAddrs : [],
-      },
+      addresses,
       transports,
       connectionEncrypters: [noise()],
       streamMuxers: [yamux()],
@@ -225,74 +354,15 @@ export async function createChatNode(
       },
       connectionMonitor: {
         enabled: true,
-        pingInterval: isAnonymousMode ? 120000 : 30000,
+        pingInterval: runtimeConfig.isAnonymousMode ? 120000 : 30000,
         pingTimeout: {
-          minTimeout: isAnonymousMode ? 30000 : 5000,
-          maxTimeout: isAnonymousMode ? 120000 : 30000,
+          minTimeout: runtimeConfig.isAnonymousMode ? 30000 : 5000,
+          maxTimeout: runtimeConfig.isAnonymousMode ? 120000 : 30000,
         },
         abortConnectionOnPingFailure: false,
       },
       connectionGater: createConnectionGater(database),
-      services: {
-        pubsub: gossipsub({
-          emitSelf: false,
-          runOnLimitedConnection: true,
-          fallbackToFloodsub: false,
-          allowPublishToZeroTopicPeers: false,
-        }),
-        dht: kadDHT({
-          protocol: modeConfig.dhtProtocol,
-          peerInfoMapper: isAnonymousMode ? filterOnionAddressesMapper : passthroughMapper,
-          clientMode: false,
-          kBucketSize: K_BUCKET_SIZE,
-          prefixLength: PREFIX_LENGTH,
-          validators: {
-            [modeRuntime.dhtNamespaceNames.offline]: offlineMessageValidator,
-            [modeRuntime.dhtNamespaceNames.username]: usernameRegistrationValidator,
-            [modeRuntime.dhtNamespaceNames.groupOffline]: groupOfflineMessageValidator,
-            [modeRuntime.dhtNamespaceNames.groupInfoLatest]: groupInfoLatestValidator,
-            [modeRuntime.dhtNamespaceNames.groupInfoVersion]: groupInfoVersionedValidator,
-          },
-          selectors: {
-            [modeRuntime.dhtNamespaceNames.offline]: offlineMessageSelector,
-            [modeRuntime.dhtNamespaceNames.username]: usernameRegistrationSelector,
-            [modeRuntime.dhtNamespaceNames.groupOffline]: groupOfflineMessageSelector,
-            [modeRuntime.dhtNamespaceNames.groupInfoLatest]: groupInfoLatestSelector,
-            [modeRuntime.dhtNamespaceNames.groupInfoVersion]: groupInfoVersionedSelector,
-          },
-          validateUpdate: async (key, existing, incoming) => {
-            const keyStr = new TextDecoder().decode(key);
-            if (keyStr.startsWith(modeRuntime.dhtKeyPrefixes.offline)) {
-              return offlineMessageValidateUpdate(key, existing, incoming);
-            }
-            if (keyStr.startsWith(modeRuntime.dhtKeyPrefixes.username)) {
-              return usernameRegistrationValidateUpdate(key, existing, incoming);
-            }
-            if (keyStr.startsWith(modeRuntime.dhtKeyPrefixes.groupOffline)) {
-              return groupOfflineValidateUpdate(key, existing, incoming);
-            }
-            if (keyStr.startsWith(modeRuntime.dhtKeyPrefixes.groupInfoLatest)) {
-              return groupInfoLatestValidateUpdate(key, existing, incoming);
-            }
-            if (keyStr.startsWith(modeRuntime.dhtKeyPrefixes.groupInfoVersion)) {
-              return groupInfoVersionedValidateUpdate(key, existing, incoming);
-            }
-            console.warn(
-              `[MODE-GUARD][REJECT][dht_validate_update] mode=${networkMode} reason=unknown_namespace key=${keyStr}`
-            );
-            throw new Error('cross_mode_dht_key_rejected');
-          },
-        }),
-        identify: identify({
-          runOnConnectionOpen: true,
-        }),
-        ping: ping({
-          timeout: isAnonymousMode ? 60000 : 10000,
-        }),
-        ...(networkMode === NETWORK_MODES.FAST && relayRuntime.dcutrFactory
-          ? { dcutr: relayRuntime.dcutrFactory }
-          : {}),
-      },
+      services: createChatNodeServices(runtimeConfig),
     });
 
     await node.start();
