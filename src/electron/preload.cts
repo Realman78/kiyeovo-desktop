@@ -6,6 +6,7 @@ import {
     MessageSentStatus,
     PasswordRequest,
     ContactRequestEvent,
+    ContactRequestCancelledEvent,
     ChatCreatedEvent,
     KeyExchangeFailedEvent,
     MessageReceivedEvent,
@@ -187,6 +188,11 @@ contextBridge.exposeInMainWorld('kiyeovoAPI', {
         const listener = (_event: any, data: ContactRequestEvent) => callback(data);
         ipcRenderer.on(IPC_CHANNELS.CONTACT_REQUEST_RECEIVED, listener);
         return () => ipcRenderer.removeListener(IPC_CHANNELS.CONTACT_REQUEST_RECEIVED, listener);
+    },
+    onContactRequestCancelled: (callback: (data: ContactRequestCancelledEvent) => void) => {
+        const listener = (_event: any, data: ContactRequestCancelledEvent) => callback(data);
+        ipcRenderer.on(IPC_CHANNELS.CONTACT_REQUEST_CANCELLED, listener);
+        return () => ipcRenderer.removeListener(IPC_CHANNELS.CONTACT_REQUEST_CANCELLED, listener);
     },
     acceptContactRequest: async (peerId: string): Promise<{ success: boolean; error: string | null }> => {
         return ipcRenderer.invoke(IPC_CHANNELS.ACCEPT_CONTACT_REQUEST, peerId);

@@ -1,5 +1,6 @@
 import type {
     ContactRequestEvent,
+    ContactRequestCancelledEvent,
     ChatCreatedEvent,
     KeyExchangeFailedEvent,
     InitStatus,
@@ -104,6 +105,7 @@ declare global {
 
             // Contact request events
             onContactRequestReceived: (callback: (data: ContactRequestEvent) => void) => () => void;
+            onContactRequestCancelled: (callback: (data: ContactRequestCancelledEvent) => void) => () => void;
             acceptContactRequest: (peerId: string) => Promise<{ success: boolean; error: string | null }>;
             rejectContactRequest: (peerId: string, block: boolean) => Promise<{ success: boolean; error: string | null }>;
 

@@ -17,6 +17,7 @@ import { DATABASE_CLEANUP_INTERVAL, getNetworkModeConfig, MAX_BOOTSTRAP_NODES_FA
 import type {
   ChatNode,
   ContactRequestEvent,
+  ContactRequestCancelledEvent,
   KeyExchangeEvent,
   PasswordResponse,
   ChatCreatedEvent,
@@ -67,6 +68,7 @@ export interface P2PCoreConfig {
   onDHTConnectionStatus: (status: { connected: boolean | null }) => void;
   onKeyExchangeSent: (data: KeyExchangeEvent) => void;
   onContactRequestReceived: (data: ContactRequestEvent) => void;
+  onContactRequestCancelled: (data: ContactRequestCancelledEvent) => void;
   onChatCreated: (data: ChatCreatedEvent) => void;
   onKeyExchangeFailed: (data: KeyExchangeFailedEvent) => void;
   onMessageReceived: (data: MessageReceivedEvent) => void;
@@ -95,6 +97,7 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
     onDHTConnectionStatus,
     onKeyExchangeSent,
     onContactRequestReceived,
+    onContactRequestCancelled,
     onChatCreated,
     onKeyExchangeFailed,
     onMessageReceived,
@@ -130,6 +133,11 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
   const sendChatCreated = (data: ChatCreatedEvent) => {
     console.log(`[P2P Core] Chat created with ${data.username}: chatId=${data.chatId}`);
     onChatCreated(data);
+  };
+
+  const sendContactRequestCancelled = (data: ContactRequestCancelledEvent) => {
+    console.log(`[P2P Core] Contact request cancelled: ${data.username}`);
+    onContactRequestCancelled(data);
   };
 
   const sendKeyExchangeFailed = (data: KeyExchangeFailedEvent) => {
@@ -419,6 +427,7 @@ export async function initializeP2PCore(config: P2PCoreConfig): Promise<P2PCore>
     database,
     sendKeyExchangeSent,
     sendContactRequestReceived,
+    sendContactRequestCancelled,
     sendChatCreated,
     sendKeyExchangeFailed,
     sendMessageReceived,

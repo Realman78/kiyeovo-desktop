@@ -10,6 +10,7 @@ import type {
   ContactMode,
   KeyExchangeEvent,
   ContactRequestEvent,
+  ContactRequestCancelledEvent,
   ChatCreatedEvent,
   KeyExchangeFailedEvent,
   MessageReceivedEvent,
@@ -194,6 +195,7 @@ export class MessageHandler {
     database: ChatDatabase,
     onKeyExchangeSent: (data: KeyExchangeEvent) => void,
     onContactRequestReceived: (data: ContactRequestEvent) => void,
+    onContactRequestCancelled: (data: ContactRequestCancelledEvent) => void,
     onChatCreated: (data: ChatCreatedEvent) => void,
     onKeyExchangeFailed: (data: KeyExchangeFailedEvent) => void,
     onMessageReceived: (data: MessageReceivedEvent) => void,
@@ -228,6 +230,7 @@ export class MessageHandler {
       database,
       onKeyExchangeSent,
       onContactRequestReceived,
+      onContactRequestCancelled,
       onChatCreated,
       onKeyExchangeFailed,
       this.handleDirectLinkReset.bind(this)

@@ -4,7 +4,7 @@ import type { Stream } from '@libp2p/interface';
 import { x25519 } from '@noble/curves/ed25519';
 import { hkdf } from '@noble/hashes/hkdf';
 import { sha256 } from '@noble/hashes/sha2';
-import type { ChatNode, ConversationSession, AuthenticatedEncryptedMessage, MessageToVerify, PendingAcceptance, UserRegistration, KeyExchangeEvent, ContactRequestEvent, ChatCreatedEvent, KeyExchangeFailedEvent } from '../types.js';
+import type { ChatNode, ConversationSession, AuthenticatedEncryptedMessage, MessageToVerify, PendingAcceptance, UserRegistration, KeyExchangeEvent, ContactRequestEvent, ContactRequestCancelledEvent, ChatCreatedEvent, KeyExchangeFailedEvent } from '../types.js';
 import { EncryptedUserIdentity } from './encrypted-user-identity.js';
 import { SessionManager } from './session-manager.js';
 import {
@@ -47,6 +47,7 @@ export class KeyExchange {
   private pendingAcceptances = new Map<string, PendingAcceptance>();
   private onKeyExchangeSent: (data: KeyExchangeEvent) => void;
   private onContactRequestReceived: (data: ContactRequestEvent) => void;
+  private onContactRequestCancelled: (data: ContactRequestCancelledEvent) => void;
   private onChatCreated: (data: ChatCreatedEvent) => void;
   private onKeyExchangeFailed: (data: KeyExchangeFailedEvent) => void;
   private onDirectLinkReset: (peerId: string) => void;
@@ -111,6 +112,7 @@ export class KeyExchange {
     database: ChatDatabase,
     onKeyExchangeSent: (data: KeyExchangeEvent) => void,
     onContactRequestReceived: (data: ContactRequestEvent) => void,
+    onContactRequestCancelled: (data: ContactRequestCancelledEvent) => void,
     onChatCreated: (data: ChatCreatedEvent) => void,
     onKeyExchangeFailed: (data: KeyExchangeFailedEvent) => void,
     onDirectLinkReset?: (peerId: string) => void
@@ -121,6 +123,7 @@ export class KeyExchange {
     this.database = database;
     this.onKeyExchangeSent = onKeyExchangeSent;
     this.onContactRequestReceived = onContactRequestReceived;
+    this.onContactRequestCancelled = onContactRequestCancelled;
     this.onChatCreated = onChatCreated;
     this.onKeyExchangeFailed = onKeyExchangeFailed;
     this.onDirectLinkReset = onDirectLinkReset ?? (() => undefined);
@@ -1774,6 +1777,10 @@ export class KeyExchange {
     }
 
     this.cancelPendingContact(peerId);
+    this.onContactRequestCancelled({
+      peerId,
+      username: message.senderUsername,
+    });
     console.log(`[KEY-EXCHANGE][CANCELLED][APPLY] ts=${new Date().toISOString()} peer=${peerId}`);
   }
 

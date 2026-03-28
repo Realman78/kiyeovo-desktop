@@ -513,6 +513,7 @@ export const IPC_CHANNELS = {
 
   // Contact request events
   CONTACT_REQUEST_RECEIVED: 'contactRequest:received',
+  CONTACT_REQUEST_CANCELLED: 'contactRequest:cancelled',
   ACCEPT_CONTACT_REQUEST: 'contactRequest:accept',
   REJECT_CONTACT_REQUEST: 'contactRequest:reject',
 
@@ -693,6 +694,11 @@ export interface ContactRequestEvent {
   messageBody?: string;
   receivedAt: number;
   expiresAt: number;
+}
+
+export interface ContactRequestCancelledEvent {
+  peerId: string;
+  username: string;
 }
 
 export interface ChatCreatedEvent {

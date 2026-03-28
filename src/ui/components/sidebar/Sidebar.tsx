@@ -82,6 +82,11 @@ export const Sidebar: FC = () => {
       dispatch(addContactAttempt(data));
     });
 
+    const unsubscribeCancelled = window.kiyeovoAPI.onContactRequestCancelled((data) => {
+      console.log('[UI] Contact request cancelled:', data);
+      dispatch(removeContactAttempt(data.peerId));
+    });
+
     const restoreUnsubscribe = window.kiyeovoAPI.onRestoreUsername((username) => {
       console.log('[UI] Restore username:', username);
       dispatch(setUsername(username));
@@ -91,6 +96,7 @@ export const Sidebar: FC = () => {
 
     return () => {
       unsubscribe();
+      unsubscribeCancelled();
       restoreUnsubscribe();
     };
   }, []);

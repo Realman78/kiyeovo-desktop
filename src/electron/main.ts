@@ -10,6 +10,7 @@ import {
   KeyExchangeEvent,
   type P2PCore,
   type ContactRequestEvent,
+  type ContactRequestCancelledEvent,
   type ChatCreatedEvent,
   type KeyExchangeFailedEvent,
   type MessageReceivedEvent,
@@ -247,6 +248,13 @@ function sendContactRequestReceived(data: ContactRequestEvent) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     console.log(`[Electron] Contact request received from ${data.username}`);
     mainWindow.webContents.send(IPC_CHANNELS.CONTACT_REQUEST_RECEIVED, data);
+  }
+}
+
+function sendContactRequestCancelled(data: ContactRequestCancelledEvent) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    console.log(`[Electron] Contact request cancelled by ${data.username}`);
+    mainWindow.webContents.send(IPC_CHANNELS.CONTACT_REQUEST_CANCELLED, data);
   }
 }
 
@@ -504,6 +512,9 @@ async function initializeP2PAfterWindow() {
       },
       onContactRequestReceived: (data: ContactRequestEvent) => {
         sendContactRequestReceived(data);
+      },
+      onContactRequestCancelled: (data: ContactRequestCancelledEvent) => {
+        sendContactRequestCancelled(data);
       },
       onBootstrapNodes: (nodes: string[]) => {
         sendBootstrapNodes(nodes);
