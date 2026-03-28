@@ -77,9 +77,11 @@ async function createRelayNode() {
     services: {
       identify: identify({
         runOnConnectionOpen: true,
+        runOnLimitedConnection: true
       }),
       ping: ping({
         timeout: 10000,
+        runOnLimitedConnection: true
       }),
       circuitRelay: circuitRelayServer({
         reservations: {

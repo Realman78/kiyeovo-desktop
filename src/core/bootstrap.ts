@@ -213,9 +213,11 @@ function createBootstrapServices(runtimeConfig: BootstrapRuntimeConfig) {
     }),
     identify: identify({
       runOnConnectionOpen: true,
+      runOnLimitedConnection: true
     }),
     ping: ping({
       timeout: runtimeConfig.isAnonymousMode ? 60000 : 10000,
+      runOnLimitedConnection: true
     }),
   };
 }

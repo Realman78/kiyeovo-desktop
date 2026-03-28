@@ -310,9 +310,11 @@ function createChatNodeServices(runtimeConfig: ChatNodeRuntimeConfig) {
     }),
     identify: identify({
       runOnConnectionOpen: true,
+      runOnLimitedConnection: true
     }),
     ping: ping({
       timeout: runtimeConfig.isAnonymousMode ? 60000 : 10000,
+      runOnLimitedConnection: true
     }),
     ...(runtimeConfig.networkMode === NETWORK_MODES.FAST && runtimeConfig.relayRuntime.dcutrFactory
       ? { dcutr: runtimeConfig.relayRuntime.dcutrFactory }
