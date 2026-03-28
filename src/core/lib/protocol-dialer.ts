@@ -45,6 +45,37 @@ function isDirectAddressPrivateOnly(address: string): boolean {
   return isPrivateHost(host);
 }
 
+type KnownAddressSnapshot = {
+  all: string[];
+  direct: string[];
+  directPrivate: string[];
+  directPublic: string[];
+  circuit: string[];
+};
+
+async function getKnownAddressSnapshot(node: ChatNode, targetPeerId: PeerId): Promise<KnownAddressSnapshot> {
+  try {
+    const peerData = await node.peerStore.get(targetPeerId);
+    const all = (peerData.addresses ?? []).map((entry) => entry.multiaddr.toString());
+    const direct = all.filter((address) => !address.includes('/p2p-circuit'));
+    return {
+      all,
+      direct,
+      directPrivate: direct.filter(isDirectAddressPrivateOnly),
+      directPublic: direct.filter((address) => !isDirectAddressPrivateOnly(address)),
+      circuit: all.filter((address) => address.includes('/p2p-circuit')),
+    };
+  } catch {
+    return {
+      all: [],
+      direct: [],
+      directPrivate: [],
+      directPublic: [],
+      circuit: [],
+    };
+  }
+}
+
 async function shouldUseShortDirectTimeout(node: ChatNode, targetPeerId: PeerId): Promise<boolean> {
   const targetPeer = targetPeerId.toString();
   const hasActiveConnection = node.getConnections().some((connection) => connection.remotePeer.toString() === targetPeer);
@@ -52,18 +83,12 @@ async function shouldUseShortDirectTimeout(node: ChatNode, targetPeerId: PeerId)
     return false;
   }
 
-  try {
-    const peerData = await node.peerStore.get(targetPeerId);
-    const knownAddresses = (peerData.addresses ?? []).map((entry) => entry.multiaddr.toString());
-    const directAddresses = knownAddresses.filter((address) => !address.includes('/p2p-circuit'));
-    if (directAddresses.length === 0) {
-      return false;
-    }
-
-    return directAddresses.every(isDirectAddressPrivateOnly);
-  } catch {
+  const snapshot = await getKnownAddressSnapshot(node, targetPeerId);
+  if (snapshot.direct.length === 0) {
     return false;
   }
+
+  return snapshot.direct.every(isDirectAddressPrivateOnly);
 }
 
 export async function dialProtocolWithRelayFallback(
@@ -90,6 +115,19 @@ export async function dialProtocolWithRelayFallback(
 
   const dialOptions = { runOnLimitedConnection: true };
   const targetPeer = targetPeerId.toString();
+  const activeConnections = node
+    .getConnections()
+    .filter((connection) => connection.remotePeer.toString() === targetPeer)
+    .map((connection) => connection.remoteAddr.toString());
+  const knownAddressSnapshot = await getKnownAddressSnapshot(node, targetPeerId);
+  console.log(
+    `[DIAL][${context}] decision target=${targetPeer} ` +
+    `activeConns=${activeConnections.length > 0 ? activeConnections.join(',') : 'none'} ` +
+    `allKnown=${knownAddressSnapshot.all.length > 0 ? knownAddressSnapshot.all.join(',') : 'none'} ` +
+    `directPrivate=${knownAddressSnapshot.directPrivate.length > 0 ? knownAddressSnapshot.directPrivate.join(',') : 'none'} ` +
+    `directPublic=${knownAddressSnapshot.directPublic.length > 0 ? knownAddressSnapshot.directPublic.join(',') : 'none'} ` +
+    `circuit=${knownAddressSnapshot.circuit.length > 0 ? knownAddressSnapshot.circuit.join(',') : 'none'}`,
+  );
   const directDialOptions = {
     ...dialOptions,
     ...(networkMode === NETWORK_MODES.FAST && await shouldUseShortDirectTimeout(node, targetPeerId)
@@ -103,8 +141,13 @@ export async function dialProtocolWithRelayFallback(
     );
   }
 
+  const directDialStartedAt = Date.now();
   try {
-    return await node.dialProtocol(targetPeerId, protocol, directDialOptions);
+    const stream = await node.dialProtocol(targetPeerId, protocol, directDialOptions);
+    console.log(
+      `[DIAL][${context}] direct dial succeeded target=${targetPeer} durationMs=${Date.now() - directDialStartedAt}`,
+    );
+    return stream;
   } catch (directDialError: unknown) {
     if (networkMode !== NETWORK_MODES.FAST) {
       throw directDialError;
@@ -117,7 +160,8 @@ export async function dialProtocolWithRelayFallback(
 
     const directReason = directDialError instanceof Error ? directDialError.message : String(directDialError);
     console.warn(
-      `[DIAL][${context}] direct dial failed target=${targetPeer} reason=${directReason}. trying relay fallback count=${relayAddrs.length}`
+      `[DIAL][${context}] direct dial failed target=${targetPeer} durationMs=${Date.now() - directDialStartedAt} ` +
+      `reason=${directReason}. trying relay fallback count=${relayAddrs.length}`
     );
 
     let lastRelayError: unknown = directDialError;

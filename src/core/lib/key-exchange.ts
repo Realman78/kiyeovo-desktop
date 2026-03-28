@@ -37,6 +37,7 @@ export class KeyExchange {
   private rotationTimeouts = new Map<string, NodeJS.Timeout>();
   private keyExchangeAbortControllers = new Map<string, () => void>();
   private keyExchangeStreams = new Map<string, Stream>();
+  private keyExchangeStartedAt = new Map<string, number>();
   private database: ChatDatabase;
   private pendingAcceptances = new Map<string, PendingAcceptance>();
   private onKeyExchangeSent: (data: KeyExchangeEvent) => void;
@@ -342,6 +343,7 @@ export class KeyExchange {
     const myUsername = this.getInitiatorUsername();
     const linkIntent = options?.linkIntent ?? this.resolveLinkIntent(peerIdStr);
     this.assertCanInitiateKeyExchange(peerIdStr, targetUsername);
+    const startedAt = Date.now();
 
     const recipientOfflinePublicKeyBase64 = await this.resolveRecipientOfflinePublicKeyBase64(
       targetPeerId,
@@ -362,7 +364,7 @@ export class KeyExchange {
 
     const stream = await this.openKeyExchangeInitStream(targetPeerId);
     await this.sendInitiatorKeyExchangeRequest(stream, keyExchangeMessage);
-    this.storeOutgoingKeyExchangeState(peerIdStr, stream, pendingKeyExchange);
+    this.storeOutgoingKeyExchangeState(peerIdStr, stream, pendingKeyExchange, startedAt);
     const timeoutPromise = this.createKeyExchangeTimeoutPromise();
     const cancelPromise = this.createKeyExchangeCancelPromise(peerIdStr);
 
@@ -387,10 +389,12 @@ export class KeyExchange {
       console.log(`Authenticated key exchange completed with ${peerIdStr.slice(0, 8)}`);
       this.keyExchangeAbortControllers.delete(peerIdStr);
       this.keyExchangeStreams.delete(peerIdStr);
+      this.keyExchangeStartedAt.delete(peerIdStr);
       return user;
     } catch (error: unknown) {
       this.keyExchangeAbortControllers.delete(peerIdStr);
       this.keyExchangeStreams.delete(peerIdStr);
+      this.keyExchangeStartedAt.delete(peerIdStr);
 
       // Re-throw cancellation errors so they can be handled upstream
       if (error instanceof Error && error.message === 'KEY_EXCHANGE_CANCELLED') {
@@ -529,8 +533,10 @@ export class KeyExchange {
     peerIdStr: string,
     stream: Stream,
     pendingKeyExchange: { timestamp: number; ephemeralPrivateKey: Uint8Array; ephemeralPublicKey: Uint8Array },
+    startedAt: number,
   ): void {
     this.keyExchangeStreams.set(peerIdStr, stream);
+    this.keyExchangeStartedAt.set(peerIdStr, startedAt);
     this.sessionManager.storePendingKeyExchange(peerIdStr, pendingKeyExchange);
   }
 
@@ -710,13 +716,14 @@ export class KeyExchange {
     initialMessageBody: string,
   ): Promise<UserRegistration | User> {
     const senderUsername = message.senderUsername;
+    const receivedAt = Date.now();
 
     if (!message.ephemeralPublicKey || !message.signature) {
       throw new Error('Key exchange missing signature or ephemeral public key - this should never happen');
     }
 
     this.emitIncomingContactRequest(remoteId, message, initialMessageBody);
-    const result = await this.waitForContactRequestDecision(remoteId, senderUsername, initialMessageBody);
+    const result = await this.waitForContactRequestDecision(remoteId, senderUsername, initialMessageBody, receivedAt);
     this.database.deleteContactAttempt(contactAttemptId);
     if (result === null) {
       console.log(`Contact request from ${senderUsername} expired`);
@@ -757,7 +764,12 @@ export class KeyExchange {
     remoteId: string,
     senderUsername: string,
     initialMessageBody: string,
+    receivedAt: number,
   ): Promise<boolean | null> {
+    console.log(
+      `[KEY-EXCHANGE][PENDING][CREATE] ts=${new Date(receivedAt).toISOString()} ` +
+      `peer=${remoteId} username=${senderUsername} expiresInMs=${PENDING_KEY_EXCHANGE_EXPIRATION}`,
+    );
     const acceptancePromise = new Promise<boolean>((resolve, reject) => {
       this.pendingAcceptances.set(remoteId, { resolve, reject, timestamp: Date.now(), username: senderUsername, messageBody: initialMessageBody });
     });
@@ -765,12 +777,25 @@ export class KeyExchange {
     let timeoutId: NodeJS.Timeout | undefined;
     const timeoutPromise = new Promise<null>((resolve) => {
       timeoutId = setTimeout(() => {
+        console.log(
+          `[KEY-EXCHANGE][PENDING][EXPIRE] ts=${new Date().toISOString()} ` +
+          `peer=${remoteId} username=${senderUsername} ageMs=${Date.now() - receivedAt}`,
+        );
         this.pendingAcceptances.delete(remoteId);
         resolve(null);
       }, PENDING_KEY_EXCHANGE_EXPIRATION);
     });
 
     const result = await Promise.race([acceptancePromise, timeoutPromise]);
+    const activeConnections = this.node
+      .getConnections()
+      .filter((connection) => connection.remotePeer.toString() === remoteId)
+      .map((connection) => connection.remoteAddr.toString());
+    console.log(
+      `[KEY-EXCHANGE][PENDING][RESOLVE] ts=${new Date().toISOString()} ` +
+      `peer=${remoteId} username=${senderUsername} result=${result === null ? 'expired' : result ? 'accepted' : 'rejected'} ` +
+      `ageMs=${Date.now() - receivedAt} activeConns=${activeConnections.length > 0 ? activeConnections.join(',') : 'none'}`,
+    );
     if (result !== null && timeoutId) {
       clearTimeout(timeoutId);
     }
@@ -1292,14 +1317,35 @@ export class KeyExchange {
     peerId: string,
     stream: Stream,
   ): Promise<AuthenticatedEncryptedMessage> {
+    const waitStartedAt = Date.now();
+    const keyExchangeStartedAt = this.keyExchangeStartedAt.get(peerId);
+    console.log(
+      `[KEY-EXCHANGE][WAIT][START] ts=${new Date(waitStartedAt).toISOString()} peer=${peerId} ` +
+      `sinceInitMs=${keyExchangeStartedAt === undefined ? 'unknown' : String(waitStartedAt - keyExchangeStartedAt)}`,
+    );
     try {
       const message = await StreamHandler.readMessageFromStream<AuthenticatedEncryptedMessage>(stream);
       if (!this.sessionManager.getPendingKeyExchange(peerId)) {
         throw new Error('Pending key exchange was cancelled by the user');
       }
+      console.log(
+        `[KEY-EXCHANGE][WAIT][MESSAGE] ts=${new Date().toISOString()} peer=${peerId} ` +
+        `durationMs=${Date.now() - waitStartedAt} content=${message.content}`,
+      );
       return message;
     } catch (streamError: unknown) {
       this.sessionManager.removePendingKeyExchange(peerId);
+      const activeConnections = this.node
+        .getConnections()
+        .filter((connection) => connection.remotePeer.toString() === peerId)
+        .map((connection) => connection.remoteAddr.toString());
+      console.log(
+        `[KEY-EXCHANGE][WAIT][FAIL] ts=${new Date().toISOString()} peer=${peerId} ` +
+        `durationMs=${Date.now() - waitStartedAt} ` +
+        `sinceInitMs=${keyExchangeStartedAt === undefined ? 'unknown' : String(Date.now() - keyExchangeStartedAt)} ` +
+        `activeConns=${activeConnections.length > 0 ? activeConnections.join(',') : 'none'} ` +
+        `error=${streamError instanceof Error ? streamError.message : String(streamError)}`,
+      );
       const errorMsg = streamError instanceof Error ? streamError.message : String(streamError);
       throw new Error(`Connection lost during key exchange: ${errorMsg}`);
     }
