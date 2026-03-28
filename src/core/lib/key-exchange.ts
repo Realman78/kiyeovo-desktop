@@ -898,6 +898,7 @@ export class KeyExchange {
     linkDecision: 'accepted' | 'reset_required' = 'accepted'
   ): Promise<void> {
     const responseTimestamp = Date.now();
+    const responseSendStartedAt = Date.now();
 
     const responseMessageToSign = {
       type: 'key_exchange' as const,
@@ -917,11 +918,29 @@ export class KeyExchange {
     };
 
     try {
+      const activeConnections = this.node
+        .getConnections()
+        .filter((connection) => connection.remotePeer.toString() === remoteId)
+        .map((connection) => connection.remoteAddr.toString());
+      console.log(
+        `[KEY-EXCHANGE][RESPONSE][SEND][START] ts=${new Date(responseSendStartedAt).toISOString()} ` +
+        `peer=${remoteId} activeConns=${activeConnections.length > 0 ? activeConnections.join(',') : 'none'}`,
+      );
       const responseJson = JSON.stringify(responseMessage);
       const encoder = new TextEncoder();
       await stream.sink([encoder.encode(responseJson)]);
       console.log('Response sent successfully!');
     } catch (sendError: unknown) {
+      const activeConnections = this.node
+        .getConnections()
+        .filter((connection) => connection.remotePeer.toString() === remoteId)
+        .map((connection) => connection.remoteAddr.toString());
+      console.log(
+        `[KEY-EXCHANGE][RESPONSE][SEND][FAIL] ts=${new Date().toISOString()} ` +
+        `peer=${remoteId} durationMs=${Date.now() - responseSendStartedAt} ` +
+        `activeConns=${activeConnections.length > 0 ? activeConnections.join(',') : 'none'} ` +
+        `error=${sendError instanceof Error ? sendError.message : String(sendError)}`,
+      );
       generalErrorHandler(sendError);
       if (sendError instanceof Error && sendError.message.includes("Cannot push value onto an ended pushable")) {
         console.log("The sender went offline. Sender needs to be online to finish key exchange");

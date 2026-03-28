@@ -132,6 +132,10 @@ export function createNetworkHealthMonitor({
         console.log(
           `[DHT-STATUS][CORE][PROBE][CLOSE_STALE] count=${deadConnections.length} peers=${deadConnections.map((connection) => connection.remotePeer.toString()).join(',')}`,
         );
+        console.log(
+          `[DHT-STATUS][CORE][PROBE][CLOSE_STALE][DETAIL] source=${probeSource} ` +
+          `targets=${deadConnections.map((connection) => `${connection.remotePeer.toString()}@${connection.remoteAddr.toString()}`).join(',')}`,
+        );
         await Promise.allSettled(deadConnections.map((connection) => connection.close()));
       } finally {
         staleProbeCleanupInFlight = false;
