@@ -1,6 +1,6 @@
 import { ChatNode, StreamHandlerContext, ConversationSession, FileChunk, FileOffer, FileOfferResponse, FileTransferConfirm, FileTransferMessage, FileTransferProgressEvent, FileTransferCompleteEvent, FileTransferFailedEvent, PendingFileReceivedEvent } from "../types";
-import type { Stream } from "@libp2p/interface";
-import { ChatDatabase, Chat } from "./db/database";
+import type { Stream, PeerId } from "@libp2p/interface";
+import { ChatDatabase, Chat, User } from "./db/database";
 import { readFile, stat, writeFile, mkdir, access } from "fs/promises";
 import { basename, extname, isAbsolute, resolve } from "path";
 import { blake3 } from "@napi-rs/blake-hash";
@@ -24,6 +24,32 @@ interface FileMetadata {
   size: number
   checksum: string
   totalChunks: number
+}
+
+interface OutgoingFileTransferContext {
+  chat: Chat
+  session: ConversationSession
+  targetPeerId: PeerId
+  targetPeerIdStr: string
+  metadata: FileMetadata
+  fileId: string
+}
+
+type IncomingOfferEvaluation =
+  | { kind: 'silent-reject' }
+  | { kind: 'reject'; reason: string }
+  | {
+    kind: 'ready'
+    sender: User
+    chat: Chat
+    session: ConversationSession
+    pinnedSessionPeerId: string
+    expiresAt: number
+  };
+
+interface IncomingOfferDecision {
+  accepted: boolean
+  decision: 'accepted' | 'rejected' | 'expired' | 'shutdown'
 }
 
 export class FileHandler {
@@ -212,6 +238,15 @@ export class FileHandler {
     return EncryptedUserIdentity.verifyKeyExchangeSignature(offer.signature, payload, signingPublicKey);
   }
 
+  private buildFileOfferRejection(fileId: string, reason: string): FileOfferResponse {
+    return {
+      type: FILE_OFFER_RESPONSE,
+      fileId,
+      accepted: false,
+      reason,
+    };
+  }
+
   // Check if peer has exceeded file offer rate limit
   private isFileOfferRateLimitExceeded(peerId: string): boolean {
     const now = Date.now();
@@ -371,278 +406,40 @@ export class FileHandler {
             const offerMsg = message;
             offer = offerMsg;
             this.trace('RECV', senderPeerId, offerMsg.fileId, 'OFFER_RECEIVED', `size=${offerMsg.size} chunks=${offerMsg.totalChunks}`);
-
-            // Global pending files limit
-            const maxPendingTotal = this.getMaxPendingFilesTotal();
-            if (this.getTotalPendingFiles() >= maxPendingTotal) {
-              this.globalPendingRejectionsCount++;
-
-              // After N rejections, switch to silent rejection (save bandwidth)
-              const silentThreshold = this.getSilentRejectionThresholdGlobal();
-              if (this.globalPendingRejectionsCount > silentThreshold) {
-                console.log(`Silently rejecting file offer (global pending limit, rejection #${this.globalPendingRejectionsCount})`);
-                return;
-              }
-
-              // Normal rejection (first 20 times)
-              console.log(`File rejected: too many pending file transfers (${this.getTotalPendingFiles()}/${maxPendingTotal})`);
-              const response: FileOfferResponse = {
-                type: FILE_OFFER_RESPONSE,
-                fileId: offer.fileId,
-                accepted: false,
-                reason: 'Too many pending file transfers',
-              };
-              writable.push(this.#encodeMessage(response));
+            const evaluation = await this.#evaluateIncomingFileOffer(senderPeerId, offerMsg);
+            if (evaluation.kind === 'silent-reject') {
+              return;
+            }
+            if (evaluation.kind === 'reject') {
+              writable.push(this.#encodeMessage(this.buildFileOfferRejection(offer.fileId, evaluation.reason)));
               return;
             }
 
-            // Per-peer pending files limit
-            const pendingFromPeer = this.getPendingFilesFromPeer(senderPeerId);
-            const maxPendingPerPeer = this.getMaxPendingFilesPerPeer();
-            if (pendingFromPeer >= maxPendingPerPeer) {
-              const rejectionCount = (this.perPeerPendingRejections.get(senderPeerId) ?? 0) + 1;
-              this.perPeerPendingRejections.set(senderPeerId, rejectionCount);
-
-              // After N rejections to this peer, switch to silent rejection (save bandwidth)
-              const silentThreshold = this.getSilentRejectionThresholdPerPeer();
-              if (rejectionCount > silentThreshold) {
-                console.log(`Silently rejecting file from ${senderPeerId.slice(0, 8)}... (too many pending limit hit ${rejectionCount} times)`);
-                return;
-              }
-
-              // Normal rejection (first 5 times)
-              console.log(`File rejected: too many pending files from ${senderPeerId.slice(0, 8)}... (${pendingFromPeer}/${maxPendingPerPeer})`);
-              const response: FileOfferResponse = {
-                type: FILE_OFFER_RESPONSE,
-                fileId: offer.fileId,
-                accepted: false,
-                reason: 'Too many pending files from you',
-              };
-              writable.push(this.#encodeMessage(response));
-              return;
-            }
-
-            // Rate limiting check (offers per minute)
-            if (this.isFileOfferRateLimitExceeded(senderPeerId)) {
-              console.log(`File rejected: rate limit exceeded from ${senderPeerId.slice(0, 8)}...`);
-              const response: FileOfferResponse = {
-                type: FILE_OFFER_RESPONSE,
-                fileId: offer.fileId,
-                accepted: false,
-                reason: 'Rate limit exceeded',
-              };
-              writable.push(this.#encodeMessage(response));
-              return;
-            }
-
-            // Track this file offer
-            this.trackFileOffer(senderPeerId);
-
-            // Validate filename - reject path traversal attempts
-            const sanitizedFilename = basename(offerMsg.filename);
-            if (sanitizedFilename !== offerMsg.filename) {
-              console.log(`File rejected: filename contains path traversal characters`);
-              const response: FileOfferResponse = {
-                type: FILE_OFFER_RESPONSE,
-                fileId: offer.fileId,
-                accepted: false,
-                reason: 'Invalid filename',
-              };
-              writable.push(this.#encodeMessage(response));
-              return;
-            }
-
-            // Validate filename length
-            if (sanitizedFilename.length > 255 || sanitizedFilename.length === 0) {
-              console.log(`File rejected: filename too long or empty`);
-              const response: FileOfferResponse = {
-                type: FILE_OFFER_RESPONSE,
-                fileId: offer.fileId,
-                accepted: false,
-                reason: 'Invalid filename length',
-              };
-              writable.push(this.#encodeMessage(response));
-              return;
-            }
-
-            console.log(`File offer: ${sanitizedFilename}, ${offerMsg.size} bytes`);
-
-            const sender = this.database.getUserByPeerId(senderPeerId);
-            if (!sender) {
-              console.log(`File rejected: sender not in contacts (first message cannot be file transfer)`);
-              const response: FileOfferResponse = {
-                type: FILE_OFFER_RESPONSE,
-                fileId: offer.fileId,
-                accepted: false,
-                reason: 'Sender not in contacts',
-              };
-              writable.push(this.#encodeMessage(response));
-              return;
-            }
-
-            // Validate file size
-            const maxFileSize = this.getMaxFileSize();
-            if (offer.size > maxFileSize || offer.size <= 0) {
-              console.log(`File rejected: invalid size (${offer.size} bytes, max ${maxFileSize} bytes)`);
-              const response: FileOfferResponse = {
-                type: FILE_OFFER_RESPONSE,
-                fileId: offer.fileId,
-                accepted: false,
-                reason: 'File size invalid',
-              };
-              writable.push(this.#encodeMessage(response));
-              return;
-            }
-
-            // Validate totalChunks
-            const expectedChunks = Math.ceil(offer.size / CHUNK_SIZE);
-            if (offer.totalChunks !== expectedChunks || offer.totalChunks <= 0) {
-              console.log(`File rejected: invalid chunk count (expected ${expectedChunks}, got ${offer.totalChunks})`);
-              const response: FileOfferResponse = {
-                type: FILE_OFFER_RESPONSE,
-                fileId: offer.fileId,
-                accepted: false,
-                reason: 'Invalid chunk count',
-              };
-              writable.push(this.#encodeMessage(response));
-              return;
-            }
-
-            // Drop silently on malformed/unsigned offers to avoid helping attackers.
-            if (!offerMsg.signature || !offerMsg.timestamp || !offerMsg.expiresAt) {
-              return;
-            }
-
-            // Reject stale/replayed offers before any expensive work.
-            const now = Date.now();
-            if (offerMsg.expiresAt <= now || offerMsg.timestamp > now + 60_000) {
-              return;
-            }
-
-            if (this.database.messageExists(offerMsg.fileId)) {
-              return;
-            }
-
-            if (!sender.signing_public_key) {
-              return;
-            }
-
-            if (!this.isFileOfferSignatureValid(offerMsg, sender.signing_public_key)) {
-              return;
-            }
-
-            if (this.isPeerTransferActive(senderPeerId)) {
-              const response: FileOfferResponse = {
-                type: FILE_OFFER_RESPONSE,
-                fileId: offer.fileId,
-                accepted: false,
-                reason: 'Another file transfer is already active with this peer',
-              };
-              writable.push(this.#encodeMessage(response));
-              return;
-            }
-
-            // Require an existing direct chat and active session before accepting file transfers.
-            // We intentionally send an explicit rejection so sender does not hang waiting for response.
-            chat = this.database.getChatByPeerId(senderPeerId);
-            session = this.messageHandler.getSessionManager().getSession(senderPeerId);
-            if (!chat || !session) {
-              const response: FileOfferResponse = {
-                type: FILE_OFFER_RESPONSE,
-                fileId: offer.fileId,
-                accepted: false,
-                reason: 'No active session',
-              };
-              writable.push(this.#encodeMessage(response));
-              return;
-            }
-            if (!this.messageHandler.getSessionManager().pinSession(senderPeerId)) {
-              const response: FileOfferResponse = {
-                type: FILE_OFFER_RESPONSE,
-                fileId: offer.fileId,
-                accepted: false,
-                reason: 'No active session',
-              };
-              writable.push(this.#encodeMessage(response));
-              return;
-            }
-            pinnedSessionPeerId = senderPeerId;
-            this.messageHandler.getSessionManager().updateSessionUsage(senderPeerId);
-
-            // Persist pending offer as a message (single row per file)
-            await this.database.createMessage({
-              id: offerMsg.fileId,
-              chat_id: chat.id,
-              sender_peer_id: senderPeerId,
-              content: `${offerMsg.filename} (${offerMsg.size} bytes)`,
-              message_type: 'file',
-              file_name: offerMsg.filename,
-              file_size: offerMsg.size,
-              transfer_status: 'pending',
-              transfer_progress: 0,
-              timestamp: new Date(),
-            });
-
-            // Emit pending file received event
-            const expiresAt = offerMsg.expiresAt ?? (Date.now() + FILE_ACCEPTANCE_TIMEOUT);
-            if (this.onPendingFileReceived) {
-              this.onPendingFileReceived({
-                chatId: chat.id,
-                fileId: offerMsg.fileId,
-                filename: offerMsg.filename,
-                size: offerMsg.size,
-                senderId: senderPeerId,
-                senderUsername: sender.username,
-                expiresAt
-              });
-            }
-
-            // Prompt user for acceptance
-            console.log(`\nFile Transfer Request from ${sender.username}`);
-            console.log(`   File: ${offerMsg.filename}`);
-            console.log(`   Size: ${offerMsg.size} bytes (${Math.round(offerMsg.size / 1024 / 1024 * 100) / 100} MB)`);
-            console.log(`   To accept: accept-file ${offerMsg.fileId}`);
-            console.log(`   To reject: reject-file ${offerMsg.fileId}\n`);
+            chat = evaluation.chat;
+            session = evaluation.session;
+            pinnedSessionPeerId = evaluation.pinnedSessionPeerId;
+            await this.#persistPendingIncomingOffer(offerMsg, senderPeerId, evaluation.sender, evaluation.chat, evaluation.expiresAt);
 
             // Wait for user decision with timeout
-            const acceptancePromise = new Promise<boolean>((resolve, reject) => {
-              this.pendingFileAcceptances.set(offerMsg.fileId, {
-                resolve,
-                reject,
-                offer: offerMsg,
-                senderId: senderPeerId,
-                senderUsername: sender.username,
-                expiresAt
-              });
-            });
-
-            const timeoutPromise = new Promise<boolean>((resolve) => {
-              const msUntilExpire = Math.max(0, expiresAt - Date.now());
-              setTimeout(() => {
-                const pending = this.pendingFileAcceptances.get(offerMsg.fileId);
-                if (pending) {
-                  pending.decision = 'expired';
-                }
-                resolve(false);
-              }, msUntilExpire);
-            });
-
             // eslint-disable-next-line no-await-in-loop
-            const accepted = await Promise.race([acceptancePromise, timeoutPromise]);
+            const decision = await this.#waitForIncomingOfferDecision(
+              offerMsg,
+              senderPeerId,
+              evaluation.sender.username,
+              evaluation.expiresAt,
+            );
 
-            if (!accepted) {
-              const pending = this.pendingFileAcceptances.get(offerMsg.fileId);
-              const decision = pending?.decision ?? 'expired';
+            if (!decision.accepted) {
               const transferStatus =
-                decision === 'rejected'
+                decision.decision === 'rejected'
                   ? 'rejected'
-                  : decision === 'shutdown'
+                  : decision.decision === 'shutdown'
                     ? 'failed'
                     : 'expired';
               const transferError =
-                decision === 'rejected'
+                decision.decision === 'rejected'
                   ? 'Offer rejected'
-                  : decision === 'shutdown'
+                  : decision.decision === 'shutdown'
                     ? 'Transfer interrupted (app shutdown)'
                     : 'Offer expired';
 
@@ -654,16 +451,10 @@ export class FileHandler {
 
               this.pendingFileAcceptances.delete(offerMsg.fileId);
 
-              console.log(`File transfer from ${sender.username} expired or rejected`);
-              console.log(`To block future file transfers from ${sender.username}, use: block-user ${sender.username}`);
+              console.log(`File transfer from ${evaluation.sender.username} expired or rejected`);
+              console.log(`To block future file transfers from ${evaluation.sender.username}, use: block-user ${evaluation.sender.username}`);
               this.trace('RECV', senderPeerId, offerMsg.fileId, 'OFFER_NOT_ACCEPTED', `decision=${transferStatus}`);
-              const response: FileOfferResponse = {
-                type: FILE_OFFER_RESPONSE,
-                fileId: offerMsg.fileId,
-                accepted: false,
-                reason: 'User rejected or timeout',
-              };
-              writable.push(this.#encodeMessage(response));
+              writable.push(this.#encodeMessage(this.buildFileOfferRejection(offerMsg.fileId, 'User rejected or timeout')));
               return;
             }
 
@@ -1040,29 +831,11 @@ export class FileHandler {
     let pinnedSessionPeerId: string | null = null;
     let activePeerId: string | null = null;
     try {
-      const { session, peerId: targetPeerId } = await this.messageHandler.ensureUserSession(targetUsername, '', true);
-      const targetPeerIdStr = targetPeerId.toString();
-      if (!this.messageHandler.getSessionManager().pinSession(targetPeerIdStr)) {
-        throw new Error('No active session');
-      }
+      const outgoingContext = await this.#createOutgoingTransferContext(targetUsername, filePath, providedFileId);
+      const { chat: ensuredChat, session, targetPeerId, targetPeerIdStr, metadata, fileId: preparedFileId } = outgoingContext;
+      chat = ensuredChat;
+      fileId = preparedFileId;
       pinnedSessionPeerId = targetPeerIdStr;
-      this.messageHandler.getSessionManager().updateSessionUsage(targetPeerIdStr);
-      console.log("SESSION ESTABLISHED", session, targetPeerId)
-      chat = this.database.getChatByPeerId(targetPeerIdStr);
-      if (chat?.type !== 'direct' || !chat.id) throw new Error('Chat not found');
-
-      // Validate file size before loading metadata
-      const fileStats = await stat(filePath);
-      const maxFileSize = this.getMaxFileSize();
-      if (fileStats.size > maxFileSize) {
-        throw new Error(`File too large (${fileStats.size} bytes, max ${maxFileSize} bytes)`);
-      }
-      if (fileStats.size <= 0) {
-        throw new Error('File is empty');
-      }
-
-      const metadata = await this.#loadFileMetadata(filePath);
-      fileId = providedFileId && providedFileId.trim() ? providedFileId : randomUUID();
       if (!this.tryBeginPeerTransfer(targetPeerIdStr, fileId, 'send')) {
         throw new Error('Another file transfer is already active with this peer');
       }
@@ -1115,37 +888,8 @@ export class FileHandler {
       let transferQueued = false;
 
       try {
-        await this.database.createMessage({
-          id: fileId,
-          chat_id: chat.id,
-          sender_peer_id: this.node.peerId.toString(),
-          content: `${metadata.filename} (${metadata.size} bytes)`,
-          message_type: 'file',
-          file_name: metadata.filename,
-          file_size: metadata.size,
-          transfer_status: 'pending',
-          transfer_progress: 0,
-          timestamp: new Date(),
-        });
-
-        const offer: FileOffer = {
-          type: FILE_OFFER,
-          fileId,
-          filename: metadata.filename,
-          mimeType: metadata.mimeType,
-          size: metadata.size,
-          checksum: metadata.checksum,
-          totalChunks: metadata.totalChunks,
-          timestamp: Date.now(),
-          expiresAt: Date.now() + FILE_ACCEPTANCE_TIMEOUT,
-        };
-        const userIdentity = this.messageHandler.getUserIdentity();
-        if (!userIdentity) {
-          throw new Error('No user identity available');
-        }
-        const offerPayload = this.buildSignedFileOfferPayload(offer);
-        const signature = userIdentity.sign(JSON.stringify(offerPayload));
-        offer.signature = Buffer.from(signature).toString('base64');
+        await this.#persistOutgoingPendingTransferMessage(chat.id, fileId, metadata);
+        const offer = this.#createSignedFileOffer(fileId, metadata);
         writable.push(this.#encodeMessage(offer));
         console.log(`Sent file offer, waiting for response...`);
         this.trace('SEND', targetPeerIdStr, fileId, 'OFFER_SENT', `size=${metadata.size} chunks=${metadata.totalChunks}`);
@@ -1166,20 +910,7 @@ export class FileHandler {
           }
         };
 
-        let timeoutId: ReturnType<typeof setTimeout> | null = null;
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          timeoutId = setTimeout(() => { reject(new Error('Timeout waiting for file acceptance')); }, FILE_ACCEPTANCE_TIMEOUT);
-        });
-
-        let response: FileOfferResponse;
-        try {
-          response = await Promise.race([readOfferResponse(), timeoutPromise]);
-        } finally {
-          if (timeoutId) {
-            clearTimeout(timeoutId);
-            timeoutId = null;
-          }
-        }
+        const response = await this.#awaitFileOfferResponse(readOfferResponse);
 
         if (!response.accepted) {
           const reason = response.reason || 'Rejected';
@@ -1388,5 +1119,315 @@ export class FileHandler {
     if (failed > 0) {
       console.log(`[FileHandler] Shutdown cleanup marked ${failed} transfer(s) as failed`);
     }
+  }
+
+  async #createOutgoingTransferContext(
+    targetUsername: string,
+    filePath: string,
+    providedFileId?: string,
+  ): Promise<OutgoingFileTransferContext> {
+    const { session, peerId: targetPeerId } = await this.messageHandler.ensureUserSession(targetUsername, '', true);
+    const targetPeerIdStr = targetPeerId.toString();
+    if (!this.messageHandler.getSessionManager().pinSession(targetPeerIdStr)) {
+      throw new Error('No active session');
+    }
+    this.messageHandler.getSessionManager().updateSessionUsage(targetPeerIdStr);
+    console.log("SESSION ESTABLISHED", session, targetPeerId)
+    const chat = this.database.getChatByPeerId(targetPeerIdStr);
+    if (chat?.type !== 'direct' || !chat.id) throw new Error('Chat not found');
+
+    // Validate file size before loading metadata
+    const fileStats = await stat(filePath);
+    const maxFileSize = this.getMaxFileSize();
+    if (fileStats.size > maxFileSize) {
+      throw new Error(`File too large (${fileStats.size} bytes, max ${maxFileSize} bytes)`);
+    }
+    if (fileStats.size <= 0) {
+      throw new Error('File is empty');
+    }
+
+    const metadata = await this.#loadFileMetadata(filePath);
+    const fileId = providedFileId && providedFileId.trim() ? providedFileId : randomUUID();
+
+    return {
+      chat,
+      session,
+      targetPeerId,
+      targetPeerIdStr,
+      metadata,
+      fileId,
+    };
+  }
+
+  async #persistOutgoingPendingTransferMessage(chatId: number, fileId: string, metadata: FileMetadata): Promise<void> {
+    await this.database.createMessage({
+      id: fileId,
+      chat_id: chatId,
+      sender_peer_id: this.node.peerId.toString(),
+      content: `${metadata.filename} (${metadata.size} bytes)`,
+      message_type: 'file',
+      file_name: metadata.filename,
+      file_size: metadata.size,
+      transfer_status: 'pending',
+      transfer_progress: 0,
+      timestamp: new Date(),
+    });
+  }
+
+  #createSignedFileOffer(fileId: string, metadata: FileMetadata): FileOffer {
+    const offer: FileOffer = {
+      type: FILE_OFFER,
+      fileId,
+      filename: metadata.filename,
+      mimeType: metadata.mimeType,
+      size: metadata.size,
+      checksum: metadata.checksum,
+      totalChunks: metadata.totalChunks,
+      timestamp: Date.now(),
+      expiresAt: Date.now() + FILE_ACCEPTANCE_TIMEOUT,
+    };
+    const userIdentity = this.messageHandler.getUserIdentity();
+    if (!userIdentity) {
+      throw new Error('No user identity available');
+    }
+    const offerPayload = this.buildSignedFileOfferPayload(offer);
+    const signature = userIdentity.sign(JSON.stringify(offerPayload));
+    offer.signature = Buffer.from(signature).toString('base64');
+    return offer;
+  }
+
+  async #awaitFileOfferResponse(readOfferResponse: () => Promise<FileOfferResponse>): Promise<FileOfferResponse> {
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => { reject(new Error('Timeout waiting for file acceptance')); }, FILE_ACCEPTANCE_TIMEOUT);
+    });
+
+    try {
+      return await Promise.race([readOfferResponse(), timeoutPromise]);
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
+  }
+
+  async #evaluateIncomingFileOffer(
+    senderPeerId: string,
+    offerMsg: FileOffer,
+  ): Promise<IncomingOfferEvaluation> {
+    // Global pending files limit
+    const maxPendingTotal = this.getMaxPendingFilesTotal();
+    if (this.getTotalPendingFiles() >= maxPendingTotal) {
+      this.globalPendingRejectionsCount++;
+
+      // After N rejections, switch to silent rejection (save bandwidth)
+      const silentThreshold = this.getSilentRejectionThresholdGlobal();
+      if (this.globalPendingRejectionsCount > silentThreshold) {
+        console.log(`Silently rejecting file offer (global pending limit, rejection #${this.globalPendingRejectionsCount})`);
+        return { kind: 'silent-reject' };
+      }
+
+      // Normal rejection (first 20 times)
+      console.log(`File rejected: too many pending file transfers (${this.getTotalPendingFiles()}/${maxPendingTotal})`);
+      return { kind: 'reject', reason: 'Too many pending file transfers' };
+    }
+
+    // Per-peer pending files limit
+    const pendingFromPeer = this.getPendingFilesFromPeer(senderPeerId);
+    const maxPendingPerPeer = this.getMaxPendingFilesPerPeer();
+    if (pendingFromPeer >= maxPendingPerPeer) {
+      const rejectionCount = (this.perPeerPendingRejections.get(senderPeerId) ?? 0) + 1;
+      this.perPeerPendingRejections.set(senderPeerId, rejectionCount);
+
+      // After N rejections to this peer, switch to silent rejection (save bandwidth)
+      const silentThreshold = this.getSilentRejectionThresholdPerPeer();
+      if (rejectionCount > silentThreshold) {
+        console.log(`Silently rejecting file from ${senderPeerId.slice(0, 8)}... (too many pending limit hit ${rejectionCount} times)`);
+        return { kind: 'silent-reject' };
+      }
+
+      // Normal rejection (first 5 times)
+      console.log(`File rejected: too many pending files from ${senderPeerId.slice(0, 8)}... (${pendingFromPeer}/${maxPendingPerPeer})`);
+      return { kind: 'reject', reason: 'Too many pending files from you' };
+    }
+
+    // Rate limiting check (offers per minute)
+    if (this.isFileOfferRateLimitExceeded(senderPeerId)) {
+      console.log(`File rejected: rate limit exceeded from ${senderPeerId.slice(0, 8)}...`);
+      return { kind: 'reject', reason: 'Rate limit exceeded' };
+    }
+
+    // Track this file offer
+    this.trackFileOffer(senderPeerId);
+
+    // Validate filename - reject path traversal attempts
+    const sanitizedFilename = basename(offerMsg.filename);
+    if (sanitizedFilename !== offerMsg.filename) {
+      console.log(`File rejected: filename contains path traversal characters`);
+      return { kind: 'reject', reason: 'Invalid filename' };
+    }
+
+    // Validate filename length
+    if (sanitizedFilename.length > 255 || sanitizedFilename.length === 0) {
+      console.log(`File rejected: filename too long or empty`);
+      return { kind: 'reject', reason: 'Invalid filename length' };
+    }
+
+    console.log(`File offer: ${sanitizedFilename}, ${offerMsg.size} bytes`);
+
+    const sender = this.database.getUserByPeerId(senderPeerId);
+    if (!sender) {
+      console.log(`File rejected: sender not in contacts (first message cannot be file transfer)`);
+      return { kind: 'reject', reason: 'Sender not in contacts' };
+    }
+
+    // Validate file size
+    const maxFileSize = this.getMaxFileSize();
+    if (offerMsg.size > maxFileSize || offerMsg.size <= 0) {
+      console.log(`File rejected: invalid size (${offerMsg.size} bytes, max ${maxFileSize} bytes)`);
+      return { kind: 'reject', reason: 'File size invalid' };
+    }
+
+    // Validate totalChunks
+    const expectedChunks = Math.ceil(offerMsg.size / CHUNK_SIZE);
+    if (offerMsg.totalChunks !== expectedChunks || offerMsg.totalChunks <= 0) {
+      console.log(`File rejected: invalid chunk count (expected ${expectedChunks}, got ${offerMsg.totalChunks})`);
+      return { kind: 'reject', reason: 'Invalid chunk count' };
+    }
+
+    // Drop silently on malformed/unsigned offers to avoid helping attackers.
+    if (!offerMsg.signature || !offerMsg.timestamp || !offerMsg.expiresAt) {
+      return { kind: 'silent-reject' };
+    }
+
+    // Reject stale/replayed offers before any expensive work.
+    const now = Date.now();
+    if (offerMsg.expiresAt <= now || offerMsg.timestamp > now + 60_000) {
+      return { kind: 'silent-reject' };
+    }
+
+    if (this.database.messageExists(offerMsg.fileId)) {
+      return { kind: 'silent-reject' };
+    }
+
+    if (!sender.signing_public_key) {
+      return { kind: 'silent-reject' };
+    }
+
+    if (!this.isFileOfferSignatureValid(offerMsg, sender.signing_public_key)) {
+      return { kind: 'silent-reject' };
+    }
+
+    if (this.isPeerTransferActive(senderPeerId)) {
+      return { kind: 'reject', reason: 'Another file transfer is already active with this peer' };
+    }
+
+    // Require an existing direct chat and active session before accepting file transfers.
+    // We intentionally send an explicit rejection so sender does not hang waiting for response.
+    const chat = this.database.getChatByPeerId(senderPeerId);
+    const session = this.messageHandler.getSessionManager().getSession(senderPeerId);
+    if (!chat || !session) {
+      return { kind: 'reject', reason: 'No active session' };
+    }
+    if (!this.messageHandler.getSessionManager().pinSession(senderPeerId)) {
+      return { kind: 'reject', reason: 'No active session' };
+    }
+    this.messageHandler.getSessionManager().updateSessionUsage(senderPeerId);
+
+    return {
+      kind: 'ready',
+      sender,
+      chat,
+      session,
+      pinnedSessionPeerId: senderPeerId,
+      expiresAt: offerMsg.expiresAt ?? (Date.now() + FILE_ACCEPTANCE_TIMEOUT),
+    };
+  }
+
+  async #persistPendingIncomingOffer(
+    offerMsg: FileOffer,
+    senderPeerId: string,
+    sender: User,
+    chat: Chat,
+    expiresAt: number,
+  ): Promise<void> {
+    // Persist pending offer as a message (single row per file)
+    await this.database.createMessage({
+      id: offerMsg.fileId,
+      chat_id: chat.id,
+      sender_peer_id: senderPeerId,
+      content: `${offerMsg.filename} (${offerMsg.size} bytes)`,
+      message_type: 'file',
+      file_name: offerMsg.filename,
+      file_size: offerMsg.size,
+      transfer_status: 'pending',
+      transfer_progress: 0,
+      timestamp: new Date(),
+    });
+
+    // Emit pending file received event
+    if (this.onPendingFileReceived) {
+      this.onPendingFileReceived({
+        chatId: chat.id,
+        fileId: offerMsg.fileId,
+        filename: offerMsg.filename,
+        size: offerMsg.size,
+        senderId: senderPeerId,
+        senderUsername: sender.username,
+        expiresAt
+      });
+    }
+
+    // Prompt user for acceptance
+    console.log(`\nFile Transfer Request from ${sender.username}`);
+    console.log(`   File: ${offerMsg.filename}`);
+    console.log(`   Size: ${offerMsg.size} bytes (${Math.round(offerMsg.size / 1024 / 1024 * 100) / 100} MB)`);
+    console.log(`   To accept: accept-file ${offerMsg.fileId}`);
+    console.log(`   To reject: reject-file ${offerMsg.fileId}\n`);
+  }
+
+  async #waitForIncomingOfferDecision(
+    offerMsg: FileOffer,
+    senderPeerId: string,
+    senderUsername: string,
+    expiresAt: number,
+  ): Promise<IncomingOfferDecision> {
+    const acceptancePromise = new Promise<boolean>((resolve, reject) => {
+      this.pendingFileAcceptances.set(offerMsg.fileId, {
+        resolve,
+        reject,
+        offer: offerMsg,
+        senderId: senderPeerId,
+        senderUsername,
+        expiresAt
+      });
+    });
+
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const timeoutPromise = new Promise<boolean>((resolve) => {
+      const msUntilExpire = Math.max(0, expiresAt - Date.now());
+      timeoutId = setTimeout(() => {
+        const pending = this.pendingFileAcceptances.get(offerMsg.fileId);
+        if (pending) {
+          pending.decision = 'expired';
+        }
+        resolve(false);
+      }, msUntilExpire);
+    });
+
+    const accepted = await Promise.race([acceptancePromise, timeoutPromise]);
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+
+    if (accepted) {
+      return { accepted: true, decision: 'accepted' };
+    }
+
+    const pending = this.pendingFileAcceptances.get(offerMsg.fileId);
+    return {
+      accepted: false,
+      decision: pending?.decision ?? 'expired',
+    };
   }
 }
