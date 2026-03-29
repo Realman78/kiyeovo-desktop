@@ -1928,7 +1928,7 @@ export class MessageHandler {
   }
 
   private assertNoPendingSessionRotation(targetPeerId: PeerId): void {
-    const hasPendingRotation = this.sessionManager.getPendingKeyExchange(targetPeerId.toString());
+    const hasPendingRotation = this.keyExchange.hasPendingRotation(targetPeerId.toString());
     if (hasPendingRotation) {
       throw new Error('Key rotation in progress - please wait and try again');
     }

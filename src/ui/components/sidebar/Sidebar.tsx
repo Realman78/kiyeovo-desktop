@@ -11,12 +11,14 @@ import { ContactAttemptList } from './contact-attempts/ContactAttemptList'
 import { PendingKeyExchangeList } from './pending-key-exchange/PendingKeyExchangeList'
 import { GroupInviteList } from './group-invites/GroupInviteList'
 import { setConnected, setPeerId, setRegistered, setUsername } from '../../state/slices/userSlice'
+import { useToast } from '../ui/use-toast'
 
 export const Sidebar: FC = () => {
   const [isLoadingContactAttempts, setIsLoadingContactAttempts] = useState(true);
   const [contactAttemptsError, setContactAttemptsError] = useState<string | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const contactAttempts = useSelector((state: RootState) => state.chat.contactAttempts)
+  const { toast } = useToast();
   const dispatch = useDispatch();
 
   const handleContactAttemptExpired = useCallback((peerId: string) => {
@@ -85,6 +87,7 @@ export const Sidebar: FC = () => {
     const unsubscribeCancelled = window.kiyeovoAPI.onContactRequestCancelled((data) => {
       console.log('[UI] Contact request cancelled:', data);
       dispatch(removeContactAttempt(data.peerId));
+      toast.info(`${data.username || data.peerId} cancelled the contact request`)
     });
 
     const restoreUnsubscribe = window.kiyeovoAPI.onRestoreUsername((username) => {

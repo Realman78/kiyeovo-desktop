@@ -397,9 +397,9 @@ export class KeyExchange {
 
     const stream = await this.openKeyExchangeInitStream(targetPeerId);
     await this.sendInitiatorKeyExchangeRequest(stream, keyExchangeMessage);
+    const cancelPromise = this.createKeyExchangeCancelPromise(peerIdStr);
     this.storeOutgoingKeyExchangeState(peerIdStr, stream, pendingKeyExchange, startedAt);
     const timeoutPromise = this.createKeyExchangeTimeoutPromise(timestamp);
-    const cancelPromise = this.createKeyExchangeCancelPromise(peerIdStr);
 
     // Key exchange request successfully sent - notify frontend (dialog can close now)
     this.onKeyExchangeSent({
@@ -2511,6 +2511,10 @@ export class KeyExchange {
       .map(([peerId, { resolve, reject, timestamp, receivedAt, expiresAt, username, messageBody }]) =>
         ({ peerId, resolve, reject, timestamp, receivedAt, expiresAt, username, messageBody })
       );
+  }
+
+  hasPendingRotation(peerId: string): boolean {
+    return this.rotationPromises.has(peerId) || this.rotationTimeouts.has(peerId);
   }
 
   deletePendingAcceptanceByPeerId(peerId: string): void {
